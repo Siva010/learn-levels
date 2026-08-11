@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "learn-levels",
+  "compatibility_date": "2026-08-11",
+
+  // A static-assets-only Worker: there is no `main` script because the site is entirely
+  // prerendered. `npm run build` writes ./out, and Cloudflare serves it from the edge.
+  "assets": {
+    "directory": "./out",
+
+    // Routes are exported as `page/index.html` (trailingSlash: true), so requests for
+    // `/java/generics/` resolve to the directory's index.
+    "html_handling": "auto-trailing-slash",
+
+    // Serve Next's exported 404 page for anything unmatched.
+    "not_found_handling": "404-page"
+  }
+}
