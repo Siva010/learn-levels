@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/^### 2\\\\.6 Polymorphism/,/^### 2\\\\.7 /' 2_interview.md)"
+    ]
+  }
+}

@@ -1,0 +1,229 @@
+@import "tailwindcss";
+
+/* next-themes drives the theme with a class on <html>, not the media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* surfaces */
+  --bg: #ffffff;
+  --bg-subtle: #fafafa;
+  --panel: #ffffff;
+  --panel-raised: #f6f6f7;
+  --border: #e6e6e8;
+  --border-strong: #d4d4d8;
+
+  /* text */
+  --fg: #101012;
+  --fg-muted: #62626b;
+  --fg-subtle: #8b8b94;
+
+  /* accents */
+  --accent: #4f46e5;
+  --accent-fg: #ffffff;
+  --accent-soft: #eef2ff;
+
+  /* level identity — used sparingly, as marks rather than fills */
+  --level-foundation: #0284c7;
+  --level-understand: #7c3aed;
+  --level-interview: #b45309;
+  --level-production: #047857;
+
+  /* semantic callouts */
+  --tone-warning: #b45309;
+  --tone-danger: #be123c;
+  --tone-success: #047857;
+  --tone-info: #0369a1;
+
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12);
+}
+
+.dark {
+  --bg: #08080a;
+  --bg-subtle: #0c0c0f;
+  --panel: #101014;
+  --panel-raised: #17171c;
+  --border: #232329;
+  --border-strong: #33333c;
+
+  --fg: #ededf0;
+  --fg-muted: #9b9ba6;
+  --fg-subtle: #6d6d78;
+
+  --accent: #8b8bff;
+  --accent-fg: #0b0b12;
+  --accent-soft: #1a1a2e;
+
+  --level-foundation: #38bdf8;
+  --level-understand: #a78bfa;
+  --level-interview: #fbbf24;
+  --level-production: #34d399;
+
+  --tone-warning: #fbbf24;
+  --tone-danger: #fb7185;
+  --tone-success: #34d399;
+  --tone-info: #38bdf8;
+
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -16px rgb(0 0 0 / 0.7);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-panel: var(--panel);
+  --color-panel-raised: var(--panel-raised);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-foundation: var(--level-foundation);
+  --color-understand: var(--level-understand);
+  --color-interview: var(--level-interview);
+  --color-production: var(--level-production);
+
+  --color-warning: var(--tone-warning);
+  --color-danger: var(--tone-danger);
+  --color-success: var(--tone-success);
+  --color-info: var(--tone-info);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --text-2xs: 0.6875rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 6rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--accent) 28%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  /* Shiki emits both themes as custom properties; pick one without re-highlighting. */
+  .shiki-host .shiki,
+  .shiki-host .shiki span {
+    color: var(--shiki-light);
+    background-color: var(--shiki-light-bg);
+  }
+
+  .dark .shiki-host .shiki,
+  .dark .shiki-host .shiki span {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
+  }
+
+  .shiki-host .shiki {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    background-color: transparent !important;
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 0.8125rem;
+    line-height: 1.65;
+  }
+
+  .shiki-host .shiki span {
+    background-color: transparent !important;
+  }
+
+  .shiki-host .shiki code {
+    display: grid;
+  }
+
+  .code-numbered .shiki code {
+    counter-reset: shiki-line;
+  }
+
+  .code-numbered .shiki code .line::before {
+    counter-increment: shiki-line;
+    content: counter(shiki-line);
+    display: inline-block;
+    width: 1.75rem;
+    margin-right: 1rem;
+    text-align: right;
+    color: var(--fg-subtle);
+    opacity: 0.55;
+  }
+
+  /* Mermaid renders its own SVG; constrain it and let wide diagrams scroll. */
+  .mermaid-host svg {
+    max-width: 100%;
+    height: auto;
+    margin-inline: auto;
+    display: block;
+  }
+}
+
+@layer utilities {
+  /* The level a page belongs to sets --level; components read it instead of branching on ids. */
+  .level-foundation {
+    --level: var(--level-foundation);
+  }
+  .level-understand {
+    --level: var(--level-understand);
+  }
+  .level-interview {
+    --level: var(--level-interview);
+  }
+  .level-production {
+    --level: var(--level-production);
+  }
+
+  .eyebrow {
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--border-strong);
+    border-radius: 999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
