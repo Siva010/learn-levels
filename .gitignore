@@ -44,3 +44,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# npm resolves the tree on the build machine; a committed lockfile makes
+# Cloudflare use 'npm ci', which rejects trees it would hoist differently
+package-lock.json
