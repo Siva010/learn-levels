@@ -1,13 +1,20 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { LEVEL_ORDER, LEVEL_UI, levelClass } from "@/lib/levels";
-import { DEFAULT_LANGUAGE, getCurriculum } from "@/lib/content/curriculum";
+import { DEFAULT_LANGUAGE, LANGUAGES, getCurriculum, getLanguages } from "@/lib/content/curriculum";
 import { ThemeToggle } from "@/components/layout/theme";
 import { StatusPill } from "@/components/ui/pill";
 
 export default function HomePage() {
   const curriculum = getCurriculum(DEFAULT_LANGUAGE);
   const stats = curriculum?.stats;
+
+  const languages = getLanguages().flatMap((id) => {
+    const entry = getCurriculum(id);
+    const config = LANGUAGES.find((language) => language.id === id);
+    return entry && config ? [{ id, config, curriculum: entry }] : [];
+  });
+  const totalConcepts = languages.reduce((sum, entry) => sum + entry.curriculum.stats.concepts, 0);
 
   return (
     <div className="min-h-screen">
@@ -18,12 +25,15 @@ export default function HomePage() {
           </span>
           <span className="text-sm font-semibold tracking-tight">Learn Levels</span>
           <div className="ml-auto flex items-center gap-2">
-            <Link
-              href={`/${DEFAULT_LANGUAGE}`}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition-colors hover:text-fg"
-            >
-              Java
-            </Link>
+            {languages.map((entry) => (
+              <Link
+                key={entry.id}
+                href={`/${entry.id}`}
+                className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition-colors hover:text-fg"
+              >
+                {entry.curriculum.title}
+              </Link>
+            ))}
             <ThemeToggle />
           </div>
         </div>
@@ -34,7 +44,7 @@ export default function HomePage() {
         <section className="py-20 lg:py-28">
           <p className="eyebrow">A progressive learning system</p>
           <h1 className="mt-4 max-w-3xl text-4xl font-semibold tracking-tight sm:text-5xl">
-            Learn Java in Levels.
+            Learn a language in Levels.
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-relaxed text-fg-muted">
             From knowing what a concept is → understanding how it works → surviving the interview →
@@ -42,16 +52,23 @@ export default function HomePage() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Link
-              href={`/${DEFAULT_LANGUAGE}`}
-              className="inline-flex h-10 items-center gap-2 rounded-md bg-fg px-5 text-sm font-medium text-bg transition-opacity hover:opacity-90"
-            >
-              Start learning
-              <ArrowRight className="size-4" />
-            </Link>
+            {languages.map((entry, index) => (
+              <Link
+                key={entry.id}
+                href={`/${entry.id}`}
+                className={
+                  index === 0
+                    ? "inline-flex h-10 items-center gap-2 rounded-md bg-fg px-5 text-sm font-medium text-bg transition-opacity hover:opacity-90"
+                    : "inline-flex h-10 items-center gap-2 rounded-md border border-line px-5 text-sm font-medium text-fg-muted transition-colors hover:border-line-strong hover:text-fg"
+                }
+              >
+                {entry.curriculum.title}
+                <ArrowRight className="size-4" />
+              </Link>
+            ))}
             {stats ? (
               <p className="text-xs text-fg-subtle">
-                {stats.concepts} concepts · {stats.groupsComplete} topic groups · 4 levels each
+                {totalConcepts} concepts across {languages.length} languages · 4 levels each
               </p>
             ) : null}
           </div>
@@ -126,21 +143,30 @@ export default function HomePage() {
           </p>
         </section>
 
-        {/* ---------------------------------------------------------- curriculum */}
-        {curriculum ? (
-          <section className="border-t border-line py-14">
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-sm font-semibold">Java curriculum</h2>
+        {/* ---------------------------------------------------------- curricula */}
+        {languages.map((entry) => (
+          <section key={entry.id} className="border-t border-line py-14">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">{entry.curriculum.title} curriculum</h2>
               <Link
-                href={`/${DEFAULT_LANGUAGE}`}
+                href={`/${entry.id}`}
                 className="text-xs text-fg-muted transition-colors hover:text-fg"
               >
                 Open dashboard →
               </Link>
             </div>
+            <p className="mt-1 max-w-2xl text-sm text-fg-muted">{entry.config.blurb}</p>
+            <p className="mt-1 text-xs text-fg-subtle">
+              {entry.curriculum.stats.concepts} concepts ·{" "}
+              {entry.curriculum.stats.groupsComplete}{" "}
+              {entry.curriculum.stats.groupsComplete === 1 ? "topic group" : "topic groups"} written
+              {entry.curriculum.stats.groupsPlanned > 0
+                ? ` · ${entry.curriculum.stats.groupsPlanned} still being written`
+                : ""}
+            </p>
 
             <ul className="mt-4 grid gap-x-8 gap-y-px sm:grid-cols-2">
-              {curriculum.groups.map((group) => (
+              {entry.curriculum.groups.map((group) => (
                 <li
                   key={group.slug}
                   className="flex items-center gap-3 border-b border-line py-2.5 text-sm last:border-b-0"
@@ -150,7 +176,7 @@ export default function HomePage() {
                   </span>
                   {group.concepts.length > 0 ? (
                     <Link
-                      href={`/${DEFAULT_LANGUAGE}/${group.slug}`}
+                      href={`/${entry.id}/${group.slug}`}
                       className="min-w-0 flex-1 truncate transition-colors hover:text-fg"
                     >
                       {group.title}
@@ -169,7 +195,7 @@ export default function HomePage() {
               ))}
             </ul>
           </section>
-        ) : null}
+        ))}
 
         <footer className="border-t border-line py-8 text-2xs text-fg-subtle">
           All educational content is rendered from the source Markdown curriculum. Groups marked

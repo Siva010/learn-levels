@@ -11,6 +11,7 @@
  */
 import { LEVEL_IDS, type LevelId } from "../types/content";
 import { loadLanguage } from "../lib/content/load";
+import { languageIds } from "../lib/content/languages";
 import type { ParsedFile } from "../lib/content/parser";
 
 interface RawCounts {
@@ -22,20 +23,23 @@ interface RawCounts {
 }
 
 interface Problem {
+  language: string;
   level: LevelId;
   kind: string;
   detail: string;
 }
 
 const problems: Problem[] = [];
+/** Set for the duration of each language's check, so problems record where they came from. */
+let currentLanguage = "";
 
-function main() {
-  const language = process.argv[2] ?? "java";
+function checkLanguage(language: string) {
+  currentLanguage = language;
   const { curriculum, files, searchDocs } = loadLanguage(language);
 
   console.log("Content Integrity Check");
   console.log("────────────────────────────────────────────────────────────");
-  console.log(`Source: content/${language}/  (${curriculum.language})`);
+  console.log(`Source: content/${language}/  (${curriculum.title})`);
   console.log(
     `Curriculum: ${curriculum.stats.groupsComplete} groups complete, ` +
       `${curriculum.stats.groupsPlanned} planned, ${curriculum.stats.concepts} concepts\n`,
@@ -83,18 +87,32 @@ function main() {
   console.log(`Search documents: ${searchDocs.length}`);
   console.log(`Unresolved [[wiki-links]]: ${unresolved}`);
   console.log(
-    `Aliased level views: ${aliased} (Group 1 merges two Foundation concepts into one ` +
-      `Interview/Production section — see CONCEPT_ALIASES in lib/content/registry.ts)\n`,
+    `Aliased level views: ${aliased}` +
+      (aliased > 0
+        ? " (a level merges two Foundation concepts into one section — see conceptAliases in" +
+          " lib/content/languages.ts)"
+        : ""),
   );
+  console.log();
+}
+
+function main() {
+  const requested = process.argv.slice(2);
+  const languages = requested.length > 0 ? requested : languageIds();
+
+  languages.forEach((language, index) => {
+    if (index > 0) console.log();
+    checkLanguage(language);
+  });
 
   if (problems.length === 0) {
-    console.log("✓ CONTENT INTEGRITY PASSED");
+    console.log(`✓ CONTENT INTEGRITY PASSED — ${languages.join(", ")}`);
     return;
   }
 
   console.log(`✗ CONTENT INTEGRITY FAILED — ${problems.length} discrepancies`);
   for (const problem of problems) {
-    console.log(`  [${problem.level}] ${problem.kind}: ${problem.detail}`);
+    console.log(`  [${problem.language}/${problem.level}] ${problem.kind}: ${problem.detail}`);
   }
   process.exitCode = 1;
 }
@@ -122,6 +140,7 @@ function checkAttribution(file: ParsedFile, level: LevelId) {
 
   if (unclaimed.length > 0) {
     problems.push({
+      language: currentLanguage,
       level,
       kind: "content loss",
       detail: `${unclaimed.length} source lines are not represented in the model`,
@@ -224,7 +243,12 @@ function line(
   const suffix = actual === expected ? "" : `  (source: ${expected})`;
   console.log(`  ${mark} ${label.padEnd(18)} ${actual}${suffix}`);
   if (!ok) {
-    problems.push({ level, kind, detail: `model has ${actual}, source has ${expected}` });
+    problems.push({
+      language: currentLanguage,
+      level,
+      kind,
+      detail: `model has ${actual}, source has ${expected}`,
+    });
   }
 }
 

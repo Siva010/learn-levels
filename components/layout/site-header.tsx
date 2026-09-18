@@ -3,12 +3,25 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Menu, Search, X } from "lucide-react";
+import { useProgress } from "@/lib/progress/provider";
 import { Sidebar } from "@/components/navigation/sidebar";
 import { ThemeToggle } from "@/components/layout/theme";
 import { CommandPalette } from "@/components/search/command-palette";
 import { Kbd } from "@/components/ui/pill";
 
-export function SiteHeader({ language }: { language: string }) {
+export interface LanguageLink {
+  id: string;
+  title: string;
+}
+
+export function SiteHeader({
+  language,
+  languages,
+}: {
+  language: string;
+  languages: LanguageLink[];
+}) {
+  const { skeleton } = useProgress();
   const [navOpen, setNavOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -104,12 +117,32 @@ export function SiteHeader({ language }: { language: string }) {
           </Link>
 
           <span className="hidden text-fg-subtle sm:inline">/</span>
-          <Link
-            href={`/${language}`}
-            className="hidden text-sm text-fg-muted transition-colors hover:text-fg sm:inline"
-          >
-            Java
-          </Link>
+          {/* One language is a label; more than one is a switcher that keeps the current level. */}
+          <nav aria-label="Language" className="hidden items-center gap-1 sm:flex">
+            {languages.length > 1 ? (
+              languages.map((entry) => (
+                <Link
+                  key={entry.id}
+                  href={`/${entry.id}`}
+                  aria-current={entry.id === language ? "page" : undefined}
+                  className={
+                    entry.id === language
+                      ? "rounded-md bg-panel-raised px-2 py-1 text-sm text-fg"
+                      : "rounded-md px-2 py-1 text-sm text-fg-subtle transition-colors hover:text-fg"
+                  }
+                >
+                  {entry.title}
+                </Link>
+              ))
+            ) : (
+              <Link
+                href={`/${language}`}
+                className="text-sm text-fg-muted transition-colors hover:text-fg"
+              >
+                {skeleton.title}
+              </Link>
+            )}
+          </nav>
 
           <div className="ml-auto flex items-center gap-2">
             <button

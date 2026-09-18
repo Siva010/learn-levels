@@ -1,23 +1,28 @@
 # Learn Levels
 
-A Java learning platform that teaches the same concept through four increasing levels of practical depth:
+A learning platform that teaches the same concept through four increasing levels of practical depth:
 
 **Foundation** (what is it) → **Understand** (how does it work) → **Interview** (can I explain it) → **Production** (can I use it correctly)
 
+Two curricula ship today — **Java** (132 concepts) and **Python** (126 concepts) — each written as
+four Markdown files and rendered by the same pipeline.
+
 ## Content is the source of truth
 
-Every piece of educational content is parsed from the Markdown in `content/java/`. Nothing is
+Every piece of educational content is parsed from the Markdown in `content/<language>/`. Nothing is
 transcribed into components, and nothing is invented — see
 [docs/NON-NEGOTIABLE_ SOURCE CONTENT FIDELITY.md](docs/NON-NEGOTIABLE_%20SOURCE%20CONTENT%20FIDELITY.md).
 
 ```text
-content/java/*.md  →  parser  →  data/generated/*.json  →  React components
-                        ↓
-                   validate-content
+content/<language>/*.md  →  parser  →  data/generated/<language>.curriculum.json  →  React components
+                              ↓
+                        validate-content
 ```
 
-Editing a source file and re-running `npm run build:content` updates the site. Adding a language
-is a `content/<language>/` drop plus a registry entry — the routes are already language-scoped.
+Editing a source file and re-running `npm run build:content` updates the site. Adding a language is
+a `content/<language>/` drop, an entry in [lib/content/languages.ts](lib/content/languages.ts) and
+one static import in [lib/content/curriculum.ts](lib/content/curriculum.ts) — the routes, search,
+sidebar and progress tracking are already language-scoped.
 
 ## Commands
 
@@ -36,40 +41,49 @@ npm run validate-content
 `dev` and `build` both regenerate the content model first, so editing a Markdown file and
 reloading is all it takes.
 
-`validate-content` is the fidelity gate, and `npm run build` runs it automatically. It checks two
-things independently:
+`validate-content` is the fidelity gate, and `npm run build` runs it automatically. It runs for
+every registered language (or just the ones you name: `npm run validate-content python`) and checks
+two things independently:
 
 1. **Line attribution** — every non-blank line of all four source files must be claimed by exactly
    one part of the content model. Unclaimed lines mean content was silently dropped.
 2. **Raw counts** — code fences, tables, callouts and interview questions counted directly off the
    Markdown (skipping anything inside a code fence) must match what the model emitted.
 
-Current state: 13,295 of 13,295 source lines attributed across the four files — 12 topic groups,
-132 concepts, 3,388 sections.
+Current state:
+
+| Language | Groups | Concepts | Sections | Source lines attributed |
+|---|---|---|---|---|
+| Java | 12 | 132 | 3,388 | 13,295 / 13,295 |
+| Python | 12 | 126 | 3,470 | 12,828 / 12,828 |
 
 ## Layout
 
 ```text
-content/java/        the four source Markdown files — the only place content lives
+content/java/        the four Java source Markdown files — the only place that content lives
+content/python/      the four Python source Markdown files
 docs/                product spec, fidelity rules, and SOURCE_ISSUES.md
-lib/content/         parser, label registry, Group 1 alias table, server-side lookups
+lib/content/         parser, label registry, language registry, server-side lookups
 lib/progress/        storage-agnostic ProgressStore + localStorage adapter
-lib/search/          server-side ranked search over the generated index
+lib/search/          ranked search over the generated per-language index
 scripts/             build-content.ts, validate-content.ts
-data/generated/      parser output (committed; never edited by hand)
+data/generated/      parser output (generated, git-ignored, never edited by hand)
+public/search-index/ per-language search index (generated, git-ignored)
 ```
 
 ## Notes on the source material
 
-[docs/SOURCE_ISSUES.md](docs/SOURCE_ISSUES.md) records discrepancies found while parsing — the
-`Build status` note that contradicts each file's own table of contents, the Group 1 concepts that
-don't align across levels, and the fact that the source contains no concept-to-concept links.
-None were silently corrected; each is handled explicitly and documented.
+[docs/SOURCE_ISSUES.md](docs/SOURCE_ISSUES.md) records discrepancies found while parsing — the Java
+`Build status` note that contradicts each file's own table of contents, the Java Group 1 concepts
+that don't align across levels, and the fact that neither source contains concept-to-concept links.
+None were silently corrected; each is handled explicitly and documented. The same file records where
+the Python curriculum came from and how it differs structurally from the Java one.
 
 ## Deploying
 
-`npm run build` writes a fully static site to `out/` — 810 HTML files plus assets. There is no
-server component to run: search happens in the browser and progress lives in `localStorage`.
+`npm run build` writes a fully static site to `out/` — 1,580 HTML files (806 Java, 770 Python, plus
+the shared pages) and their assets. There is no server component to run: search happens in the
+browser and progress lives in `localStorage`.
 
 Preview the real thing locally:
 
@@ -92,14 +106,18 @@ rewrite extensionless URLs still resolve `/java/generics/wildcards/interview/`.
 
 ## Architecture notes
 
-- **Parsing happens at build time.** All 678 pages are prerendered, including Shiki syntax
-  highlighting, so nothing parses Markdown per request.
-- **Search runs in the browser** against a static index (`public/search-index/java.json`, 323 KB
-  gzipped) fetched the first time the user searches and held for the session. It is deliberately
-  not truncated — the point of search is to reach any sentence in the curriculum, so trimming
-  section text would make content unfindable.
+- **Parsing happens at build time.** Every page is prerendered, including Shiki syntax
+  highlighting, so nothing parses Markdown per request. Build time and output size scale with the
+  number of languages — the two curricula together prerender 1,580 pages.
+- **Search runs in the browser** against a per-language static index (`public/search-index/<language>.json`,
+  about 2 MB raw each and a fraction of that gzipped) fetched the first time the user searches in
+  that language and held for the session. It is deliberately not truncated — the point of search is
+  to reach any sentence in the curriculum, so trimming section text would make content unfindable.
 - **Progress goes through `ProgressStore`.** Swapping localStorage for a backend is one new
   adapter; no component changes.
-- **Section labels are preserved verbatim.** The Understand file alone uses ~130 distinct labels,
-  most appearing once. Known labels get bespoke presentation; the rest render generically rather
-  than being dropped.
+- **Section labels are preserved verbatim.** The Understand files use a long tail of distinct
+  labels, most appearing once. Known labels get bespoke presentation; the rest render generically
+  rather than being dropped.
+- **Languages are registry entries.** `lib/content/languages.ts` holds the display title, the
+  home-page blurb, and the two per-language parser inputs that cannot be derived from the source —
+  the concept alias table and the generic-title stoplist.

@@ -5,8 +5,11 @@ import { cn } from "@/lib/utils";
 
 const LANG_LABELS: Record<string, string> = {
   java: "Java",
+  python: "Python",
   bash: "Shell",
   text: "Text",
+  toml: "TOML",
+  ini: "INI",
   ts: "TypeScript",
   typescript: "TypeScript",
 };

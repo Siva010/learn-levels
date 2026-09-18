@@ -9,22 +9,27 @@ import type {
   LevelMeta,
 } from "@/types/content";
 import { LEVEL_IDS } from "@/types/content";
-import curriculumJson from "@/data/generated/java.curriculum.json";
+import { DEFAULT_LANGUAGE, LANGUAGES, languageIds } from "./languages";
+import javaJson from "@/data/generated/java.curriculum.json";
+import pythonJson from "@/data/generated/python.curriculum.json";
 
 /**
  * Server-side access to the generated content model.
  *
  * The JSON is produced by `npm run build:content` from content/<language>/*.md — the app never
- * parses Markdown at request time. Adding a language is a content drop plus an entry here.
+ * parses Markdown at request time. Adding a language is a content drop, an entry in
+ * lib/content/languages.ts, and one static import here (bundlers need a literal path).
  */
 const CURRICULA: Record<string, Curriculum> = {
-  java: curriculumJson as unknown as Curriculum,
+  java: javaJson as unknown as Curriculum,
+  python: pythonJson as unknown as Curriculum,
 };
 
-export const DEFAULT_LANGUAGE = "java";
+export { DEFAULT_LANGUAGE, LANGUAGES };
 
+/** Registry order, limited to languages whose model is actually generated. */
 export function getLanguages(): string[] {
-  return Object.keys(CURRICULA);
+  return languageIds().filter((language) => language in CURRICULA);
 }
 
 export function getCurriculum(language = DEFAULT_LANGUAGE): Curriculum | null {

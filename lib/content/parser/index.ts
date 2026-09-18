@@ -14,13 +14,8 @@ import type {
   Section,
 } from "@/types/content";
 import { LEVEL_IDS } from "@/types/content";
-import {
-  LEVEL_META,
-  isQuestionSection,
-  sectionKindFor,
-  slugify,
-  sourceNumberFor,
-} from "../registry";
+import { LEVEL_META, isQuestionSection, sectionKindFor, slugify } from "../registry";
+import { languageConfig, sourceNumberFor, type LanguageConfig } from "../languages";
 import type { ParsedConcept, ParsedFile, ParsedSection } from "./parse-file";
 
 export { parseFile } from "./parse-file";
@@ -35,14 +30,15 @@ export interface BuildResult {
 /**
  * Merges the four per-level parse results into one curriculum.
  *
- * The Foundation file is the canonical spine (it is the most granular: 86 concepts vs. 85 in
- * Interview/Production, which merge two Group 1 concepts). Per-level lookup goes through the
- * alias table in registry.ts, so a merged source section can legitimately back two concepts.
+ * The Foundation file is the canonical spine — it is the most granular, since a level may merge
+ * two Foundation concepts into one section. Per-level lookup goes through that language's alias
+ * table, so a merged source section can legitimately back two concepts.
  */
 export function buildCurriculum(
   language: string,
   files: Record<LevelId, ParsedFile>,
 ): BuildResult {
+  const config = languageConfig(language);
   const spine = files.foundation;
   const levels: LevelMeta[] = LEVEL_META.map((meta) => {
     const file = files[meta.id];
@@ -68,7 +64,7 @@ export function buildCurriculum(
     const slug = slugify(entry.title);
     const parsedGroup = spine.groups.find((group) => group.number === entry.number);
     const concepts: Concept[] = (parsedGroup?.concepts ?? []).map((concept) =>
-      buildConcept(concept, entry.number, slug, files),
+      buildConcept(concept, entry.number, slug, files, config),
     );
     return {
       id: `group-${entry.number}`,
@@ -80,7 +76,7 @@ export function buildCurriculum(
     };
   });
 
-  resolveRelated(groups);
+  resolveRelated(groups, config);
 
   const searchDocs = buildSearchDocs(groups);
   const stats = buildStats(groups, files, levels);
@@ -88,7 +84,7 @@ export function buildCurriculum(
   return {
     curriculum: {
       language,
-      title: "Java",
+      title: config?.title ?? language,
       groups,
       levels,
       stats,
@@ -106,13 +102,14 @@ function buildConcept(
   groupNumber: string,
   groupSlug: string,
   files: Record<LevelId, ParsedFile>,
+  config: LanguageConfig | null,
 ): Concept {
   const slug = slugify(canonical.title);
   const levels: Partial<Record<LevelId, LevelContent>> = {};
   const wikiLinks = new Set(canonical.wikiLinks);
 
   for (const level of LEVEL_IDS) {
-    const sourceNumber = sourceNumberFor(level, canonical.number);
+    const sourceNumber = sourceNumberFor(config, level, canonical.number);
     const parsedGroup = files[level].groups.find((group) => group.number === groupNumber);
     const parsed = parsedGroup?.concepts.find((concept) => concept.number === sourceNumber);
     if (!parsed) continue;
@@ -206,25 +203,6 @@ function toQuestionBlocks(blocks: Block[]): Block[] {
 
 /* --------------------------------------------------- cross-concept resolution */
 
-/**
- * Titles too generic to treat as a concept reference — they appear constantly as ordinary
- * prose ("...the methods of the class...") and would swamp the related list with noise.
- */
-const GENERIC_TITLES = new Set([
-  "arrays",
-  "methods",
-  "operators",
-  "control-flow-statements",
-  "variables-and-data-types",
-  "packages-and-imports",
-  "classes-and-objects",
-  "what-is-java",
-  "what-are-generics",
-  "what-is-a-stream",
-  "what-is-an-exception",
-  "what-is-functional-programming-in-java",
-]);
-
 const MAX_RELATED = 8;
 
 /**
@@ -235,16 +213,19 @@ const MAX_RELATED = 8;
  * concept's title is mentioned in its text. This is navigation derived from the source, not
  * new educational content — nothing is asserted that the source does not already say.
  */
-function resolveRelated(groups: Group[]): void {
+function resolveRelated(groups: Group[], config: LanguageConfig | null): void {
   const byNumber = new Map<string, { group: Group; concept: Concept }>();
   const byTitle = new Map<string, { group: Group; concept: Concept }>();
   const matchers: Array<{ pattern: RegExp; id: string }> = [];
+  // Titles too generic to treat as a concept reference — they appear constantly as ordinary
+  // prose ("...the methods of the class...") and would swamp the related list with noise.
+  const generic = new Set(config?.genericTitles ?? []);
 
   for (const group of groups) {
     for (const concept of group.concepts) {
       byNumber.set(concept.number, { group, concept });
       byTitle.set(slugify(concept.title), { group, concept });
-      if (GENERIC_TITLES.has(slugify(concept.title))) continue;
+      if (generic.has(slugify(concept.title))) continue;
       for (const alias of titleAliases(concept.title)) {
         matchers.push({ pattern: new RegExp(`\\b${escapeRegExp(alias)}\\b`, "i"), id: concept.id });
       }

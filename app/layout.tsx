@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Learn Levels — Learn Java in Levels",
+    default: "Learn Levels — Learn a language in Levels",
     template: "%s · Learn Levels",
   },
   description:

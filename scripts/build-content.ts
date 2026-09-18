@@ -1,19 +1,20 @@
 /**
  * Parses content/<language>/*.md into the normalized content model consumed by the app.
  *
- * Run with `npm run build:content`. Output lands in data/generated/ and is committed so the
- * app never parses Markdown at request time.
+ * Run with `npm run build:content`, optionally with language ids to limit the run. Output lands
+ * in data/generated/ and public/search-index/ — both generated, neither committed — so the app
+ * never parses Markdown at request time.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadLanguage } from "../lib/content/load";
+import { languageIds } from "../lib/content/languages";
 
 const OUT_DIR = join(process.cwd(), "data", "generated");
 /** The search index ships as a static asset — the browser fetches it on first search. */
 const SEARCH_DIR = join(process.cwd(), "public", "search-index");
 
-function main() {
-  const language = process.argv[2] ?? "java";
+function build(language: string) {
   const { curriculum, searchDocs } = loadLanguage(language);
 
   mkdirSync(OUT_DIR, { recursive: true });
@@ -42,6 +43,15 @@ function main() {
     );
   }
   console.log(`  ${searchDocs.length} search documents`);
+}
+
+function main() {
+  const requested = process.argv.slice(2);
+  const languages = requested.length > 0 ? requested : languageIds();
+  languages.forEach((language, index) => {
+    if (index > 0) console.log();
+    build(language);
+  });
 }
 
 main();

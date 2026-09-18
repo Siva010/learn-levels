@@ -50,7 +50,7 @@ export function ProgressOverview() {
 
       <div className="mt-5 border-t border-line pt-4">
         <div className="flex items-center justify-between text-xs">
-          <span className="eyebrow">Java mastery</span>
+          <span className="eyebrow">{skeleton.title} mastery</span>
           <span className="tabular-nums font-medium">
             {ready ? formatPercent(overall.percent) : "—"}
           </span>

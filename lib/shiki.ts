@@ -2,7 +2,19 @@ import "server-only";
 
 import { createHighlighter, type Highlighter } from "shiki";
 
-const LANGS = ["java", "bash", "typescript", "json", "xml", "properties", "sql"] as const;
+const LANGS = [
+  "java",
+  "python",
+  "bash",
+  "typescript",
+  "json",
+  "xml",
+  "properties",
+  "sql",
+  "toml",
+  "ini",
+  "diff",
+] as const;
 
 const ALIASES: Record<string, string> = {
   ts: "typescript",
@@ -11,6 +23,10 @@ const ALIASES: Record<string, string> = {
   console: "bash",
   yaml: "properties",
   yml: "properties",
+  py: "python",
+  py3: "python",
+  pycon: "python",
+  cfg: "ini",
 };
 
 let highlighterPromise: Promise<Highlighter> | null = null;
