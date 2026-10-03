@@ -5,7 +5,8 @@ silently corrected in the source — they are recorded here and handled explicit
 
 Sections 1–7 concern `content/java/*.md`, last reviewed against the full 12-group curriculum
 (132 concepts, 13,295 non-blank source lines). Section 8 concerns `content/python/*.md`
-(126 concepts, 12,828 non-blank source lines).
+(126 concepts, 12,828 non-blank source lines). Section 9 concerns `content/spring-boot/*.md`
+(125 concepts, 13,456 non-blank source lines).
 
 ---
 
@@ -152,3 +153,53 @@ descriptors" in the I/O, concurrency and memory groups — 12 concepts link to i
 half are that collision. Stoplisting the title would remove the genuine links along with the noise,
 so it is left in place and recorded here. The same trade-off produced the Java stoplist entries for
 `Methods`, `Arrays` and `Operators`.
+
+---
+
+### 9. The Spring Boot curriculum was written for this repository and builds on Java
+
+Like Python, `content/spring-boot/*.md` was authored here rather than supplied, in the same four
+dialects, and is the source of truth for the Spring Boot curriculum. It has the same structural
+properties as the Python files — identical numbering in all four files, an accurate `Build status`
+note, the same label conventions — so the parser needs no alias table for it.
+
+| | Java | Python | Spring Boot |
+|---|---|---|---|
+| Origin | Supplied, immutable | Authored here | Authored here |
+| Groups / concepts | 12 / 132 | 12 / 126 | 12 / 125 |
+| Alias table needed | Yes | No | No |
+| Prerequisite | None | None | The Java curriculum |
+| In-text concept links | None | None | 19 |
+
+Four things differ from the other two curricula and are recorded here:
+
+1. **It assumes Java.** The Spring Boot files do not re-teach the language. The Foundation and
+   Interview `Goal of this file` notes say so, and topics such as generics, collections, concurrency and the JVM are left to
+   the Java curriculum rather than duplicated. There are no cross-curriculum links, because the
+   parser resolves `[[#...]]` within one language only.
+2. **It contains some in-text concept links.** Nineteen `[[#N.M Title]]` references appear in body
+   text, each pointing at an earlier concept that explains a mechanism the current one relies on —
+   for example caching and transactions both point back to `1.10 Proxies and AOP`. The parser already
+   resolves explicit wiki-links before title matching, so these become related-concept links directly.
+   Together with derived title matches, 79 of 125 concepts get links, averaging 1.6.
+3. **It is written against Spring Boot 3.x, and Spring Boot 4 now exists.** The curriculum targets
+   Spring Boot 3.x on Java 17+, the generation in widest use while it was written. Spring Boot 4.0
+   (on Spring Framework 7) was released in November 2025. Where behaviour differs, the text says so
+   explicitly. Examples include native API versioning in Spring Framework 7, the core `@Retryable`
+   and `@ConcurrencyLimit` annotations, and `@MockitoBean` replacing the deprecated `@MockBean`.
+   Concept 12.10, *Upgrading Spring Boot*, covers the 3.x-to-4.0 path. Version-specific claims are
+   tagged with the version that introduced them (for example "Boot 3.4+"), so they can be checked
+   when the material is next revised.
+
+4. **It is written cause-first.** Every concept states the problem that forced it to exist before its
+   mechanism. In the Understand file that takes two labels the other curricula do not use:
+   `**The problem:**`, which opens the concept, and `**Predict it:**`, a question whose answer follows
+   from the mechanism. The site renders `Predict it` with the answer folded behind a reveal. The
+   parser needs no change for either — Understand labels are open-ended — and the registry maps them
+   to their own presentation. Groups 1–10 carry both sections; Groups 11–12 are being revised the same
+   way.
+
+The Spring Boot generic-title stoplist is short and data-driven: `Logging`, `Constraints`,
+`Profiles`, `Propagation` and `Aggregation`. Each title also appears as an ordinary word in an
+unrelated context — "context propagation" in tracing, "metric aggregation" in monitoring, "JFR
+profiles" in performance work — and would otherwise link those concepts to the wrong place.

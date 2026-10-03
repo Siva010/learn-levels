@@ -9,43 +9,26 @@ export function InlineMarkdown({ children }: { children: string }) {
   return <>{renderInline(children)}</>;
 }
 
+const CODE_SPAN = /`([^`]+)`/g;
+/** Stand-in for a lifted code span; NUL never appears in the source text. */
+const CODE_MARK = /\u0000(\d+)\u0000/g;
+
+/**
+ * Code spans are lifted out before any other marker is read, so their contents are never
+ * re-parsed — `**` inside code stays literal — and restored wherever they land, including
+ * inside a bold or italic run that contains code (`**No — a `final` method.**`).
+ */
 export function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
-  return splitCode(text, keyPrefix);
+  const codes: string[] = [];
+  const masked = text.replace(CODE_SPAN, (_, code: string) => `\u0000${codes.push(code) - 1}\u0000`);
+  return splitEmphasis(masked, keyPrefix, codes);
 }
 
-/** Code spans win over every other marker — their contents are never re-parsed. */
-function splitCode(text: string, keyPrefix: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /`([^`]+)`/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let index = 0;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(...splitEmphasis(text.slice(lastIndex, match.index), `${keyPrefix}-${index}`));
-    }
-    nodes.push(
-      <code
-        key={`${keyPrefix}-code-${index}`}
-        className="rounded border border-line bg-panel-raised px-[0.3em] py-[0.1em] font-mono text-[0.85em] text-fg"
-      >
-        {match[1]}
-      </code>,
-    );
-    lastIndex = match.index + match[0].length;
-    index += 1;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(...splitEmphasis(text.slice(lastIndex), `${keyPrefix}-${index}`));
-  }
-  return nodes;
-}
+type Recurse = (value: string, key: string) => ReactNode[];
 
 type Rule = {
   pattern: RegExp;
-  render: (match: RegExpExecArray, key: string, recurse: (value: string, key: string) => ReactNode[]) => ReactNode;
+  render: (match: RegExpExecArray, key: string, recurse: Recurse) => ReactNode;
 };
 
 const RULES: Rule[] = [
@@ -60,9 +43,9 @@ const RULES: Rule[] = [
   {
     // `[[#Target]]` or `[[#Target|Alias]]` — show the alias when the source gives one.
     pattern: /\[\[#([^\]|]+)(?:\|([^\]]*))?\]\]/,
-    render: (match, key) => (
+    render: (match, key, recurse) => (
       <span key={key} className="text-fg-muted">
-        {(match[2] ?? match[1]).replace(/^\d+(\.\d+)?\.?\s*/, "")}
+        {recurse((match[2] ?? match[1]).replace(/^\d+(\.\d+)?\.?\s*/, ""), key)}
       </span>
     ),
   },
@@ -89,7 +72,7 @@ const RULES: Rule[] = [
   },
 ];
 
-function splitEmphasis(text: string, keyPrefix: string): ReactNode[] {
+function splitEmphasis(text: string, keyPrefix: string, codes: string[]): ReactNode[] {
   for (const rule of RULES) {
     const match = rule.pattern.exec(text);
     if (!match) continue;
@@ -98,12 +81,44 @@ function splitEmphasis(text: string, keyPrefix: string): ReactNode[] {
     const after = text.slice(match.index + match[0].length);
 
     return [
-      ...(before ? splitEmphasis(before, `${keyPrefix}b`) : []),
-      rule.render(match, `${keyPrefix}m`, (value, key) => splitEmphasis(value, `${key}r`)),
-      ...(after ? splitEmphasis(after, `${keyPrefix}a`) : []),
+      ...(before ? splitEmphasis(before, `${keyPrefix}b`, codes) : []),
+      rule.render(match, `${keyPrefix}m`, (value, key) => splitEmphasis(value, `${key}r`, codes)),
+      ...(after ? splitEmphasis(after, `${keyPrefix}a`, codes) : []),
     ];
   }
 
+  return plainText(text, keyPrefix, codes);
+}
+
+/** Leaf text: restores lifted code spans and turns soft line breaks into spaces. */
+function plainText(text: string, keyPrefix: string, codes: string[]): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+  let index = 0;
+
+  for (const match of text.matchAll(CODE_MARK)) {
+    if (match.index > lastIndex) {
+      nodes.push(...softBreaks(text.slice(lastIndex, match.index), `${keyPrefix}-t${index}`));
+    }
+    nodes.push(
+      <code
+        key={`${keyPrefix}-code-${index}`}
+        className="rounded border border-line bg-panel-raised px-[0.3em] py-[0.1em] font-mono text-[0.85em] text-fg"
+      >
+        {codes[Number(match[1])]}
+      </code>,
+    );
+    lastIndex = match.index + match[0].length;
+    index += 1;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(...softBreaks(text.slice(lastIndex), `${keyPrefix}-t${index}`));
+  }
+  return nodes;
+}
+
+function softBreaks(text: string, keyPrefix: string): ReactNode[] {
   return text.includes("\n")
     ? text.split("\n").flatMap((line, index, all) =>
         index < all.length - 1

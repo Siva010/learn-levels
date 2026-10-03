@@ -7,8 +7,10 @@ import type { SectionKind } from "@/types/content";
  *   plain — label above the blocks. The default.
  *   panel — bordered, tinted, icon-led. Used where the section *is* a semantic warning:
  *           the whole Production level reads as an engineering handbook of these.
+ *   reveal — a panel whose first block is a question and whose remaining blocks stay folded
+ *            until the reader asks for them, so they can commit to a prediction first.
  */
-export type SectionVariant = "lead" | "plain" | "panel";
+export type SectionVariant = "lead" | "plain" | "panel" | "reveal";
 
 export type SectionTone = "neutral" | "info" | "success" | "warning" | "danger" | "accent";
 
@@ -31,12 +33,15 @@ const PRESENTATION: Partial<Record<SectionKind, SectionPresentation>> = {
 
   // ----------------------------------------------------------------- interview
   definition: { variant: "lead", tone: "neutral" },
+  "why-it-exists": PANEL("accent", "target"),
   "interview-explanation": PANEL("accent", "mic"),
   "key-facts": PANEL("info", "pin"),
   "confused-with": PANEL("warning", "shuffle"),
   "edge-cases": PANEL("warning", "corner"),
 
   // ---------------------------------------------------------------- understand
+  problem: PANEL("accent", "target"),
+  predict: { variant: "reveal", tone: "success", icon: "brain" },
   intuition: PANEL("info", "lightbulb"),
   terminology: PANEL("neutral", "book"),
   "common-mistakes": PANEL("warning", "alert"),

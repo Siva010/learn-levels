@@ -12,6 +12,7 @@ import { LEVEL_IDS } from "@/types/content";
 import { DEFAULT_LANGUAGE, LANGUAGES, languageIds } from "./languages";
 import javaJson from "@/data/generated/java.curriculum.json";
 import pythonJson from "@/data/generated/python.curriculum.json";
+import springBootJson from "@/data/generated/spring-boot.curriculum.json";
 
 /**
  * Server-side access to the generated content model.
@@ -23,6 +24,7 @@ import pythonJson from "@/data/generated/python.curriculum.json";
 const CURRICULA: Record<string, Curriculum> = {
   java: javaJson as unknown as Curriculum,
   python: pythonJson as unknown as Curriculum,
+  "spring-boot": springBootJson as unknown as Curriculum,
 };
 
 export { DEFAULT_LANGUAGE, LANGUAGES };

@@ -116,6 +116,8 @@ export type SectionKind =
   | "terminology"
   | "relationships"
   // understand
+  | "problem"
+  | "predict"
   | "how-it-works"
   | "advantages"
   | "disadvantages"

@@ -104,6 +104,17 @@ export const LANGUAGES: LanguageConfig[] = [
       "type-hints-and-annotations",
     ],
   },
+  {
+    id: "spring-boot",
+    title: "Spring Boot",
+    blurb:
+      "Dependency injection, REST APIs, JPA, transactions, security, testing and the production concerns behind them.",
+    // All four Spring Boot files are numbered identically, so no alias table is needed.
+    // Assumes the Java curriculum as a prerequisite rather than repeating it.
+    // Each of these titles also appears as an ordinary word in other contexts, for example
+    // "context propagation" in tracing or "metric aggregation" in monitoring.
+    genericTitles: ["logging", "constraints", "profiles", "propagation", "aggregation"],
+  },
 ];
 
 const BY_ID = new Map(LANGUAGES.map((language) => [language.id, language]));

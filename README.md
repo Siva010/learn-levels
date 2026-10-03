@@ -4,8 +4,9 @@ A learning platform that teaches the same concept through four increasing levels
 
 **Foundation** (what is it) → **Understand** (how does it work) → **Interview** (can I explain it) → **Production** (can I use it correctly)
 
-Two curricula ship today — **Java** (132 concepts) and **Python** (126 concepts) — each written as
-four Markdown files and rendered by the same pipeline.
+Three curricula ship today — **Java** (132 concepts), **Python** (126 concepts) and **Spring Boot**
+(125 concepts, which assumes the Java curriculum) — each written as four Markdown files and rendered
+by the same pipeline.
 
 ## Content is the source of truth
 
@@ -56,12 +57,14 @@ Current state:
 |---|---|---|---|---|
 | Java | 12 | 132 | 3,388 | 13,295 / 13,295 |
 | Python | 12 | 126 | 3,470 | 12,828 / 12,828 |
+| Spring Boot | 12 | 125 | 3,592 | 13,456 / 13,456 |
 
 ## Layout
 
 ```text
 content/java/        the four Java source Markdown files — the only place that content lives
 content/python/      the four Python source Markdown files
+content/spring-boot/ the four Spring Boot source Markdown files
 docs/                product spec, fidelity rules, and SOURCE_ISSUES.md
 lib/content/         parser, label registry, language registry, server-side lookups
 lib/progress/        storage-agnostic ProgressStore + localStorage adapter
@@ -77,12 +80,13 @@ public/search-index/ per-language search index (generated, git-ignored)
 `Build status` note that contradicts each file's own table of contents, the Java Group 1 concepts
 that don't align across levels, and the fact that neither source contains concept-to-concept links.
 None were silently corrected; each is handled explicitly and documented. The same file records where
-the Python curriculum came from and how it differs structurally from the Java one.
+the Python and Spring Boot curricula came from, how they differ structurally from the Java one, and
+which Spring Boot version the Spring Boot material is written against.
 
 ## Deploying
 
-`npm run build` writes a fully static site to `out/` — 1,580 HTML files (806 Java, 770 Python, plus
-the shared pages) and their assets. There is no server component to run: search happens in the
+`npm run build` writes a fully static site to `out/` — 2,344 HTML files (806 Java, 770 Python,
+764 Spring Boot, plus the shared pages) and their assets. There is no server component to run: search happens in the
 browser and progress lives in `localStorage`.
 
 Preview the real thing locally:
@@ -108,13 +112,16 @@ rewrite extensionless URLs still resolve `/java/generics/wildcards/interview/`.
 
 - **Parsing happens at build time.** Every page is prerendered, including Shiki syntax
   highlighting, so nothing parses Markdown per request. Build time and output size scale with the
-  number of languages — the two curricula together prerender 1,580 pages.
+  number of languages — the three curricula together prerender 2,344 pages.
 - **Search runs in the browser** against a per-language static index (`public/search-index/<language>.json`,
   about 2 MB raw each and a fraction of that gzipped) fetched the first time the user searches in
   that language and held for the session. It is deliberately not truncated — the point of search is
   to reach any sentence in the curriculum, so trimming section text would make content unfindable.
 - **Progress goes through `ProgressStore`.** Swapping localStorage for a backend is one new
   adapter; no component changes.
+- **Predict-it sections fold their answer.** An Understand section labelled `Predict it` renders its
+  first paragraph as the question and folds the rest behind a native `<details>` reveal, so the
+  reader commits to an answer before checking it. No client JavaScript is involved.
 - **Section labels are preserved verbatim.** The Understand files use a long tail of distinct
   labels, most appearing once. Known labels get bespoke presentation; the rest render generically
   rather than being dropped.

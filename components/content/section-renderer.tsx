@@ -51,6 +51,42 @@ export function SectionRenderer({
     );
   }
 
+  if (presentation.variant === "reveal") {
+    // The first block is the question; everything after it is the reasoning, folded so the
+    // reader commits to a prediction before checking it. <details> needs no client JS.
+    const [question, ...answer] = section.blocks;
+    return (
+      <section
+        id={anchor}
+        className="scroll-mt-24 rounded-lg border border-line bg-panel p-4 sm:p-5"
+        style={{ borderLeftWidth: 2, borderLeftColor: tone }}
+      >
+        <h2 className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.1em]">
+          {Icon ? <Icon className="size-3.5 shrink-0" aria-hidden style={{ color: tone }} /> : null}
+          <a href={`#${anchor}`} className="no-underline" style={{ color: tone }}>
+            {section.label}
+          </a>
+        </h2>
+        <div className="mt-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+          {question ? <BlockList blocks={[question]} /> : null}
+        </div>
+        {answer.length > 0 ? (
+          <details className="group/reveal mt-3">
+            <summary
+              className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-muted transition-colors hover:text-fg [&::-webkit-details-marker]:hidden"
+            >
+              <span className="group-open/reveal:hidden">Commit to an answer, then reveal</span>
+              <span className="hidden group-open/reveal:inline">Hide the answer</span>
+            </summary>
+            <div className="mt-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+              <BlockList blocks={answer} />
+            </div>
+          </details>
+        ) : null}
+      </section>
+    );
+  }
+
   if (presentation.variant === "panel") {
     return (
       <section

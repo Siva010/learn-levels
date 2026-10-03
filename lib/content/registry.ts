@@ -127,6 +127,8 @@ const SECTION_KINDS: Array<[RegExp, SectionKind]> = [
   [/^frequently confused with$/i, "confused-with"],
   [/^important facts to remember$/i, "key-facts"],
   // understand
+  [/^the problem$/i, "problem"],
+  [/^predict it$/i, "predict"],
   [/^how (it|they|this) (works?|work)/i, "how-it-works"],
   [/^internal mechanism$/i, "how-it-works"],
   [/^advantages/i, "advantages"],

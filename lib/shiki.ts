@@ -14,6 +14,10 @@ const LANGS = [
   "toml",
   "ini",
   "diff",
+  "yaml",
+  "docker",
+  "http",
+  "groovy",
 ] as const;
 
 const ALIASES: Record<string, string> = {
@@ -21,12 +25,14 @@ const ALIASES: Record<string, string> = {
   sh: "bash",
   shell: "bash",
   console: "bash",
-  yaml: "properties",
-  yml: "properties",
+  yml: "yaml",
   py: "python",
   py3: "python",
   pycon: "python",
   cfg: "ini",
+  dockerfile: "docker",
+  Dockerfile: "docker",
+  gradle: "groovy",
 };
 
 let highlighterPromise: Promise<Highlighter> | null = null;
