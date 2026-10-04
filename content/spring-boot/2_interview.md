@@ -7470,7 +7470,7 @@ Retry topics versus the dead-letter topic.
 Packaging a Spring Boot application and its Java runtime into an OCI container image, configured so the JVM respects container limits and shuts down cleanly.
 
 #### Why it exists
-To ship one immutable artifact that behaves identically across environments and that container platforms can schedule, scale and replace.
+Because an application's behaviour depends on its runtime as well as its code, and differing machines make the same build behave differently. An image ships both together as one immutable artifact that behaves identically across environments — and that container platforms can schedule, scale and replace.
 
 #### Interview explanation
 Cover three things: how the image is built (layered Dockerfile or buildpacks, multi-stage, small JRE base, non-root), how the JVM behaves in a container (memory percentage, CPU limits), and how the process stops (exec-form entrypoint so `SIGTERM` reaches Java, graceful shutdown bounded by a timeout shorter than the platform's grace period).
@@ -7511,9 +7511,9 @@ Default JVM max heap: 256 MiB (25%)   → most of the paid memory unused
 - "Buildpacks or Dockerfile?" (Buildpacks give a well-configured layered image with no Dockerfile to maintain; a Dockerfile gives full control for unusual requirements.)
 
 #### Edge cases
-- A CPU limit below one core leaves the JVM with a single GC thread and a tiny common pool.
+- A CPU limit below one core leaves the JVM with a single GC thread and a tiny common pool, because the JVM sizes its thread pools from the CPUs it is allowed to use.
 - `-Xmx` and `MaxRAMPercentage` together: an explicit `-Xmx` wins.
-- Native images start fast but lose some dynamic features unless reachability metadata is supplied.
+- Native images start fast but lose some dynamic features unless reachability metadata is supplied, because everything reflective must be known at build time.
 
 #### Common mistakes
 - Running as root.
@@ -7532,7 +7532,7 @@ Default JVM max heap: 256 MiB (25%)   → most of the paid memory unused
 Container memory limit versus JVM heap — the heap is only one part of the process's memory.
 
 #### Important facts to remember
-- Default max heap is 25% of the container limit.
+- Default max heap is 25% of the container limit — most of the box goes unused without `MaxRAMPercentage`.
 - Exec-form entrypoint so Java receives `SIGTERM`.
 - Graceful shutdown is the default from Boot 3.4.
 
@@ -7544,7 +7544,7 @@ Container memory limit versus JVM heap — the heap is only one part of the proc
 Spring Boot's Docker Compose support (Boot 3.1+) starts the services in `compose.yaml` when the application starts and wires connection details to them automatically.
 
 #### Why it exists
-To give every developer the same local infrastructure from one command and one checked-in file, without hand-written connection properties.
+Because every developer otherwise installs and wires the database, cache and broker by hand, slightly differently. One checked-in file and one command give everyone the same local infrastructure, without hand-written connection properties.
 
 #### Interview explanation
 Explain the flow — find the compose file, `docker compose up`, recognise known images, create `ConnectionDetails` beans that override connection properties — then contrast it with Testcontainers at development time and stress that the module is a development-only dependency.
@@ -7616,7 +7616,7 @@ Docker Compose support versus deploying with Compose — the Boot feature is for
 
 #### Important facts to remember
 - Boot 3.1+.
-- Development-only dependency.
+- Development-only dependency — it must never start containers in production.
 - `ConnectionDetails` beans override connection properties.
 
 ---
@@ -7627,7 +7627,7 @@ Docker Compose support versus deploying with Compose — the Boot feature is for
 OpenAPI is a language-neutral specification for describing HTTP APIs; springdoc-openapi generates that description from Spring MVC or WebFlux controllers and serves Swagger UI.
 
 #### Why it exists
-To document APIs accurately, enable interactive exploration, and generate clients and contract tests from a single machine-readable source.
+Because hand-written API documentation drifts from the code it describes. Generating a machine-readable description from the code keeps it accurate — and the same source enables interactive exploration, generated clients and contract tests.
 
 #### Interview explanation
 Say what springdoc does — reads mappings, types and validation annotations to produce `/v3/api-docs` — then discuss code-first versus contract-first, the role of annotations for what code cannot express, and how the document is used beyond documentation: client generation and breaking-change detection in CI.
@@ -7705,7 +7705,7 @@ API documentation versus API contract testing — documentation describes; contr
 A scheme for running multiple incompatible versions of an API contract side by side so clients can migrate on their own schedule.
 
 #### Why it exists
-Because breaking changes are sometimes unavoidable, and clients — mobile apps especially — cannot all upgrade at the moment the server does.
+Because breaking changes are sometimes unavoidable, and clients — mobile apps especially — cannot all upgrade at the moment the server does. So incompatible contracts must coexist for a while, and retiring one must be a deliberate, announced step.
 
 #### Interview explanation
 Start by distinguishing breaking from non-breaking changes, because most changes should not need a new version. Then compare strategies — path, header, media type — and say how Spring supports them: by hand through path prefixes and mapping conditions in Boot 3.x, natively through the `version` mapping attribute from Spring Framework 7. Finish with the deprecation lifecycle: announce, signal with headers, monitor usage, remove.
@@ -7742,8 +7742,8 @@ Link: </api/v2/orders>; rel="successor-version"
 
 #### Edge cases
 - Mobile clients may never upgrade, so some versions live far longer than planned.
-- A header-versioned API needs a defined default when the header is absent.
-- Caches and CDNs must vary on the version header if it selects the response.
+- A header-versioned API needs a defined default when the header is absent, because older clients never send it.
+- Caches and CDNs must vary on the version header if it selects the response, or one version's response is served to another version's clients.
 
 #### Common mistakes
 - Versioning every change.
@@ -7762,7 +7762,7 @@ Link: </api/v2/orders>; rel="successor-version"
 API versioning versus artifact versioning — the API version is the contract clients see; the application's release version changes far more often.
 
 #### Important facts to remember
-- Additive changes need no new version.
+- Additive changes need no new version — tolerant readers ignore unknown fields.
 - Version at the edge, not the domain.
 - Native support arrives with Spring Framework 7.
 
@@ -7774,7 +7774,7 @@ API versioning versus artifact versioning — the API version is the contract cl
 Techniques for returning bounded, ordered and narrowed subsets of a collection, supported in Spring Data through `Pageable`, `Sort`, `Page`, `Slice`, keyset scrolling and `Specification`s.
 
 #### Why it exists
-To keep response size, memory and query cost bounded regardless of how large the underlying data grows.
+Because an endpoint returning every row is fine with a hundred rows and an outage with a million, while its code never changes. Paging, sorting and filtering in the database keep response size, memory and query cost bounded regardless of how large the data grows.
 
 #### Interview explanation
 Explain `Pageable` binding and what `Page` costs (the count query), contrast offset with keyset pagination and explain why offset degrades with depth, mention stable ordering with a unique tie-breaker, and describe how dynamic filters are built safely with `Specification`s.
@@ -7816,7 +7816,7 @@ Window<Order> next = repository.findFirst20ByStatusOrderByCreatedAtDescIdDesc(
 
 #### Edge cases
 - Without a max page size, `?size=1000000` loads the table.
-- Concurrent inserts shift offset pages; keyset pages stay stable.
+- Concurrent inserts shift offset pages; keyset pages stay stable — offsets count positions, keysets anchor to rows.
 - Keyset pagination cannot jump to an arbitrary page number.
 
 #### Common mistakes
@@ -7840,7 +7840,7 @@ Offset pagination costs roughly O(offset + size) rows read; keyset pagination wi
 
 #### Important facts to remember
 - Cap the page size.
-- Unique tie-breaker in every sort.
+- Unique tie-breaker in every sort — equal values otherwise have no defined order.
 - Keyset for deep or large data sets.
 
 ---
@@ -7851,7 +7851,7 @@ Offset pagination costs roughly O(offset + size) rows read; keyset pagination wi
 Recording application events through the SLF4J facade, implemented by Logback by default in Spring Boot, with levels, appenders and patterns configured externally.
 
 #### Why it exists
-To make application behaviour observable after the fact — for debugging, auditing and incident investigation.
+Because nobody can attach a debugger to production: what the application wrote down while running is the only record of what it did. Logging makes behaviour observable after the fact — for debugging, auditing and incident investigation.
 
 #### Interview explanation
 Explain the facade and backend split, level inheritance by package, parameterised messages, and logging exceptions with the throwable as the last argument. Then cover production concerns: structured JSON output (built in from Boot 3.4), correlation through the MDC and trace ids, runtime level changes through actuator, and never logging secrets or unnecessary personal data.
@@ -7922,7 +7922,7 @@ Logs versus metrics — logs record individual events; metrics aggregate measure
 A Spring Boot module that adds production-ready endpoints for health, metrics, configuration, logging levels and diagnostics.
 
 #### Why it exists
-To give every Boot service a consistent, built-in operational interface for monitoring systems and operators.
+Because every production service needs the same operational answers — health, metrics, configuration, log levels — and building them by hand in each service is wasted and inconsistent. Actuator gives every Boot service a consistent, built-in operational interface for monitoring systems and operators.
 
 #### Interview explanation
 Describe the enable-versus-expose model — only `health` is exposed over HTTP by default — then name the important endpoints, flag the sensitive ones (`env`, `configprops`, `heapdump`, `loggers`), and explain hardening: a separate management port, minimal exposure, and a dedicated `SecurityFilterChain` using `EndpointRequest`.
@@ -8004,7 +8004,7 @@ Actuator versus a monitoring system — actuator exposes data; Prometheus, Grafa
 Health indicators report component status through `/actuator/health`; liveness and readiness health groups map Boot's availability states onto container-platform probes.
 
 #### Why it exists
-So platforms can route traffic only to instances able to serve it and restart instances that cannot recover, automatically.
+Because a platform running many instances must keep deciding which should receive traffic and which should be restarted, and it cannot see inside the process. Health endpoints answer those two questions, so traffic reaches only instances able to serve it and broken ones are replaced automatically.
 
 #### Interview explanation
 Separate the three probes by the action the platform takes on failure — restart, remove from load balancing, keep waiting — and argue from that what each should check. Liveness checks only the process itself; readiness reflects whether this instance can serve; external dependencies belong in neither by default, because a shared dependency failing would take every instance out at once.
@@ -8053,7 +8053,7 @@ Database outage, liveness internal only:
 
 #### Edge cases
 - A slow health indicator makes the probe time out and fail even when the app is fine.
-- Readiness including a shared dependency removes all instances simultaneously.
+- Readiness including a shared dependency removes all instances simultaneously, because they all depend on the same failing thing.
 - Probes on a separate management port can pass while the main server is unresponsive.
 
 #### Common mistakes
@@ -8085,7 +8085,7 @@ Health checks versus monitoring — probes drive automated platform actions; mon
 Micrometer is a vendor-neutral metrics facade; Spring Boot auto-configures a `MeterRegistry` and instruments the framework, and applications add their own counters, timers and gauges.
 
 #### Why it exists
-To measure trends — rates, latencies, saturation — cheaply and consistently, and export them to any monitoring system without vendor lock-in.
+Because most operational questions are about trends — rates, latencies, saturation — which logs answer slowly and expensively. Metrics measure them cheaply and consistently, and a vendor-neutral facade exports them to any monitoring system without lock-in.
 
 #### Interview explanation
 Name the meter types and when each fits, explain tags and the cardinality rule, describe what Boot instruments automatically (`http.server.requests`, JVM, HikariCP), and explain why percentiles should come from histograms aggregated server-side. Mention the Observation API as the shared foundation of metrics and tracing since Boot 3.
@@ -8152,7 +8152,7 @@ Micrometer versus Prometheus — Micrometer is the instrumentation library; Prom
 Recording the path and timing of a request across services as a trace of spans linked by a propagated trace context; in Boot 3 implemented with Micrometer Tracing over OpenTelemetry or Brave.
 
 #### Why it exists
-To diagnose latency and failures in distributed systems, where no single service's logs show the whole request.
+Because in a distributed system no single service's logs show the whole request, so latency and failures cannot be located from any one of them. A trace id carried across every hop stitches the pieces into one timeline.
 
 #### Interview explanation
 Define trace, span and context propagation (W3C `traceparent` by default), explain how Boot instruments HTTP servers and clients and messaging through the Observation API, then cover the practical issues — sampling and its cost, instrumentation gaps from hand-built clients, context lost across threads — and link traces to logs through the MDC.
@@ -8236,7 +8236,7 @@ Trace id versus correlation id — a trace id comes from the tracing system and 
 Supplying environment-specific settings and sensitive credentials to an application at deployment time, from outside the image, through Spring Boot's externalised configuration.
 
 #### Why it exists
-So one artifact runs in every environment, and so credentials are controlled, audited and rotatable rather than embedded in code.
+Because one artifact must run in every environment, so environment-specific values cannot be built in — and secrets that reach code, images or logs are effectively public. External configuration and dedicated secret delivery keep credentials controlled, audited and rotatable.
 
 #### Interview explanation
 Separate ordinary configuration from secrets. Describe the delivery mechanisms — environment variables with relaxed binding, config trees from mounted files, `spring.config.import` from Vault or cloud secret managers — and the hygiene around them: validated `@ConfigurationProperties`, masking in actuator, no secrets in logs or images, and rotation designed in.
@@ -8473,7 +8473,7 @@ Domain model versus persistence model — they can be the same JPA classes in si
 Resilience patterns for remote calls: timeouts bound waiting, retries repeat transient failures with back-off, and circuit breakers stop calling a failing dependency until it shows signs of recovery.
 
 #### Why it exists
-To prevent a slow or failing dependency from exhausting the caller's threads and connections and cascading the failure upstream.
+Because in a distributed system a slow or failing dependency is normal, and a caller that waits patiently exhausts its own threads and connections — cascading the failure upstream. Bounding the wait, forgiving brief faults and failing fast during outages keep one sick service from making its callers sick.
 
 #### Interview explanation
 Start with timeouts, since every remote call needs one and the defaults are often infinite or very long. Explain retries with exponential back-off and jitter, only for transient errors and idempotent operations. Then explain the circuit breaker's closed, open and half-open states and its sliding window. Finish with how they compose — and how retry amplification across layers causes outages.
@@ -8546,7 +8546,7 @@ Circuit breaker versus rate limiter — a breaker reacts to the *dependency's* f
 Rate limiting restricts the number of requests a client may make per time window; backpressure is the broader practice of bounding queues and pools so that overload produces fast rejection rather than collapse.
 
 #### Why it exists
-To keep a service within its capacity, protect it from abusive or buggy clients, and keep latency predictable for accepted work.
+Because capacity is finite, and a service that accepts unlimited work exhausts threads, connections or memory and fails for everyone. Refusing excess early keeps it within capacity, protects it from abusive or buggy clients, and keeps latency predictable for accepted work.
 
 #### Interview explanation
 Explain the token bucket and the alternatives, where limits are enforced (gateway, filter, per dependency), and the HTTP semantics — `429` with `Retry-After`. Then widen to backpressure: every pool in a Boot application is a queue with a limit — Tomcat threads, Hikari connections — and timeouts on waiting matter as much as sizes. Mention that virtual threads remove the thread pool as an implicit limit.
@@ -8699,7 +8699,7 @@ Idempotent versus safe — safe methods do not change state; idempotent methods 
 Measuring a service's throughput, latency and resource use under controlled, realistic load — load, stress, soak and spike tests — and profiling to find the bottleneck.
 
 #### Why it exists
-Because concurrency-dependent problems — contention, pool exhaustion, slow queries at scale, leaks — are invisible in functional tests.
+Because concurrency-dependent problems — contention, pool exhaustion, slow queries at scale, leaks — are invisible in functional tests, and production is an expensive place to discover them.
 
 #### Interview explanation
 State the question first (capacity per instance within the SLO, or the breaking point), choose the test type, use realistic data and an open workload model, and watch percentiles and saturation rather than averages. Then describe finding the bottleneck: metrics first (pool usage, GC, CPU throttling), then profiling with JFR or async-profiler, then database query plans.
@@ -8770,7 +8770,7 @@ Load testing versus benchmarking — load tests measure a deployed system under 
 Releasing a new version without failed requests or unavailability, using rolling, blue-green or canary strategies plus graceful shutdown, readiness gating and backward-compatible changes.
 
 #### Why it exists
-Because frequent deployment is only sustainable if each deployment is invisible to users.
+Because frequent deployment is only sustainable if each deployment is invisible to users — and during every rollout old and new versions run side by side, so invisibility depends on draining instances cleanly and keeping every change compatible with the previous version.
 
 #### Interview explanation
 Cover the mechanics — readiness gates new pods, a `preStop` delay covers endpoint propagation, graceful shutdown drains in-flight work within the grace period — and then the harder part: compatibility. During a rollout two versions share the database, topics and caches, so schema changes use expand-and-contract and event and API changes are additive.
@@ -8844,7 +8844,7 @@ Zero-downtime versus zero-risk — zero-downtime removes the outage window; cana
 Runtime switches that enable or disable code paths per request context without redeployment, used for progressive delivery, kill switches, experiments and entitlements.
 
 #### Why it exists
-To separate deploying code from releasing behaviour, allowing gradual exposure, instant rollback and trunk-based development.
+Because once code is deployed everyone gets it, and undoing it takes another deployment. Moving the decision about who sees new behaviour to run time separates deploying code from releasing behaviour — allowing gradual exposure, instant rollback and trunk-based development.
 
 #### Interview explanation
 Name the flag types and their lifetimes, describe progressive rollout with monitoring at each step, mention vendor-neutral evaluation through OpenFeature with providers such as Unleash, LaunchDarkly or flagd, and close with the costs: testing both paths, flag debt, and the flag system becoming a runtime dependency that needs safe defaults.
@@ -8978,7 +8978,7 @@ SLO versus SLA — the SLA is the external contract, normally looser than the in
 Moving an application to newer Spring Boot minor and major versions to stay within the supported window, using a stepwise path, deprecation clean-up and migration tooling.
 
 #### Why it exists
-Because each minor version's free support is limited, and unsupported versions stop receiving security fixes.
+Because each minor version's free support is limited, and unsupported versions stop receiving security fixes — while the longer an upgrade waits, the larger and riskier it becomes.
 
 #### Interview explanation
 Describe the cadence — minor releases every six months, each with a limited OSS support window — and the approach: keep current on patches, move one minor at a time, eliminate deprecation warnings before a major, use `spring-boot-properties-migrator` and OpenRewrite recipes, and lean on a strong test suite. Give one concrete major upgrade as an example: 2.x to 3.0 (`javax` to `jakarta`, Java 17, Hibernate 6, Security 6) or 3.x to 4.0 (Spring Framework 7, Jakarta EE 11, Jackson 3).

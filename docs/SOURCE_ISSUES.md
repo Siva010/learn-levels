@@ -6,7 +6,7 @@ silently corrected in the source — they are recorded here and handled explicit
 Sections 1–7 concern `content/java/*.md`, last reviewed against the full 12-group curriculum
 (132 concepts, 13,295 non-blank source lines). Section 8 concerns `content/python/*.md`
 (126 concepts, 12,828 non-blank source lines). Section 9 concerns `content/spring-boot/*.md`
-(125 concepts, 13,456 non-blank source lines).
+(125 concepts, 13,541 non-blank source lines).
 
 ---
 
@@ -196,8 +196,7 @@ Four things differ from the other two curricula and are recorded here:
    `**The problem:**`, which opens the concept, and `**Predict it:**`, a question whose answer follows
    from the mechanism. The site renders `Predict it` with the answer folded behind a reveal. The
    parser needs no change for either — Understand labels are open-ended — and the registry maps them
-   to their own presentation. Groups 1–10 carry both sections; Groups 11–12 are being revised the same
-   way.
+   to their own presentation. All 125 concepts carry both sections.
 
 The Spring Boot generic-title stoplist is short and data-driven: `Logging`, `Constraints`,
 `Profiles`, `Propagation` and `Aggregation`. Each title also appears as an ordinary word in an

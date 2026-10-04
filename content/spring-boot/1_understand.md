@@ -5156,7 +5156,9 @@ DefaultErrorHandler errorHandler(KafkaTemplate<Object, Object> template) {
 
 ### 11.1 Containerising the Application
 
-**How it works:** An image is a stack of read-only layers. Each Dockerfile instruction adds one, and layers that have not changed are reused from cache on rebuild and on pull. A Spring Boot fat jar is one large file, so changing one line of code invalidates the whole thing — which is why Boot can split it into layers ordered from least to most frequently changed: dependencies, the loader, snapshot dependencies, and your application classes.
+**The problem:** An application's behaviour depends on more than its jar — the JVM version, operating-system libraries, the file layout — and when those differ between machines, the same build behaves differently. A container platform also needs one standard unit it can start, stop and move.
+
+**How it works:** So the runtime is packaged together with the application, as an image. An image is a stack of read-only layers. Each Dockerfile instruction adds one, and layers that have not changed are reused from cache on rebuild and on pull. A Spring Boot fat jar is one large file, so changing one line of code invalidates the whole thing — which is why Boot can split it into layers ordered from least to most frequently changed: dependencies, the loader, snapshot dependencies, and your application classes.
 
 **Example — a layered Dockerfile (Boot 3.3+ `tools` jar mode):**
 ```dockerfile
@@ -5198,6 +5200,10 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "application.jar"]
 
 **Common mistake:** Setting `-Xmx` equal to the container memory limit. Heap is not the only memory the JVM uses, so the kernel kills the process for exceeding its limit — an `OOMKilled` with no Java `OutOfMemoryError` in the logs.
 
+**Predict it:** A container has a 1 GiB memory limit and the JVM runs with no heap flags. Under load the service slows to a crawl with long GC pauses, while `docker stats` shows most of the gigabyte unused. Why?
+
+**The JVM gave itself only a quarter of the box.** A container-aware JVM defaults its maximum heap to 25% of the memory limit, so the heap thrashes at about 256 MiB while the rest sits idle. `-XX:MaxRAMPercentage=75` lets the heap use most of what you pay for, leaving room for metaspace, threads and buffers.
+
 **Best intuition:** The image is the unit of deployment; the JVM inside it must be told how big its box is.
 
 **Terminology:** *image layer*, *multi-stage build*, *buildpacks*, *PID 1*, *`MaxRAMPercentage`*, *graceful shutdown*.
@@ -5206,7 +5212,9 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "application.jar"]
 
 ### 11.2 Docker Compose for Local Environments
 
-**How it works:** With the `spring-boot-docker-compose` module (Boot 3.1+) on the classpath, starting the application looks for `compose.yaml` in the working directory, runs `docker compose up`, waits for the containers, and creates connection details for services it recognises — so `spring.datasource.url` and friends need not be configured by hand. On shutdown it stops the containers.
+**The problem:** Running locally means installing and starting a database, a cache and a broker at the right versions, then copying their connection details into configuration — repeated by every developer, slightly differently each time.
+
+**How it works:** So the infrastructure is described in one checked-in file, and Boot starts it and wires the connections. With the `spring-boot-docker-compose` module (Boot 3.1+) on the classpath, starting the application looks for `compose.yaml` in the working directory, runs `docker compose up`, waits for the containers, and creates connection details for services it recognises — so `spring.datasource.url` and friends need not be configured by hand. On shutdown it stops the containers.
 
 ```mermaid
 flowchart LR
@@ -5257,6 +5265,10 @@ services:
 
 **Common mistake:** Using `latest` image tags. A new major version arrives silently one morning and every developer's environment changes at once.
 
+**Predict it:** `compose.yaml` declares `ports: ["5432"]` with no host port. Two developers' projects each run their own PostgreSQL on the same machine at once. Do they collide on port 5432?
+
+**No.** Without a host port, Docker maps each container to a free random port, and Boot reads the actual mapping when it creates the connection details. Nothing has to be configured, and nothing collides.
+
 **Best intuition:** `compose.yaml` is the project's local infrastructure, checked in next to the code that depends on it.
 
 **Terminology:** *`compose.yaml`*, *service connection*, *lifecycle management*, *`developmentOnly`*.
@@ -5265,7 +5277,9 @@ services:
 
 ### 11.3 API Documentation with OpenAPI
 
-**How it works:** `springdoc-openapi` inspects your controllers at runtime — mappings, parameter types, request and response classes, validation annotations — and builds an OpenAPI 3 document served at `/v3/api-docs`. Swagger UI, at `/swagger-ui.html`, renders it. Annotations from `io.swagger.v3.oas.annotations` add descriptions, examples and response codes the code cannot express.
+**The problem:** Clients need an exact description of what an API accepts and returns, and documentation written by hand drifts out of date the day after it is written, because nothing forces it to change with the code.
+
+**How it works:** So the description is generated from the code itself. `springdoc-openapi` inspects your controllers at runtime — mappings, parameter types, request and response classes, validation annotations — and builds an OpenAPI 3 document served at `/v3/api-docs`. Swagger UI, at `/swagger-ui.html`, renders it. Annotations from `io.swagger.v3.oas.annotations` add descriptions, examples and response codes the code cannot express.
 
 **Example:**
 ```java
@@ -5307,6 +5321,10 @@ class OrderController {
 
 **Common mistake:** Leaving Swagger UI publicly reachable in production for an internal API, advertising every endpoint and parameter to anyone who finds it.
 
+**Predict it:** An endpoint returns `Map<String, Object>`. What does the generated OpenAPI document say about its response?
+
+**Almost nothing — "an object with arbitrary properties".** springdoc can describe only the types the code declares, and a `Map` declares no fields. A response record with named, typed fields documents itself: generated documentation is exactly as precise as the types behind it.
+
 **Best intuition:** OpenAPI turns your API's shape into data — documentation, clients and contract checks are all consumers of that data.
 
 **Terminology:** *OpenAPI*, *Swagger UI*, *springdoc*, *code-first*, *contract-first*.
@@ -5315,7 +5333,9 @@ class OrderController {
 
 ### 11.4 API Versioning
 
-**How it works:** A version identifier selects which contract a request is served by. Before Spring Framework 7, Spring had no versioning feature: you expressed the version through the URL path or through mapping conditions on headers or media types. Spring Framework 7 (Spring Boot 4) adds first-class support — a `version` attribute on request mappings plus a configurable strategy for reading the version.
+**The problem:** Sooner or later an API must change in a way that breaks existing clients — and clients, mobile apps above all, cannot all upgrade at the moment the server does.
+
+**How it works:** So old and new contracts run side by side, and something in each request says which one it wants. A version identifier selects which contract a request is served by. Before Spring Framework 7, Spring had no versioning feature: you expressed the version through the URL path or through mapping conditions on headers or media types. Spring Framework 7 (Spring Boot 4) adds first-class support — a `version` attribute on request mappings plus a configurable strategy for reading the version.
 
 **Strategies:**
 
@@ -5347,6 +5367,10 @@ class OrderControllerV2 { ... }   // both delegate to the same service layer
 
 **Common mistake:** Duplicating the whole service layer per version. Versioning belongs at the edge — controllers and DTOs — mapping onto one shared domain model.
 
+**Predict it:** The version 1 order response gains a new optional field, `estimatedDelivery`. Do existing clients break?
+
+**No — provided they ignore unknown fields.** Adding an optional field is an additive change: a tolerant reader skips what it does not know, and Spring Boot's Jackson setup does exactly that by default. No new version is needed. Removing or renaming the field later would be breaking.
+
 **Best intuition:** A version is a promise to existing clients; make few promises and keep them.
 
 **Terminology:** *breaking change*, *additive change*, *tolerant reader*, *deprecation*, *sunset*.
@@ -5355,7 +5379,9 @@ class OrderControllerV2 { ... }   // both delegate to the same service layer
 
 ### 11.5 Pagination, Sorting and Filtering
 
-**How it works:** Spring Data's web support resolves a `Pageable` from `?page=2&size=20&sort=createdAt,desc`. A repository method accepting `Pageable` adds `LIMIT`/`OFFSET` and `ORDER BY` to its query and, when it returns `Page<T>`, runs a second `count` query for the total.
+**The problem:** A collection endpoint that returns every row is fine with a hundred rows and an outage with a million — and the table keeps growing while the endpoint's code never changes.
+
+**How it works:** So every collection is returned in bounded pages, cut by the database. Spring Data's web support resolves a `Pageable` from `?page=2&size=20&sort=createdAt,desc`. A repository method accepting `Pageable` adds `LIMIT`/`OFFSET` and `ORDER BY` to its query and, when it returns `Page<T>`, runs a second `count` query for the total.
 
 **Return types:**
 
@@ -5398,6 +5424,10 @@ Page<Order> page = repository.findAll(hasStatus(status).and(placedAfter(from)), 
 
 **Common mistake:** Sorting by a non-unique column such as `created_at` alone. Rows with equal values can appear on two pages or none; always add a unique tie-breaker such as `id`.
 
+**Predict it:** A client pages through orders newest-first, 20 at a time, using offsets. While it reads page 3, five new orders arrive. What does page 4 contain?
+
+**Five orders the client has already seen.** Offsets count positions, and the five new rows pushed everything down by five, so page 4 starts five rows earlier in the old ordering. Keyset pagination — "after this `created_at` and `id`" — anchors to a row instead of a position and is unaffected.
+
 **Best intuition:** Every collection endpoint is paginated from day one, because the table will grow and the clients will not change.
 
 **Terminology:** *`Pageable`*, *`Page`*, *`Slice`*, *offset pagination*, *keyset pagination*, *`Specification`*.
@@ -5406,7 +5436,9 @@ Page<Order> page = repository.findAll(hasStatus(status).and(placedAfter(from)), 
 
 ### 11.6 Logging
 
-**How it works:** Application code calls the SLF4J API. Spring Boot routes every common logging API — SLF4J, Commons Logging, `java.util.logging`, Log4j — into one backend, Logback by default, configured through `application.yml` or `logback-spring.xml`. Each logger has a level, inherited from its package unless set explicitly.
+**The problem:** Nobody can attach a debugger to production; the only record of what the application did is what it wrote down while doing it — and across many instances that record is useless unless it is searchable and correlated.
+
+**How it works:** So code records events through one logging API, and configuration decides what is kept, in what format, and where it goes. Application code calls the SLF4J API. Spring Boot routes every common logging API — SLF4J, Commons Logging, `java.util.logging`, Log4j — into one backend, Logback by default, configured through `application.yml` or `logback-spring.xml`. Each logger has a level, inherited from its package unless set explicitly.
 
 **Levels and their purpose:**
 
@@ -5447,6 +5479,10 @@ logging:
 
 **Common mistake:** `log.error("failed: " + ex.getMessage())`. The stack trace is lost and the string is built even if the level is disabled. Pass the exception as the last argument.
 
+**Predict it:** `log.debug("order " + order)` sits in a hot loop, and the level is `INFO`. Is anything logged — and is anything wasted?
+
+**Nothing is logged, but the work is still done.** The string concatenation and `order.toString()` run before `debug` is even called, only to be discarded. With `log.debug("order {}", order)` the message is built only if `DEBUG` is enabled.
+
 **Best intuition:** A log line is a record for a stranger investigating an incident at 3 a.m.: what happened, to which entity, and why.
 
 **Terminology:** *SLF4J*, *Logback*, *log level*, *MDC*, *structured logging*, *log correlation*.
@@ -5455,7 +5491,9 @@ logging:
 
 ### 11.7 Spring Boot Actuator
 
-**How it works:** `spring-boot-starter-actuator` registers endpoints as beans. Each endpoint has an access level — from Boot 3.4 `none`, `read-only` or `unrestricted`, previously simply enabled or disabled — and is separately exposed or not over HTTP or JMX. Over HTTP, only `health` is exposed by default; everything else must be opted in.
+**The problem:** Every production service needs the same operational answers — is it healthy, what are its metrics, which configuration and log levels is it running — and building that diagnostics layer by hand in each service is wasted and inconsistent.
+
+**How it works:** So Boot provides the answers as ready-made endpoints, each switched on and exposed deliberately. `spring-boot-starter-actuator` registers endpoints as beans. Each endpoint has an access level — from Boot 3.4 `none`, `read-only` or `unrestricted`, previously simply enabled or disabled — and is separately exposed or not over HTTP or JMX. Over HTTP, only `health` is exposed by default; everything else must be opted in.
 
 **Key endpoints:**
 
@@ -5506,6 +5544,10 @@ SecurityFilterChain actuatorSecurity(HttpSecurity http) throws Exception {
 
 **Common mistake:** Exposing actuator on the public port with the same security as the API — or with none, because the endpoints were added "temporarily".
 
+**Predict it:** `management.endpoints.web.exposure.include: "*"` is set on the public port, with no authentication. What can a stranger download?
+
+**A copy of the process's memory.** `/actuator/heapdump` returns the whole JVM heap — database passwords, tokens and whatever user data was in flight. Masking values in `env` does not help when the raw memory is available. Expose only what monitoring needs, on an internal port.
+
 **Best intuition:** Actuator is the service's control panel; put it in a locked room and give out keys deliberately.
 
 **Terminology:** *endpoint*, *exposure*, *management port*, *`EndpointRequest`*, *sanitisation*.
@@ -5514,7 +5556,9 @@ SecurityFilterChain actuatorSecurity(HttpSecurity http) throws Exception {
 
 ### 11.8 Health Checks and Probes
 
-**How it works:** `/actuator/health` aggregates every `HealthIndicator` bean — database, disk space, Redis and others are auto-configured — into one status. `DOWN` or `OUT_OF_SERVICE` returns HTTP 503. Boot also tracks two availability states: **liveness** (`CORRECT` or `BROKEN`) and **readiness** (`ACCEPTING_TRAFFIC` or `REFUSING_TRAFFIC`), exposed as health groups at `/actuator/health/liveness` and `/actuator/health/readiness`. These groups are enabled automatically on Kubernetes.
+**The problem:** A platform running many copies of a service must keep deciding two things about each — should it receive traffic, and should it be restarted? — without seeing inside the process. A wrong answer to either question causes outages.
+
+**How it works:** So the application answers the two questions separately, on two endpoints. `/actuator/health` aggregates every `HealthIndicator` bean — database, disk space, Redis and others are auto-configured — into one status. `DOWN` or `OUT_OF_SERVICE` returns HTTP 503. Boot also tracks two availability states: **liveness** (`CORRECT` or `BROKEN`) and **readiness** (`ACCEPTING_TRAFFIC` or `REFUSING_TRAFFIC`), exposed as health groups at `/actuator/health/liveness` and `/actuator/health/readiness`. These groups are enabled automatically on Kubernetes.
 
 **The three Kubernetes probes:**
 
@@ -5551,6 +5595,10 @@ readinessProbe:
 
 **Common mistake:** Probing the management port only. If actuator runs on a separate port, a probe can succeed while the main server is wedged; `management.endpoint.health.probes.add-additional-paths=true` exposes `/livez` and `/readyz` on the main port as well.
 
+**Predict it:** The liveness probe includes the database health check. The database fails over and is unreachable for 40 seconds. What do the pods do?
+
+**They all restart — and the outage gets longer.** Every pod fails liveness at once, so the platform kills them all; they then start up slowly, against a database that may still be recovering. A restart cannot fix the database, so liveness should check only the process itself.
+
 **Best intuition:** Liveness asks "should I be killed?", readiness asks "should I be sent work?" — and the honest answer to both is usually about the process itself.
 
 **Terminology:** *`HealthIndicator`*, *health group*, *liveness*, *readiness*, *startup probe*, *availability state*.
@@ -5559,7 +5607,9 @@ readinessProbe:
 
 ### 11.9 Metrics with Micrometer
 
-**How it works:** Code records measurements on meters registered in a `MeterRegistry`. Each meter has a name and a set of tags (dimensions). A registry implementation — Prometheus, OTLP, Datadog and others — exports them. Spring Boot auto-configures the registry and instruments HTTP requests, the JVM, connection pools, caches, Kafka clients and more.
+**The problem:** Logs record individual events, but most operational questions are about trends — is latency rising, is the error rate climbing, is the pool nearly full? — and answering those by searching millions of log lines is slow and expensive.
+
+**How it works:** So the application keeps running numbers instead — counters, timers and gauges, sliced by a few tags. Code records measurements on meters registered in a `MeterRegistry`. Each meter has a name and a set of tags (dimensions). A registry implementation — Prometheus, OTLP, Datadog and others — exports them. Spring Boot auto-configures the registry and instruments HTTP requests, the JVM, connection pools, caches, Kafka clients and more.
 
 **Meter types:**
 
@@ -5613,6 +5663,10 @@ management:
 
 **Common mistake:** Tagging metrics with user ids, order ids or raw URLs. Every distinct value creates a new time series, and the monitoring system's memory and bill explode.
 
+**Predict it:** Someone adds a `customerId` tag to the `orders.placed` counter. The service has 2 million customers. What happens to the monitoring system?
+
+**It can be overwhelmed.** Every distinct tag value creates a separate time series, so one counter becomes up to 2 million series — memory, storage and the bill explode. Tags must come from small, fixed sets of values: channel, region, outcome.
+
 **Best intuition:** Metrics are the vital signs of the service; tags slice them, so tags must come from a small, fixed set of values.
 
 **Terminology:** *meter*, *tag*, *cardinality*, *histogram*, *percentile*, *`MeterRegistry`*, *Observation*.
@@ -5621,7 +5675,9 @@ management:
 
 ### 11.10 Distributed Tracing
 
-**How it works:** When a request arrives, the tracer starts a **span** and either continues the caller's trace (from the `traceparent` header, W3C Trace Context) or starts a new one. Outgoing calls through instrumented clients carry the context onward. Each service exports its finished spans to a tracing backend, which assembles them by trace id.
+**The problem:** One user request may pass through five services. When it is slow or fails, each service's logs show only its own piece, and nobody can see the whole journey or tell which hop is to blame.
+
+**How it works:** So every hop records its part under one shared trace id, carried along in request headers. When a request arrives, the tracer starts a **span** and either continues the caller's trace (from the `traceparent` header, W3C Trace Context) or starts a new one. Outgoing calls through instrumented clients carry the context onward. Each service exports its finished spans to a tracing backend, which assembles them by trace id.
 
 ```mermaid
 sequenceDiagram
@@ -5670,6 +5726,10 @@ management:
 
 **Common mistake:** Sampling 100% in production "to be safe". Trace volume and backend cost scale with traffic; sample a fraction and use tail sampling in a collector to keep errors and slow requests.
 
+**Predict it:** Service A is traced, and it calls service B through a client created with `new RestTemplate()`. What does the trace show for B's part of the request?
+
+**B appears as a separate, unrelated trace.** A hand-built client is not instrumented, so it never adds the `traceparent` header; B sees a request without trace context and starts a fresh trace. Clients built from Boot's auto-configured builders carry the context automatically.
+
 **Best intuition:** A trace is the request's itinerary — every stop, how long it stayed, and where it got lost.
 
 **Terminology:** *trace*, *span*, *trace context*, *`traceparent`*, *sampling*, *bridge*, *exporter*.
@@ -5678,7 +5738,9 @@ management:
 
 ### 11.11 Configuration and Secrets
 
-**How it works:** Spring Boot builds its `Environment` from ordered property sources — see [[#2.5 External Configuration]]. In deployment, values arrive through environment variables (relaxed binding maps `SPRING_DATASOURCE_URL` to `spring.datasource.url`), mounted files, or imported external sources via `spring.config.import`.
+**The problem:** One image must run in every environment, so the values that differ cannot be baked in — and some of those values are secrets, which become public, for practical purposes, the moment they reach a repository, an image layer or a log.
+
+**How it works:** So configuration is supplied from outside at runtime, and secrets through channels built for them. Spring Boot builds its `Environment` from ordered property sources — see [[#2.5 External Configuration]]. In deployment, values arrive through environment variables (relaxed binding maps `SPRING_DATASOURCE_URL` to `spring.datasource.url`), mounted files, or imported external sources via `spring.config.import`.
 
 **Where secrets should come from:**
 
@@ -5709,6 +5771,10 @@ spring:
 > ⚠️ **Common misconception:** "Kubernetes Secrets are encrypted." By default they are only base64-encoded and stored in etcd; encryption at rest and access control must be configured separately.
 
 **Common mistake:** Committing a secret "temporarily" and deleting it in the next commit. It remains in Git history forever and must be treated as leaked and rotated.
+
+**Predict it:** A password is committed, noticed an hour later, and removed in the next commit. Is it safe now?
+
+**No.** The first commit is still in the repository's history — and in every clone and fork made during that hour. Deleting it in a later commit hides it only from the current files. The only real fix is to rotate the password, so the leaked value stops working.
 
 **Best intuition:** Configuration describes the environment; secrets are the keys to it — store, ship and rotate them separately.
 
@@ -5741,7 +5807,9 @@ spring:
 
 ### 12.1 The Reference Architecture
 
-**How it works:** The order service is a single deployable Spring Boot application with clear internal boundaries. Requests enter through the security filter chain and controllers, business rules live in services and the domain model, persistence goes through Spring Data JPA, and side effects leave through two doors: synchronous HTTP to the payment service, and asynchronous events through a transactional outbox to Kafka.
+**The problem:** Each earlier technique solves one problem in isolation, but a real service faces all of them at once — and the choices interact: the transaction boundary decides how events are published, the API decides what can be cached, the deployment model decides how schema changes are made.
+
+**How it works:** So the service is designed as one system, with each concern given a deliberate home. The order service is a single deployable Spring Boot application with clear internal boundaries. Requests enter through the security filter chain and controllers, business rules live in services and the domain model, persistence goes through Spring Data JPA, and side effects leave through two doors: synchronous HTTP to the payment service, and asynchronous events through a transactional outbox to Kafka.
 
 ```mermaid
 flowchart LR
@@ -5789,6 +5857,10 @@ com.shop.orders
 
 **Common mistake:** Publishing events directly from the service method inside the transaction. If the commit fails, the event is already out; if Kafka fails, the order exists with no event. The outbox — [[#7.10 Distributed Transactions]] — removes the gap.
 
+**Predict it:** The payment provider is down for ten minutes. What happens to customers placing orders in this service?
+
+**Their orders are still accepted — as pending.** The payment client's timeout and circuit breaker fail fast, the fallback leaves the order pending, and the `OrderPlaced` event already in the outbox lets payment be retried once the provider returns. A failing dependency degrades one step instead of taking down the whole flow.
+
 **Best intuition:** A production service is a set of well-understood parts whose failure modes have each been thought about in advance.
 
 **Terminology:** *modular monolith*, *transactional outbox*, *bounded context*, *reference architecture*.
@@ -5797,7 +5869,9 @@ com.shop.orders
 
 ### 12.2 Designing the Domain and API
 
-**How it works:** Model the domain first — entities, value objects, invariants and state transitions — then design the API as a separate, stable view of it. The `Order` aggregate owns its lines and enforces its rules; the API exposes commands (`place`, `cancel`) and queries, never the entity itself.
+**The problem:** The domain model and the API contract are the decisions most expensive to change later: once clients integrate and data is stored, every change means migrations, versioning and coordinated releases — so a rule placed in the wrong spot tends to stay there.
+
+**How it works:** So both are designed deliberately, before the code. Model the domain first — entities, value objects, invariants and state transitions — then design the API as a separate, stable view of it. The `Order` aggregate owns its lines and enforces its rules; the API exposes commands (`place`, `cancel`) and queries, never the entity itself.
 
 **Order state machine:**
 ```mermaid
@@ -5849,6 +5923,10 @@ public class Order {
 
 **Common mistake:** Exposing JPA entities as API responses, which couples the contract to the schema and risks lazy-loading and serialisation surprises — see [[#4.5 DTOs and the API Boundary]].
 
+**Predict it:** The API offers `PATCH /orders/{id}` accepting `{"status": "CANCELLED"}`, while the rule "shipped orders cannot be cancelled" lives in `Order.cancel()`. A client patches a shipped order. Is the rule enforced?
+
+**Only if the PATCH handler happens to call `cancel()`.** A generic status update tends to set the field directly, so the rule depends on every current and future handler remembering it. An explicit `POST /orders/{id}/cancel` calls `cancel()` by design — the domain decides, every time.
+
 **Best intuition:** The domain model is how the business works; the API is the promise you make about it to the outside world.
 
 **Terminology:** *aggregate*, *invariant*, *state machine*, *command*, *query*, *problem details*.
@@ -5857,7 +5935,9 @@ public class Order {
 
 ### 12.3 Timeouts, Retries and Circuit Breakers
 
-**How it works:** The three patterns wrap a remote call in layers. The timeout bounds each attempt. Retries repeat failed attempts with exponential back-off and jitter. The circuit breaker counts failures over a sliding window; when the failure rate crosses a threshold it **opens** and rejects calls immediately, then after a wait lets a few trial calls through (**half-open**) to decide whether to close again.
+**The problem:** In a distributed system a slow or failing dependency is normal, and a caller that waits patiently soon has every thread waiting on it — so one sick service makes every service that calls it sick too.
+
+**How it works:** So each remote call is wrapped in layers that bound the waiting, forgive brief faults, and stop hammering a dependency that is clearly down. The three patterns wrap a remote call in layers. The timeout bounds each attempt. Retries repeat failed attempts with exponential back-off and jitter. The circuit breaker counts failures over a sliding window; when the failure rate crosses a threshold it **opens** and rejects calls immediately, then after a wait lets a few trial calls through (**half-open**) to decide whether to close again.
 
 ```mermaid
 stateDiagram-v2
@@ -5919,6 +5999,10 @@ resilience4j:
 
 **Common mistake:** Retrying at every layer. Three attempts at each of three layers is twenty-seven calls to the bottom service for one user request — retry amplification that turns a blip into an outage. Retry in one place, usually closest to the failing call.
 
+**Predict it:** Service A calls B, B calls C, and every layer retries up to 3 times. C has a brief hiccup. How many requests can one user request produce at C?
+
+**Up to 27.** Each attempt by A triggers up to 3 attempts by B, each of which tries C up to 3 times: 3 × 3 × 3. Retrying at every layer multiplies load exactly when the bottom service is weakest — so retry in one place.
+
 **Best intuition:** Timeouts stop you waiting forever, retries forgive small failures, and the circuit breaker stops you hammering a door that is clearly shut.
 
 **Terminology:** *timeout*, *exponential back-off*, *jitter*, *circuit breaker*, *half-open*, *fallback*, *retry amplification*.
@@ -5927,7 +6011,9 @@ resilience4j:
 
 ### 12.4 Rate Limiting and Backpressure
 
-**How it works:** A rate limiter tracks request counts per key — client, user, API key — and rejects requests over the limit. The **token bucket** algorithm is the most common: tokens refill at a steady rate up to a capacity, each request spends one, and an empty bucket means rejection, which allows short bursts while enforcing an average rate. Backpressure applies the same idea inward: every queue and pool is bounded, and when full, new work is rejected quickly instead of waiting indefinitely.
+**The problem:** Capacity is finite. A service that accepts unlimited work eventually exhausts its threads, connections or memory — and then fails for everyone, not just for the excess requests.
+
+**How it works:** So excess work is refused early and cheaply, instead of being accepted and failing late. A rate limiter tracks request counts per key — client, user, API key — and rejects requests over the limit. The **token bucket** algorithm is the most common: tokens refill at a steady rate up to a capacity, each request spends one, and an empty bucket means rejection, which allows short bursts while enforcing an average rate. Backpressure applies the same idea inward: every queue and pool is bounded, and when full, new work is rejected quickly instead of waiting indefinitely.
 
 **Where limits live in a Spring Boot service:**
 
@@ -5973,6 +6059,10 @@ class RateLimitFilter extends OncePerRequestFilter {
 
 **Common mistake:** A 30-second connection-pool timeout behind a 5-second client timeout. Requests wait long after the client has given up, doing work nobody will receive.
 
+**Predict it:** With virtual threads enabled, a spike sends 5,000 concurrent requests into a service whose connection pool has 10 connections and a 30-second connection timeout. What do clients experience?
+
+**Long waits, then a wave of timeouts.** Virtual threads let all 5,000 requests in at once, so most of them queue for a connection — for up to 30 seconds each, long after their clients have given up. The bounded thread pool used to limit this by accident; now an explicit bulkhead or a short pool timeout must.
+
 **Best intuition:** A healthy service under overload says "not now" quickly to some requests, so it can say "yes" properly to the rest.
 
 **Terminology:** *token bucket*, *429 Too Many Requests*, *`Retry-After`*, *bulkhead*, *load shedding*, *backpressure*.
@@ -5981,7 +6071,9 @@ class RateLimitFilter extends OncePerRequestFilter {
 
 ### 12.5 Idempotent APIs
 
-**How it works:** The client generates a unique key per logical operation and sends it in an `Idempotency-Key` header, reusing it on every retry. The server records the key with a hash of the request and, once complete, the response. A repeat with the same key returns the stored response; a repeat while the first is still running is rejected with `409 Conflict`; the same key with a different body is a client error.
+**The problem:** Networks fail after the server has acted but before the client hears back, and from the client's side "the request failed" and "the response was lost" look identical — so it must retry, and the server must not perform the operation twice.
+
+**How it works:** So each logical operation carries a key the client chooses, and the server remembers what it answered for that key. The client generates a unique key per logical operation and sends it in an `Idempotency-Key` header, reusing it on every retry. The server records the key with a hash of the request and, once complete, the response. A repeat with the same key returns the stored response; a repeat while the first is still running is rejected with `409 Conflict`; the same key with a different body is a client error.
 
 ```mermaid
 flowchart TD
@@ -6018,6 +6110,10 @@ CREATE TABLE idempotency_keys (
 
 **Common mistake:** Storing the key only after the operation succeeds. A crash between the effect and the write leaves no trace, and the retry performs the operation again.
 
+**Predict it:** Two retries of the same `POST /orders`, carrying the same idempotency key, reach two different instances within the same millisecond. Both check "is this key stored?". How many orders are created?
+
+**One.** Both checks may see "no", but both then try to insert the key, and the primary-key constraint lets only one insert succeed; the other request fails cleanly and returns 409 or the stored result. The race is settled by the database, not by timing.
+
 **Best intuition:** The idempotency key is the client saying "this is the same request as before"; the server's job is to remember what it answered.
 
 **Terminology:** *idempotency*, *idempotency key*, *request fingerprint*, *at-least-once*, *exactly-once effect*.
@@ -6026,7 +6122,9 @@ CREATE TABLE idempotency_keys (
 
 ### 12.6 Performance and Load Testing
 
-**How it works:** A load-testing tool generates requests against a production-like environment following a workload model, while monitoring records latency percentiles, throughput, errors and resource saturation. The result answers specific questions: how much traffic can one instance sustain within the latency objective, and what saturates first?
+**The problem:** Performance problems — pool exhaustion, slow queries, memory leaks — appear only under concurrency, volume and time, and production is an expensive place to discover them.
+
+**How it works:** So realistic load is generated deliberately, before real users generate it. A load-testing tool generates requests against a production-like environment following a workload model, while monitoring records latency percentiles, throughput, errors and resource saturation. The result answers specific questions: how much traffic can one instance sustain within the latency objective, and what saturates first?
 
 **Test types:**
 
@@ -6071,6 +6169,10 @@ public class PlaceOrderSimulation extends Simulation {
 
 **Common mistake:** A closed workload model — a fixed number of virtual users each waiting for a response — when real traffic is open. When the service slows, a closed model sends *less* traffic, hiding exactly the latency spike you wanted to find (coordinated omission).
 
+**Predict it:** A closed-model load test — 50 virtual users, each waiting for its response before sending the next request — reports a p99 of 300 ms. In production the service sometimes stalls for 5 seconds. Why did the test not see it?
+
+**The test slowed down whenever the service did.** During a stall all 50 virtual users were waiting, so almost no requests were sent — and almost none were measured as slow. That is coordinated omission. Real users keep arriving regardless; an open model sends requests at a fixed rate and captures the stall.
+
 **Best intuition:** A load test is an experiment: state the question and the expected result first, then let the measurements decide.
 
 **Terminology:** *throughput*, *percentile latency*, *saturation*, *Little's Law*, *open and closed workload*, *coordinated omission*, *JFR*.
@@ -6079,7 +6181,9 @@ public class PlaceOrderSimulation extends Simulation {
 
 ### 12.7 Zero-Downtime Deployment
 
-**How it works:** In a Kubernetes rolling update, new pods start alongside old ones and receive traffic only once ready; old pods are then terminated one by one. Each termination must drain cleanly, and for the duration of the rollout both versions run at once — against the same database and the same topics.
+**The problem:** Services that deploy many times a day cannot pause for each release — and during any gradual rollout, old and new versions run at the same time against the same database, topics and caches.
+
+**How it works:** So instances are replaced gradually and gracefully, and every change is made compatible with the version before it. In a Kubernetes rolling update, new pods start alongside old ones and receive traffic only once ready; old pods are then terminated one by one. Each termination must drain cleanly, and for the duration of the rollout both versions run at once — against the same database and the same topics.
 
 ```mermaid
 sequenceDiagram
@@ -6133,6 +6237,10 @@ spec:
 
 **Common mistake:** A migration that renames or drops a column in the same release as the code change. During the rollout the old pods still use the old name, and every one of their queries fails.
 
+**Predict it:** A release renames the column `customer_ref` to `customer_id` in its migration and updates the code in the same release. Pods are replaced one at a time. What happens during the rollout?
+
+**The old pods start failing.** The migration runs as the first new pod starts, so for the rest of the rollout the old pods still query `customer_ref`, which no longer exists. Expand and contract — add, migrate, switch, then drop in a later release — keeps both versions working.
+
 **Best intuition:** During a deployment, yesterday's code and today's code share everything; design every change so they can.
 
 **Terminology:** *rolling update*, *blue-green*, *canary*, *expand and contract*, *`preStop`*, *termination grace period*.
@@ -6141,7 +6249,9 @@ spec:
 
 ### 12.8 Feature Flags and Safe Releases
 
-**How it works:** Code paths are guarded by flag checks. A flag service or configuration source evaluates each flag per request, optionally against a context — user id, tenant, region, percentage bucket — and the result can change at runtime without a redeploy.
+**The problem:** Once code is deployed, everyone gets it at once, and undoing it means another deployment. A risky change should instead reach users gradually — and be switched off in seconds if it misbehaves.
+
+**How it works:** So the decision about who sees new behaviour moves from deploy time to run time. Code paths are guarded by flag checks. A flag service or configuration source evaluates each flag per request, optionally against a context — user id, tenant, region, percentage bucket — and the result can change at runtime without a redeploy.
 
 **Flag types:**
 
@@ -6175,6 +6285,10 @@ public Quote quote(Order order) {
 
 **Common mistake:** Leaving release flags in the code for years. Dead branches accumulate, nobody remembers which state is live, and someone eventually flips the wrong one.
 
+**Predict it:** A new pricing engine is enabled for 10% of users by flag, and a pricing bug appears at 14:05. How long until no user is affected — with the flag, and without it?
+
+**With the flag, seconds: someone switches it off. Without it, as long as a rollback deployment takes.** The new code is deployed either way; the flag only decides who reaches it, and that decision can change instantly.
+
 **Best intuition:** Deployment moves code to production; a flag decides who that code is for.
 
 **Terminology:** *feature flag*, *kill switch*, *progressive delivery*, *dark launch*, *flag debt*, *OpenFeature*.
@@ -6183,7 +6297,9 @@ public Quote quote(Order order) {
 
 ### 12.9 Operating the Service
 
-**How it works:** Operations start from what users need. A **service level indicator** (SLI) measures it — the proportion of successful requests, the proportion under 300 ms. A **service level objective** (SLO) sets the target — 99.9% over 30 days. The gap between 100% and the target is the **error budget**, which can be spent on risky releases and is protected when it runs low.
+**The problem:** Most of a service's cost and its users' experience come from how it runs — but "is it healthy?" has no answer until it is defined, and alerting on every glitch trains people to ignore alerts.
+
+**How it works:** So health is defined in user terms, with a target and an explicit budget for failure. Operations start from what users need. A **service level indicator** (SLI) measures it — the proportion of successful requests, the proportion under 300 ms. A **service level objective** (SLO) sets the target — 99.9% over 30 days. The gap between 100% and the target is the **error budget**, which can be spent on risky releases and is protected when it runs low.
 
 **The four golden signals:**
 
@@ -6206,6 +6322,10 @@ public Quote quote(Order order) {
 
 **Common mistake:** Paging on causes — high CPU, a single failed request — rather than user-visible symptoms. On-call engineers learn to ignore pages, and the real incident is missed.
 
+**Predict it:** The SLO is 99.9% of requests succeeding over 30 days. A bad deploy causes 100% errors for 20 minutes. How much of the month's error budget is gone?
+
+**Almost half.** 0.1% of 30 days is about 43 minutes of total failure, and 20 minutes of complete failure spends roughly 46% of it. The team now knows — as a number — how much risk is left for the rest of the month.
+
 **Best intuition:** The error budget turns "is it reliable enough?" from an argument into a number.
 
 **Terminology:** *SLI*, *SLO*, *error budget*, *burn rate*, *golden signals*, *runbook*, *post-incident review*.
@@ -6214,7 +6334,9 @@ public Quote quote(Order order) {
 
 ### 12.10 Upgrading Spring Boot
 
-**How it works:** Spring Boot releases a minor version about every six months, in May and November, each with a limited window of free (OSS) support. A major version — 2.0 in 2018, 3.0 in November 2022, 4.0 in November 2025 — raises baselines and removes APIs deprecated in the previous line.
+**The problem:** A framework version eventually stops receiving security fixes, and the longer an upgrade waits, the larger it becomes — skipping several versions turns a routine bump into a risky project.
+
+**How it works:** So upgrades are done often, in small steps, along a predictable release cadence. Spring Boot releases a minor version about every six months, in May and November, each with a limited window of free (OSS) support. A major version — 2.0 in 2018, 3.0 in November 2022, 4.0 in November 2025 — raises baselines and removes APIs deprecated in the previous line.
 
 **What the major upgrades changed:**
 
@@ -6252,6 +6374,10 @@ flowchart LR
 
 **Common mistake:** Jumping several minor versions and a major at once, then facing hundreds of compile errors and behaviour changes with no way to tell which step caused which.
 
+**Predict it:** An application on Boot 3.2 still uses `@MockBean`, which Boot 3.4 deprecated. The team jumps straight from 3.2 to 4.0. What happens to those tests?
+
+**They stop compiling.** APIs deprecated in one major line are removed in the next, and the team never saw the deprecation warnings, because it skipped the versions that issued them. Upgrading through 3.4 and 3.5 first turns each removal into a warning while there is still time to act on it.
+
 **Best intuition:** Upgrades are like dental hygiene: a little, regularly, is cheap; a lot, rarely, is painful.
 
 **Terminology:** *OSS support window*, *baseline*, *deprecation*, *properties migrator*, *OpenRewrite*, *Jakarta EE*.
@@ -6260,7 +6386,9 @@ flowchart LR
 
 ### 12.11 Explaining the System in an Interview
 
-**How it works:** A strong system walkthrough follows a predictable arc, so the interviewer can follow along and choose where to dig deeper. Each step should include a decision and the reason for it, because the reasoning is what is being assessed.
+**The problem:** Knowing every piece separately does not show that you can reason about a whole system — and "walk me through something you built" tests exactly that, usually in ten minutes, with the interviewer free to dig anywhere.
+
+**How it works:** So the answer follows an arc from problem, to decisions, to failure and trade-offs. A strong system walkthrough follows a predictable arc, so the interviewer can follow along and choose where to dig deeper. Each step should include a decision and the reason for it, because the reasoning is what is being assessed.
 
 **The arc:**
 
@@ -6293,6 +6421,10 @@ flowchart LR
 > ⚠️ **Common misconception:** "I should present the system as flawless." Interviewers trust candidates who can name the weaknesses and the trade-offs they accepted; a system with no flaws sounds like a system you did not build.
 
 **Common mistake:** Listing technologies — "we used Spring Boot, Kafka, Redis and Kubernetes" — instead of explaining the problems they solved and what they cost.
+
+**Predict it:** Two candidates describe the same system. One lists its technologies; the other explains why each was chosen and what it cost. The interviewer asks: "what happens if Kafka is down?". Who can answer?
+
+**Only the second.** Knowing *why* the outbox exists — so an event cannot be lost while Kafka is unavailable — is the same knowledge that answers the failure question. A list of tools contains no reasons, so it cannot stretch to a question it did not anticipate.
 
 **Best intuition:** Tell the story of decisions, not the inventory of tools.
 

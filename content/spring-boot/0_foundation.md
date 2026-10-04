@@ -231,7 +231,7 @@ Most applications configure the same beans in the same way, and the facts needed
 
 Auto-configuration is Spring Boot reading those facts: it looks at what is on the classpath and what you have configured, and then creates the beans it believes you need. Find a database driver and a URL, and it configures a data source.
 
-It exists to remove the configuration that is the same in almost every application. The rules are conditional: each piece backs off if you have already defined that bean yourself, so your configuration always wins. That's all it is — a long list of *"if this is present, and you haven't done it yourself, do the usual thing"*.
+The rules are conditional: each piece backs off if you have already defined that bean yourself, so your configuration always wins. That's all it is — a long list of *"if this is present, and you haven't done it yourself, do the usual thing"*.
 
 > 💡 **Tip:** Run the application with `--debug` to print a report of every auto-configuration, whether it matched, and why.
 
@@ -502,7 +502,7 @@ If HTTP details — paths, headers, status codes, JSON — leak into business co
 
 The controller's job is translation: turn an HTTP request into a call on the service, and turn the result into an HTTP response. It validates input, maps DTOs, and chooses status codes.
 
-It exists so that everything specific to HTTP — paths, headers, status codes, serialisation — lives in one layer, and the business logic beneath it can be used by a scheduled job or a message consumer without change.
+Everything specific to HTTP — paths, headers, status codes, serialisation — then lives in one layer, and the business logic beneath it serves any entry point unchanged.
 
 ---
 
@@ -558,7 +558,7 @@ Every input from outside can be missing, too long or malformed. Checking it with
 
 Bean Validation is the standard way to declare constraints on data: `@NotNull`, `@NotBlank`, `@Size`, `@Email`, `@Min`, `@Max`. Adding `@Valid` to a controller parameter enforces them before the method runs.
 
-It exists so input rules are declared once, next to the field they describe, rather than as scattered `if` statements at the top of every method.
+So each rule is declared once, next to the field it describes, and checked before your code runs.
 
 ```java
 public record CreateOrderRequest(
@@ -646,7 +646,7 @@ A table may hold millions of rows, and a screen needs twenty of them. Shipping a
 
 `SELECT` reads rows. `WHERE` filters them, `ORDER BY` sorts the result, and `LIMIT`/`OFFSET` returns a slice.
 
-They exist so the database does the work of finding and shaping data, rather than the application loading everything and filtering in memory — which is slower by orders of magnitude at any real size.
+So the database does the finding and shaping, next to the data and its indexes — orders of magnitude faster at any real size than filtering in application memory.
 
 ```sql
 SELECT id, status, created_at
@@ -674,7 +674,7 @@ Many questions are about totals, not rows: how many orders today, how much reven
 
 Aggregate functions — `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` — reduce many rows to one value. `GROUP BY` produces one such value per group, and `HAVING` filters the groups afterwards.
 
-Aggregation exists so summaries are computed where the data lives. Counting rows in the database costs one query; counting them in the application costs transferring every row.
+So summaries are computed where the data lives: one query, one small answer.
 
 ---
 
@@ -684,7 +684,7 @@ Some questions need the answer to another question first — "customers who spen
 
 A **subquery** is a query inside another query. A **common table expression** (`WITH ... AS`) names a subquery so it can be referenced and read more easily.
 
-They exist because real questions are often layered — "the customers whose total this month exceeds their average" — and naming the intermediate steps is what keeps such queries readable.
+Naming the intermediate steps is what keeps such layered queries readable.
 
 ---
 
@@ -708,7 +708,7 @@ SQL says *what* you want, not *how* to get it — so when a query is slow, the S
 
 A query plan is the strategy the database chose to answer a query: which indexes it used, how it joined the tables, and how many rows it expected at each step. `EXPLAIN` shows it.
 
-Plans exist to be read. SQL says what you want, not how to get it, so the plan is the only way to see what the database actually decided to do.
+Plans exist to be read: they are the only way to see what the database actually decided to do.
 
 ---
 
@@ -738,7 +738,7 @@ The code changes every week, and the schema must change with it — identically 
 
 A migration is a versioned, ordered change to the schema, applied by a tool such as Flyway or Liquibase, which records what has already run.
 
-Migrations exist because a schema evolves alongside the code that uses it, across many environments. Applying changes by hand is how two environments silently diverge.
+Applying changes by hand is how two environments silently diverge; a recorded, ordered list of changes makes every environment converge.
 
 > ⚠️ **Common misconception:** Letting Hibernate generate the schema (`ddl-auto=update`) is not a migration strategy. It cannot express data changes, it is not reviewable, and it will not produce the same result everywhere.
 
@@ -817,7 +817,7 @@ In the database a relationship is one foreign-key column. In Java it can be *two
 
 Relationships are mapped with `@OneToMany`, `@ManyToOne`, `@OneToOne` and `@ManyToMany`. One side **owns** the relationship — it holds the foreign key and controls what is written — and the other side is the inverse, marked with `mappedBy`.
 
-Ownership exists because the database has one foreign key column, while the object model has two references. Something must decide which side the database follows.
+Something must decide which side the database follows — that is all ownership is.
 
 ---
 
@@ -857,7 +857,7 @@ Objects are connected — an order to its customer, the customer to their addres
 
 A **lazy** association is not loaded until you touch it; an **eager** one is loaded immediately with its owner. `@ManyToOne` and `@OneToOne` are eager by default; `@OneToMany` and `@ManyToMany` are lazy.
 
-The distinction exists because loading an entire object graph is rarely what you want. Lazy loading defers the cost — and creates the two classic problems: extra queries, and failures when the context has already closed.
+Lazy loading defers that cost — and creates the two classic problems: extra queries, and failures when the context has already closed.
 
 ---
 
@@ -954,7 +954,7 @@ Transactional methods call each other: `placeOrder` calls `reserveStock`, which 
 
 Propagation decides what happens when a transactional method is called from inside another transaction: join the existing one (`REQUIRED`, the default), suspend it and start a new one (`REQUIRES_NEW`), or refuse to run in one at all.
 
-It exists because methods are composed. Calling one transactional service from another must have defined behaviour, and "always join" is not always what the operation needs.
+Calling one transactional method from another must have defined behaviour, and "always join" is not always what the operation needs.
 
 ---
 
@@ -1007,7 +1007,7 @@ When many transactions fight over the same row — the last units of a popular p
 
 Pessimistic locking takes a database lock when the row is read, so no one else can modify it until the transaction ends. `SELECT ... FOR UPDATE` is the usual mechanism.
 
-It exists for the cases where a conflict is likely and retrying is expensive — decrementing stock for a popular item, allocating a limited resource — where it is cheaper to queue than to collide.
+Where conflicts are the norm — decrementing stock for a popular item, allocating a limited resource — it is cheaper to queue than to collide.
 
 ---
 
@@ -1074,7 +1074,7 @@ If every controller had to remember to check credentials and permissions, one fo
 
 Spring Security works as a chain of servlet filters in front of your application. Each filter handles one concern — reading credentials, authenticating, checking access, handling failures — before the request ever reaches a controller.
 
-It exists so security is enforced uniformly at the edge, rather than depending on every controller remembering to check.
+Security is then enforced uniformly at the edge: no controller can forget a check it never had to remember.
 
 ---
 
@@ -1150,7 +1150,7 @@ Granting permissions to each user individually stops working after a few dozen p
 
 Role-based access control (RBAC) grants permissions to roles — `USER`, `ADMIN`, `SUPPORT` — and assigns roles to users. A rule then says "this endpoint requires `ADMIN`" rather than listing users.
 
-It exists because managing permissions per user does not scale. Roles group them into something an organisation can reason about and audit.
+Roles group permissions into something an organisation can reason about and audit.
 
 ---
 
@@ -1160,7 +1160,7 @@ A URL rule protects one entry point. But the same business operation may be reac
 
 Method security puts access rules directly on service methods with annotations such as `@PreAuthorize("hasRole('ADMIN')")`, enabled by `@EnableMethodSecurity`.
 
-It exists because URL rules alone protect endpoints, not operations: a service method called from several places carries its own rule wherever it is invoked.
+So the rule travels with the operation: a service method called from several places carries its own rule wherever it is invoked.
 
 ---
 
@@ -1170,7 +1170,7 @@ If every application implements its own login, every application stores password
 
 **OAuth2** is a standard for delegating authorisation: an **authorisation server** (Keycloak, Okta, Auth0, Google) issues tokens, and your API — a **resource server** — validates them. Spring Security supports both roles.
 
-It exists so applications do not each implement login, password storage and token issuance. One trusted service does it, and every API trusts its tokens.
+One trusted service does it, and every API simply trusts its tokens.
 
 ---
 
@@ -1212,7 +1212,7 @@ No single kind of test is both fast and fully convincing. A test of one class ru
 
 The testing pyramid is a guide to proportions: many fast **unit tests** at the base, fewer **integration tests** in the middle, and a small number of slow **end-to-end tests** at the top.
 
-It exists because each level trades speed for confidence differently. Unit tests run in milliseconds and pinpoint failures; end-to-end tests prove the whole system works but are slow and vague about what broke.
+Mixing them in those proportions gives fast feedback on most changes and real confidence on the paths that matter.
 
 ---
 
@@ -1242,7 +1242,7 @@ The class you want to test usually calls others — a repository, a payment clie
 
 **Mockito** creates stand-in objects for collaborators. You can tell a mock what to return (`when(...).thenReturn(...)`) and check how it was used (`verify(...)`).
 
-Mocking exists so a class can be tested without its real dependencies — no database, no network — while still controlling and observing how it interacts with them.
+So a class can be tested without its real dependencies, while you still control what they return and observe how they were called.
 
 ---
 
@@ -1252,7 +1252,7 @@ Starting the entire application for every test is slow — but a plain unit test
 
 A test slice starts only part of the Spring application: `@WebMvcTest` loads the web layer, `@DataJpaTest` loads JPA, `@JsonTest` loads JSON serialisation. Everything else is left out.
 
-Slices exist because starting the whole application for every test is slow. Loading only the layer under test keeps tests focused and fast.
+Loading only the layer under test keeps tests focused and fast, while still running real Spring behaviour.
 
 ---
 
@@ -1298,7 +1298,7 @@ Tests need a database, a broker or a cache. Shared test servers drift and collid
 
 **Testcontainers** starts real dependencies — PostgreSQL, Kafka, Redis — in Docker containers for the duration of a test run, then removes them.
 
-It exists because in-memory substitutes behave differently from the real thing. Testing against the same database engine you run in production removes a whole class of "passes in tests, fails in production" bugs.
+Testing against the same database engine you run in production removes a whole class of "passes in tests, fails in production" bugs.
 
 > 💡 **Tip:** Spring Boot's `@ServiceConnection` wires a Testcontainers container into the application automatically — no manual URL or credential properties needed.
 
@@ -1310,7 +1310,7 @@ A missing access rule looks exactly like a correct one: the endpoint works perfe
 
 Spring Security's test support lets you run a test as a particular user — `@WithMockUser`, or a simulated JWT — and assert that protected endpoints return 401, 403 or success as intended.
 
-It exists because security rules are code, and untested access rules are where breaches come from. A missing rule is invisible until someone finds the open endpoint.
+Security rules are code, and untested access rules are where breaches come from.
 
 ---
 
@@ -1320,7 +1320,7 @@ The interesting cases with another service are its failures — errors, timeouts
 
 Code that calls other HTTP services is tested against a fake server — **WireMock** or Spring's `MockRestServiceServer` — that returns prepared responses, including errors and slow replies.
 
-It exists so you can test how your code handles a dependency's failures, timeouts and odd responses — the cases a real dependency rarely produces on demand.
+So you can rehearse every failure — errors, timeouts, odd responses — whenever you like.
 
 ---
 
@@ -1465,7 +1465,7 @@ Kafka delivers a partition's messages strictly in order. So if one message keeps
 
 When a message fails to process, the consumer can retry it. If it keeps failing, it is moved to a **dead-letter topic** for inspection instead of blocking the partition forever.
 
-This exists because one bad message — a malformed payload, a bug for one specific case — must not stop every message behind it in the same partition.
+So one bad message — a malformed payload, a bug for one specific case — no longer stops every message behind it in the same partition.
 
 > 💡 **Tip:** Distinguish transient failures (a database timeout — retry) from permanent ones (an invalid payload — send straight to the dead-letter topic). Retrying a permanent failure only delays the inevitable.
 
@@ -1496,17 +1496,19 @@ This exists because one bad message — a malformed payload, a bug for one speci
 
 ### 11.1 Containerising the Application
 
-A container image packages the application together with the runtime it needs — the JVM, the jar, configuration defaults — into one artifact that runs the same way everywhere.
+"It works on my machine" usually meant the machines differed — another JDK version, other operating-system libraries, another file layout. A jar behaves only as reliably as the machine it lands on.
 
-Containers exist because "it works on my machine" usually meant the machines differed. An image fixes the operating system, the JVM version and the file layout, so development, testing and production run identical bits.
+A container image packages the application together with the runtime it needs — the JVM, the jar, configuration defaults — into one artifact that runs the same way everywhere. An image fixes the operating system, the JVM version and the file layout, so development, testing and production run identical bits.
 
 ---
 
 ### 11.2 Docker Compose for Local Environments
 
+Running the application locally means first installing and starting PostgreSQL, Redis and Kafka — at the right versions — with every developer doing it slightly differently.
+
 **Docker Compose** describes several containers — the database, a cache, a broker — in one `compose.yaml` file and starts them together. Spring Boot can start that file automatically when the application runs locally.
 
-It exists so a developer can run the whole environment with one command, instead of installing PostgreSQL, Redis and Kafka by hand and hoping the versions match production.
+So the whole environment starts with one command, from a file under version control, at versions pinned to match production.
 
 ```yaml
 services:
@@ -1521,6 +1523,8 @@ services:
 
 ### 11.3 API Documentation with OpenAPI
 
+Clients need to know exactly what an API accepts and returns. Hand-written documentation is out of date the day after it is written, because nothing forces it to change when the code does.
+
 **OpenAPI** is a standard, machine-readable description of an HTTP API: its paths, parameters, request and response bodies, and status codes. **Swagger UI** renders it as an interactive page. In Spring Boot, `springdoc-openapi` generates the description from your controllers.
 
 It exists so an API's contract is documented accurately and automatically — generated from the code, so it cannot drift — and so clients can be generated from it.
@@ -1529,17 +1533,19 @@ It exists so an API's contract is documented accurately and automatically — ge
 
 ### 11.4 API Versioning
 
+Sooner or later an API must change in a way that would break existing clients — and clients, especially mobile apps already installed on phones, cannot all upgrade the moment the server does.
+
 API versioning is how a service changes its contract without breaking existing clients. The common approaches put the version in the URL (`/api/v2/orders`), a header, or the media type.
 
-It exists because clients cannot all upgrade at once. Old and new versions must coexist for a while, and removing the old one must be a deliberate, announced step.
+So old and new versions must coexist for a while, and removing the old one must be a deliberate, announced step.
 
 ---
 
 ### 11.5 Pagination, Sorting and Filtering
 
-Pagination returns a large collection in pages; sorting orders it; filtering narrows it. Spring Data binds `page`, `size` and `sort` query parameters to a `Pageable` automatically.
+Returning every row of a growing table is a time bomb: fine with a hundred rows, an outage with a million — and the table keeps growing while the endpoint's code never changes.
 
-They exist because returning every row of a growing table is a time bomb: fine with a hundred rows, an outage with a million.
+Pagination returns a large collection in pages; sorting orders it; filtering narrows it. Spring Data binds `page`, `size` and `sort` query parameters to a `Pageable` automatically.
 
 ```java
 @GetMapping("/api/orders")
@@ -1551,6 +1557,8 @@ PagedModel<OrderSummary> list(@PageableDefault(size = 20, sort = "createdAt") Pa
 ---
 
 ### 11.6 Logging
+
+When something goes wrong in production, nobody can attach a debugger. The only record of what the application did is what it wrote down while doing it.
 
 Spring Boot logs through **SLF4J**, a logging facade, with **Logback** as the default implementation. Code writes to a logger; configuration decides levels, formats and destinations.
 
@@ -1565,15 +1573,19 @@ log.info("order placed id={} total={}", order.getId(), order.getTotal());
 
 ### 11.7 Spring Boot Actuator
 
+Every production service needs the same operational answers — is it healthy, what are its metrics, which configuration is it running, what are its threads doing? Building those diagnostics by hand in every service is wasted, inconsistent work.
+
 **Actuator** adds production endpoints to an application: health, metrics, configuration, environment, loggers, thread dumps and more, under `/actuator`.
 
-It exists so every Spring Boot service exposes the same operational information in the same way, without each team building its own diagnostics.
+So every Spring Boot service exposes the same operational information in the same way.
 
 > ⚠️ **Common misconception:** Actuator endpoints are not harmless. Some reveal configuration, environment variables or memory contents, so only a few should be exposed and the rest secured.
 
 ---
 
 ### 11.8 Health Checks and Probes
+
+A container platform runs many copies of your service and must keep making two decisions about each: should it receive traffic, and should it be restarted? It cannot see inside the process — it has to ask.
 
 A health check reports whether the application is working. Container platforms such as Kubernetes use two separate probes: **liveness** — is the process stuck and in need of a restart? — and **readiness** — should it receive traffic right now?
 
@@ -1583,25 +1595,29 @@ They exist so the platform can route traffic only to instances that can serve it
 
 ### 11.9 Metrics with Micrometer
 
+Logs describe individual events, but questions such as "is latency rising?" or "is the pool nearly full?" are about trends — and answering them by searching millions of log lines is slow and expensive.
+
 **Micrometer** is the metrics library behind Spring Boot. It records counters, timers and gauges — requests served, latency, pool usage — and exports them to monitoring systems such as Prometheus.
 
-Metrics exist because logs tell you about individual events, while metrics show trends: is latency rising, is the error rate climbing, is the connection pool nearly full?
+Instead of searching logs, you read a number that is already there: requests per second, 99th-percentile latency, connections in use.
 
 ---
 
 ### 11.10 Distributed Tracing
 
-Distributed tracing follows one request across every service it touches. Each hop records a **span**; spans sharing a **trace id** form a timeline of the whole request.
+In a system of many services, one user request may pass through five of them. When it is slow or fails, each service's logs show only its own piece, so the request cannot be diagnosed from any one of them.
 
-It exists because in a system of many services, a slow or failing request cannot be diagnosed from one service's logs. A trace shows where the time went and which hop failed.
+Distributed tracing follows one request across every service it touches. Each hop records a **span**; spans sharing a **trace id** form a timeline of the whole request. A trace shows where the time went and which hop failed.
 
 ---
 
 ### 11.11 Configuration and Secrets
 
+One image must run in every environment, so the values that differ cannot be baked into it. And some of those values are secrets.
+
 Configuration that varies by environment — URLs, feature flags, pool sizes — is supplied from outside the image. **Secrets** — passwords, API keys, signing keys — need stricter handling: they come from a secrets manager or the platform, never from the code repository.
 
-This exists because one image must run in every environment, and because a secret committed to a repository or baked into an image is, for practical purposes, public.
+A secret committed to a repository or baked into an image is, for practical purposes, public — which is why secrets never travel the way ordinary configuration does.
 
 > 💡 **Tip:** Rotate secrets as if they will leak, because eventually one will. Rotation that is routine and automated turns a leak into a non-event.
 
@@ -1632,17 +1648,21 @@ This exists because one image must run in every environment, and because a secre
 
 ### 12.1 The Reference Architecture
 
+Each earlier group solved one problem in isolation. A real service faces all of them at once, and the hard part is rarely one technique — it is making dozens of them work together reliably, under load, while the system keeps changing.
+
 This group follows one realistic service — an **order service** for an online shop — and shows how the earlier groups fit together. It exposes a REST API, stores orders in PostgreSQL, caches the product catalogue in Redis, publishes `OrderPlaced` events to Kafka, calls a payment service over HTTP, and is secured with JWTs.
 
-A reference architecture exists because the hard part of backend work is rarely one technique in isolation. It is making dozens of them work together reliably, under load, while the system keeps changing.
+Seeing them in one system shows how each decision constrains the others.
 
 ---
 
 ### 12.2 Designing the Domain and API
 
+Code is cheap to change; some decisions are not. Once clients integrate with an API and data is stored in a schema, changing either means migrations, versioning and coordinated releases.
+
 Before writing code, a service needs a model of its domain — orders, order lines, statuses and the rules between them — and an API that exposes that model to clients in a stable, deliberate shape.
 
-This step exists because the domain model and the API contract are the two things most expensive to change later. The database schema, the endpoints and the events all follow from them.
+That is why they come first: the database schema, the endpoints and the events all follow from them.
 
 ```text
 POST   /api/orders              place an order
@@ -1655,9 +1675,11 @@ POST   /api/orders/{id}/cancel  cancel an order
 
 ### 12.3 Timeouts, Retries and Circuit Breakers
 
+In a distributed system, a dependency being slow or down is normal, not exceptional — and a service that waits patiently for a slow dependency soon has every thread waiting, and fails too.
+
 When a service calls another, the call can be slow or fail. A **timeout** limits how long to wait. A **retry** tries again after a transient failure. A **circuit breaker** stops calling a dependency that keeps failing, so it can recover and so callers fail fast instead of piling up.
 
-These patterns exist because in a distributed system, failure of a dependency is normal, not exceptional. Without them, one slow service drags down every service that calls it.
+Without them, one slow service drags down every service that calls it.
 
 > ⚠️ **Common misconception:** Retries are not free reliability. Retrying an operation that is not idempotent can perform it twice, and retrying against an overloaded service makes the overload worse.
 
@@ -1665,41 +1687,51 @@ These patterns exist because in a distributed system, failure of a dependency is
 
 ### 12.4 Rate Limiting and Backpressure
 
+Capacity is finite. A service that accepts unlimited work eventually exhausts its threads, connections or memory — and then fails for everyone, not just for the excess.
+
 **Rate limiting** caps how many requests a client may make in a period, rejecting the excess with `429 Too Many Requests`. **Backpressure** is the general idea that a system under more load than it can handle should slow down or refuse work, rather than accept it and collapse.
 
-They exist because capacity is finite. A service that accepts unlimited work will eventually exhaust threads, connections or memory and fail for everyone.
+It is better to say "not now" quickly to some requests than to fail all of them slowly.
 
 ---
 
 ### 12.5 Idempotent APIs
 
+Networks fail after the server has acted but before the client hears back. From the client's side, "the request failed" and "the response was lost" look identical — so it must retry, and the server must not charge the customer twice.
+
 An operation is **idempotent** if performing it several times has the same effect as performing it once. `GET`, `PUT` and `DELETE` are idempotent by definition; `POST` is not. An **idempotency key** — a unique value the client sends with a request — lets the server recognise a retry and return the original result instead of acting again.
 
-Idempotent APIs exist because networks fail after the server has acted but before the client hears back. The client must retry, and the server must not charge the customer twice.
+So retries become safe: the client can repeat a request as often as it needs, and the effect happens once.
 
 ---
 
 ### 12.6 Performance and Load Testing
 
+Performance problems — pool exhaustion, slow queries, memory leaks — appear only under concurrency, volume and time, and production is an expensive place to discover them.
+
 A **load test** sends realistic traffic at a service to measure throughput, latency and errors. Variants push past expected load (**stress**), hold it for hours (**soak**), or jump suddenly (**spike**).
 
-Load testing exists because performance problems — pool exhaustion, slow queries, memory leaks — only appear under concurrency and volume, and production is an expensive place to find them.
+So the load is generated deliberately, before real users generate it.
 
 ---
 
 ### 12.7 Zero-Downtime Deployment
 
+Services that deploy many times a day cannot stop for each release: if every deployment caused a few seconds of errors, frequent deployment would mean frequent outages.
+
 A zero-downtime deployment replaces the running version with a new one without users noticing — no failed requests, no maintenance window. Common strategies are **rolling** updates, **blue-green** switches and **canary** releases.
 
-It exists because modern services deploy often, sometimes many times a day, and each deployment cannot be allowed to cause errors.
+For a while during every rollout, old and new versions run side by side — so each change must work with both.
 
 ---
 
 ### 12.8 Feature Flags and Safe Releases
 
+Once code is deployed, everyone gets it at once, and undoing it means another deployment. For a risky change you want to expose it gradually — and switch it off in seconds if it misbehaves.
+
 A **feature flag** is a switch, evaluated at runtime, that turns a code path on or off without a deployment. It separates **deploying** code from **releasing** a feature to users.
 
-Feature flags exist so risky changes can be released gradually — to staff, then 1% of users, then everyone — and switched off instantly if something goes wrong.
+So risky changes can be released gradually — to staff, then 1% of users, then everyone — and switched off instantly if something goes wrong.
 
 ```java
 if (flags.isEnabled("new-pricing", customer)) {
@@ -1712,23 +1744,29 @@ return legacyPricing.quote(order);
 
 ### 12.9 Operating the Service
 
+Writing the service is the start of its life, not the end: most of its cost and most of its users' experience come from how it is run — and "is it healthy?" needs a definition before anyone can answer it.
+
 Operating a service means keeping it healthy in production: defining what "healthy" means with **service level objectives** (SLOs), alerting when they are threatened, responding to incidents, and learning from them afterwards.
 
-It exists because writing the service is the start of its life, not the end. Most of its cost and most of its users' experience come from how it is run.
+A defined target turns "is it reliable enough?" from an argument into a measurement.
 
 ---
 
 ### 12.10 Upgrading Spring Boot
 
+Software you depend on keeps moving: security fixes, new Java versions, libraries dropping old APIs. A framework version that stops receiving fixes becomes a growing liability — and the longer an upgrade waits, the bigger it gets.
+
 Spring Boot ships a new minor version roughly every six months and a new major version every few years. Each minor version is supported for a limited period, after which it stops receiving free security fixes.
 
-Upgrading exists as a discipline because staying on an unsupported version means unpatched vulnerabilities, and skipping several versions at once turns a routine task into a risky project. Spring Boot 4.0, built on Spring Framework 7, followed the 3.x line in November 2025.
+So upgrading is a routine discipline rather than an occasional project: small steps, often. Spring Boot 4.0, built on Spring Framework 7, followed the 3.x line in November 2025.
 
 > 💡 **Tip:** Upgrade one minor version at a time, and keep the build free of deprecation warnings. Deprecated APIs are what the next major version removes.
 
 ---
 
 ### 12.11 Explaining the System in an Interview
+
+Knowing every piece separately is not the same as being able to explain a whole system — and that is exactly what interviewers want to test.
 
 Backend interviews often end with "walk me through a system you built". A good answer describes the problem, the architecture, the key flows, how it handles failure, how it is observed, and what you would change.
 
