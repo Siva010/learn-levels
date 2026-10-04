@@ -119,32 +119,40 @@ public class OrderService {
 
 ### 1.3 The ApplicationContext
 
-**The problem:** Objects must be created in dependency order — a repository before the service that needs it — and a mistake such as a missing dependency should be found before any traffic arrives, not on the first request that happens to need it.
+**The problem:** The container takes over the wiring you would otherwise write by hand in `main()`, and inherits two duties with it. Objects must be created in dependency order — a repository before the service that needs it. And a mistake such as a missing dependency should be found before any traffic arrives, not on the first request that happens to need it.
 
-**How it works:** So startup runs in two phases. First the container reads every source of metadata and registers **bean definitions** — recipes describing what to create, not instances. Recipes are just data, so the container can inspect the whole graph, order it, and let extensions edit it before a single object exists. Then it instantiates the non-lazy singletons in dependency order, injecting as it goes, and publishes a `ContextRefreshedEvent` when all of them are ready.
+**How it works:** You cannot order a list you have not finished reading, so startup runs in two phases. First the container reads every source of metadata and registers **bean definitions** — recipes describing what to create, not instances. (A *bean* is simply an object the container manages; 1.4 follows one through its life.) Recipes are just data, so the container can inspect the whole graph, order it, and let extensions edit it before a single object exists. Then it builds the singletons — the default kind of bean, one shared instance each — in dependency order, skipping any marked `@Lazy`: each is created, injected and initialised before anything that needs it. When all of them are ready it publishes a `ContextRefreshedEvent`. Spring calls the whole sequence a **refresh**, after the `refresh()` method that runs it.
 
 ```mermaid
-flowchart TD
-    A["sources: scanned classes, @Bean methods, auto-configuration"] --> B["BeanDefinition registry"]
-    B --> C["BeanFactoryPostProcessors — may edit definitions"]
-    C --> D["instantiate singletons"]
-    D --> E["inject dependencies"]
-    E --> F["BeanPostProcessors — may wrap in proxies"]
-    F --> G["init callbacks, then ContextRefreshedEvent"]
+flowchart LR
+    subgraph P1["Phase 1 — recipes, no objects yet"]
+    direction TB
+    A["read sources: scanned classes, @Bean methods, auto-configuration"] --> B["register BeanDefinitions"]
+    B --> C["BeanFactoryPostProcessors — may edit the recipes"]
+    end
+    subgraph P2["Phase 2 — objects, in dependency order"]
+    direction TB
+    D["instantiate"] --> E["inject dependencies"]
+    E --> F["init callbacks"]
+    F --> G["BeanPostProcessors — may wrap in a proxy"]
+    end
+    P1 --> P2
+    P2 --> H["all ready → ContextRefreshedEvent"]
 ```
 
-**Two extension points worth knowing:** A `BeanFactoryPostProcessor` runs before any bean is created and can modify definitions — property placeholder resolution works this way. A `BeanPostProcessor` runs around each bean's initialisation and can replace it with a proxy — which is how `@Transactional`, `@Async` and `@Cacheable` are applied.
+**Two extension points worth knowing:** Two phases leave two natural places to step in, and Spring has one hook for each. A `BeanFactoryPostProcessor` edits recipes, so it runs before any bean is created and can modify definitions — property placeholder resolution works this way. A `BeanPostProcessor` edits objects, so it runs around each bean's initialisation and can replace it with a proxy — which is how `@Transactional`, `@Async` and `@Cacheable` are applied. The container is the one calling `new`, so it decides what callers receive.
 
 **Example:**
 ```java
 @Component
 class StartupLogger {
     @EventListener(ApplicationReadyEvent.class)
-    void onReady() {                 // after the context is fully refreshed
+    void onReady() {                 // after the context is fully refreshed and runners have run
         log.info("application ready");
     }
 }
 ```
+`ContextRefreshedEvent` means the container has finished building. Spring Boot publishes `ApplicationReadyEvent` after that, once any `ApplicationRunner` and `CommandLineRunner` beans have run — listen for it when you mean "the application is up".
 
 **Eager by default:** Singletons are created at startup, not on first use. That is deliberate: building everything up front is what turns a missing dependency into a startup failure instead of an error on the first request that needs it.
 
@@ -160,9 +168,9 @@ class StartupLogger {
 
 **On first use — not at startup.** Possibly days later, in production, on the request that first needs the bean. Eager creation is the thing that moves wiring errors to boot time; opting out of it moves them back to runtime.
 
-**Best intuition:** The context is a map from bean definitions to live objects, built once, in a defined order, before traffic arrives.
+**Best intuition:** The context is the wiring `main()` you would otherwise write by hand, run for you: a map from bean definitions to live objects, built once, in a defined order, before traffic arrives. Everything else follows from holding that list — it can check it before running it (fail fast), edit it (`BeanFactoryPostProcessor`), and wrap what it builds (`BeanPostProcessor`).
 
-**Terminology:** *bean definition*, *refresh*, *`BeanPostProcessor`*, *`BeanFactoryPostProcessor`*, *`ApplicationReadyEvent`*.
+**Terminology:** *bean definition*, *singleton*, *refresh*, *`BeanPostProcessor`*, *`BeanFactoryPostProcessor`*, *`ContextRefreshedEvent`*, *`ApplicationReadyEvent`*.
 
 ---
 

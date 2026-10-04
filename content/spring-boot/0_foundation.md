@@ -63,16 +63,25 @@ The payoff follows on its own: if the class does not build its dependencies, any
 
 ### 1.3 The ApplicationContext
 
-If objects no longer build their dependencies, something must hold the whole picture: which objects exist, what each one needs, and the order to build them in. That something is the `ApplicationContext`, Spring's container.
-
-It reads your configuration, creates the objects it describes, injects their dependencies, and keeps them for the life of the application.
+If objects no longer build their dependencies, someone else has to. Without a framework, that someone is you, in `main()`:
 
 ```java
-var context = new AnnotationConfigApplicationContext(AppConfig.class);
-var service = context.getBean(OrderService.class);
+var dataSource = new HikariDataSource(dbConfig);
+var repository = new OrderRepository(dataSource);   // needs the data source, so it comes after it
+var service    = new OrderService(repository);      // needs the repository, so it comes after that
+var controller = new OrderController(service);
 ```
 
-Because every managed object passes through it, the context is also where the framework attaches its features — transactions, security, scheduling, events. In a Spring Boot application you rarely create it by hand: `SpringApplication.run()` builds one and starts it.
+Those lines hold the whole picture: which objects exist, what each one needs, and the order to build them in. At four classes that is fine. At four hundred, every new constructor parameter means finding the right line and keeping the order right.
+
+The `ApplicationContext`, Spring's container, is that list written and run for you. It reads your configuration, creates the objects it describes — Spring calls them **beans** — injects their dependencies in the right order, and keeps them for the life of the application.
+
+```java
+var context = new AnnotationConfigApplicationContext(AppConfig.class);  // build everything AppConfig describes
+var service = context.getBean(OrderService.class);                      // already built and wired
+```
+
+Because every managed object passes through it, the context is also where the framework attaches its features — transactions, security, scheduling, events. Whoever calls `new` decides what to hand out, so the context can hand out a wrapped object instead. In a Spring Boot application you rarely create it by hand: `SpringApplication.run()` builds one and starts it.
 
 ---
 

@@ -6,7 +6,7 @@ silently corrected in the source — they are recorded here and handled explicit
 Sections 1–7 concern `content/java/*.md`, last reviewed against the full 12-group curriculum
 (132 concepts, 13,295 non-blank source lines). Section 8 concerns `content/python/*.md`
 (126 concepts, 12,828 non-blank source lines). Section 9 concerns `content/spring-boot/*.md`
-(125 concepts, 13,541 non-blank source lines).
+(125 concepts, 13,557 non-blank source lines).
 
 ---
 

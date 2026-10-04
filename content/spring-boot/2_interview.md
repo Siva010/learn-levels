@@ -181,10 +181,10 @@ IoC as a synonym for DI — DI is the subset.
 Spring's container: it reads configuration metadata, registers bean definitions, instantiates and wires beans, applies post-processors, and manages their lifecycle.
 
 #### Why it exists
-Because once classes stop building their own dependencies, something must know the whole graph — what exists, what needs what, and in which order to build it. Holding that knowledge in one place also gives framework features a single point through which every object passes.
+Because once classes stop building their own dependencies, something must know the whole graph — what exists, what needs what, and in which order to build it. Without a container, that is a hand-written `main()` full of `new` calls, reordered by hand every time a constructor changes. Holding that knowledge in one place also gives framework features a single point through which every object passes.
 
 #### Interview explanation
-Explain the problem it solves — objects must be built in dependency order, and wiring errors should appear before traffic does. Then describe the two phases that follow from it — definitions registered first, instances created second — and name the two post-processor types, because `BeanPostProcessor` is where proxies are created. Mention that singletons are eager by default so failures surface at startup.
+Open with what it replaces — the wiring code you would otherwise write in `main()`, every `new` in the right order. Then explain the problem it solves — objects must be built in dependency order, and wiring errors should appear before traffic does. Then describe the two phases that follow from it — definitions registered first, because ordering needs the whole graph, then instances created — and name the two post-processor types, one per phase, because `BeanPostProcessor` is where proxies are created. Mention that singletons are eager by default so failures surface at startup.
 
 #### Syntax
 ```java
@@ -212,11 +212,13 @@ class Warmup implements ApplicationListener<ApplicationReadyEvent> {
 #### Follow-up questions
 - "What is a BeanFactoryPostProcessor?" (It modifies bean *definitions* before any instance exists — property placeholder resolution uses it.)
 - "What does the context publish?" (Lifecycle events such as `ContextRefreshedEvent` and `ApplicationReadyEvent`, plus your own events via `ApplicationEventPublisher`.)
+- "What is the difference between `ContextRefreshedEvent` and `ApplicationReadyEvent`?" (The first means the container has finished building; Spring Boot publishes the second later, after `ApplicationRunner` and `CommandLineRunner` beans have run — the right signal for "the application is up".)
 - "Why avoid calling `getBean` in application code?" (It is service location — it hides the dependency and couples the class to the container.)
 
 #### Edge cases
 - `@Lazy` defers creation until first use, which moves configuration errors from startup to runtime — eager creation was the only thing surfacing them early.
 - A bean that fails to initialise aborts startup, and the real cause is usually several `Caused by` frames down, because each dependent bean wraps the failure of the one it needed.
+- Post-processors are built before ordinary beans, so a post-processor that injects an ordinary bean forces that bean to be built early — before every `BeanPostProcessor` exists — and it can miss its proxy, leaving `@Transactional` inert. Spring logs that the bean "is not eligible for getting processed by all BeanPostProcessors". Keep post-processors free of dependencies, and declare `@Bean` methods that return a `BeanFactoryPostProcessor` as `static`.
 - Multiple contexts exist in some setups — notably parent/child contexts in older Spring MVC applications — where a child can see its parent's beans but not the reverse.
 
 #### Common mistakes
@@ -236,9 +238,10 @@ class Warmup implements ApplicationListener<ApplicationReadyEvent> {
 Startup cost grows with the number of bean definitions and the breadth of component scanning, not with request volume.
 
 #### Frequently confused with
-`BeanFactory` versus `ApplicationContext`.
+`BeanFactory` versus `ApplicationContext`. The factory is the engine — definitions in, beans out. The context wraps it with what an application needs around that engine: eager startup, events, environment and property sources, resources and messages. You use the context; the factory is inside it.
 
 #### Important facts to remember
+- It is the wiring code you would write in `main()`, automated — nothing it builds is beyond a hand-written `new`.
 - Definitions first, instances second — recipes can be ordered and edited before anything exists.
 - Singletons are eager by default — so wiring errors fail the startup, not a request.
 - `BeanPostProcessor` creates proxies — it is the hook that sees every finished bean.

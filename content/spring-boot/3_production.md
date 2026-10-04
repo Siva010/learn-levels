@@ -75,9 +75,9 @@
 
 **Performance considerations:** Startup time is dominated by bean count, component-scan breadth and auto-configuration evaluation. `spring.main.lazy-initialization=true` can cut it dramatically, but it defers failures to runtime — acceptable for local development, risky in production.
 
-**Debugging tips:** Read Spring Boot's failure analysis block first — it names the missing bean or conflicting property in plain English. For deeper problems, `--debug` prints the auto-configuration report showing what matched and why.
+**Debugging tips:** Read Spring Boot's failure analysis block first — it names the missing bean or conflicting property in plain English. For deeper problems, `--debug` prints the auto-configuration report showing what matched and why, and `/actuator/beans` lists every bean the context holds and what each depends on — the graph itself. An INFO line saying a bean "is not eligible for getting processed by all BeanPostProcessors" means it was built before the proxy-makers existed, usually because a post-processor depends on it — so its `@Transactional` or `@Cacheable` does nothing.
 
-**Monitoring:** Expose `/actuator/health` with readiness and liveness groups so the orchestrator restarts a process that failed to initialise rather than routing traffic to it. Startup failures should be visible as crash-loops, not as silent 500s.
+**Monitoring:** A context that fails to start throws out of `SpringApplication.run()` and the process exits, so the orchestrator sees a crash-loop — alert on restarts rather than letting them retry silently. For an instance that is still starting, readiness does the work: Spring Boot reports `ACCEPTING_TRAFFIC` only after `ApplicationReadyEvent`, so exposing the readiness and liveness groups of `/actuator/health` and pointing the readiness probe at `/actuator/health/readiness` keeps traffic away from a half-started process. Startup failures should be visible as crash-loops, not as silent 500s.
 
 ---
 
