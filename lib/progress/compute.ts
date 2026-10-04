@@ -3,6 +3,7 @@ import type {
   GroupSkeleton,
   LevelId,
   ConceptSkeleton,
+  TrackSkeleton,
 } from "@/types/content";
 import { LEVEL_IDS } from "@/types/content";
 import type { LanguageProgress } from "./types";
@@ -135,4 +136,73 @@ export function recommendedLevel(
 ): LevelId {
   const next = concept.levels.find((level) => !isComplete(progress, level, concept.id));
   return next ?? concept.levels[0] ?? "foundation";
+}
+
+/* -------------------------------------------------------------------- tracks */
+
+type ProgressFor = (language: string) => LanguageProgress | undefined;
+
+/** Progress for one level across every part of a track. */
+export function trackLevelRatio(track: TrackSkeleton, progressFor: ProgressFor, level: LevelId): Ratio {
+  let completed = 0;
+  let total = 0;
+  for (const part of track.parts) {
+    const entry = levelRatio(part, progressFor(part.language), level);
+    completed += entry.completed;
+    total += entry.total;
+  }
+  return ratio(completed, total);
+}
+
+/** Overall mastery across every part of a track, every concept-level pair weighted equally. */
+export function trackOverallRatio(track: TrackSkeleton, progressFor: ProgressFor): Ratio {
+  let completed = 0;
+  let total = 0;
+  for (const part of track.parts) {
+    const entry = overallRatio(part, progressFor(part.language));
+    completed += entry.completed;
+    total += entry.total;
+  }
+  return ratio(completed, total);
+}
+
+export interface TrackNextUp extends NextUp {
+  language: string;
+  partTitle: string;
+}
+
+/**
+ * What to suggest next across a track: resume the most recent visit in any part if it is still
+ * incomplete; otherwise the first incomplete concept, level by level, reading the parts in order —
+ * so every part's Foundation comes before any part's Understand, as within a single curriculum.
+ */
+export function findTrackNextUp(track: TrackSkeleton, progressFor: ProgressFor): TrackNextUp | null {
+  const recent = track.parts
+    .map((part) => ({ part, visit: progressFor(part.language)?.lastVisited }))
+    .filter((entry) => entry.visit)
+    .sort((a, b) => (b.visit?.at ?? "").localeCompare(a.visit?.at ?? ""))[0];
+
+  if (recent?.visit) {
+    const { part, visit } = recent;
+    const group = part.groups.find((entry) => entry.slug === visit.groupSlug);
+    const concept = group?.concepts.find((entry) => entry.slug === visit.conceptSlug);
+    if (group && concept && !isComplete(progressFor(part.language), visit.level, concept.id)) {
+      return { language: part.language, partTitle: part.title, group, concept, level: visit.level };
+    }
+  }
+
+  for (const level of LEVEL_IDS) {
+    for (const part of track.parts) {
+      const progress = progressFor(part.language);
+      for (const group of part.groups) {
+        for (const concept of group.concepts) {
+          if (!concept.levels.includes(level)) continue;
+          if (!isComplete(progress, level, concept.id)) {
+            return { language: part.language, partTitle: part.title, group, concept, level };
+          }
+        }
+      }
+    }
+  }
+  return null;
 }

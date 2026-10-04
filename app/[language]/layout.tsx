@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { SiteHeader } from "@/components/layout/site-header";
 import { Sidebar } from "@/components/navigation/sidebar";
-import { getCurriculum, getLanguages, getSkeleton } from "@/lib/content/curriculum";
+import { getTracks, getTrackSkeleton } from "@/lib/content/curriculum";
 import { ProgressProvider } from "@/lib/progress/provider";
 
 export default async function LanguageLayout({
@@ -12,18 +12,21 @@ export default async function LanguageLayout({
   params: Promise<{ language: string }>;
 }) {
   const { language } = await params;
-  const skeleton = getSkeleton(language);
-  if (!skeleton) notFound();
+  const track = getTrackSkeleton(language);
+  if (!track) notFound();
 
-  const languages = getLanguages().map((id) => ({
-    id,
-    title: getCurriculum(id)?.title ?? id,
+  // The header switches between tracks; a multi-part track opens at its first part.
+  const tracks = getTracks().map((entry) => ({
+    id: entry.id,
+    title: entry.title,
+    href: `/${entry.parts[0]}`,
+    parts: entry.parts,
   }));
 
   return (
-    <ProgressProvider skeleton={skeleton}>
+    <ProgressProvider track={track} language={language}>
       <div className="flex min-h-screen flex-col">
-        <SiteHeader language={language} languages={languages} />
+        <SiteHeader language={language} tracks={tracks} />
         <div className="flex flex-1">
           <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-64 shrink-0 border-r border-line lg:block">
             <Sidebar />

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { LEVEL_ORDER, LEVEL_UI, levelClass } from "@/lib/levels";
-import { DEFAULT_LANGUAGE, LANGUAGES, getCurriculum, getLanguages } from "@/lib/content/curriculum";
+import { DEFAULT_LANGUAGE, LANGUAGES, getCurriculum, getTracks } from "@/lib/content/curriculum";
 import { ThemeToggle } from "@/components/layout/theme";
 import { StatusPill } from "@/components/ui/pill";
 
@@ -9,12 +9,19 @@ export default function HomePage() {
   const curriculum = getCurriculum(DEFAULT_LANGUAGE);
   const stats = curriculum?.stats;
 
-  const languages = getLanguages().flatMap((id) => {
-    const entry = getCurriculum(id);
-    const config = LANGUAGES.find((language) => language.id === id);
-    return entry && config ? [{ id, config, curriculum: entry }] : [];
+  // A multi-part track (Java + Spring Boot) is one curriculum here, opening at its first part.
+  const tracks = getTracks().map((track) => {
+    const parts = track.parts.flatMap((id) => {
+      const entry = getCurriculum(id);
+      const config = LANGUAGES.find((language) => language.id === id);
+      return entry && config ? [{ id, config, curriculum: entry }] : [];
+    });
+    const concepts = parts.reduce((sum, part) => sum + part.curriculum.stats.concepts, 0);
+    const groups = parts.reduce((sum, part) => sum + part.curriculum.stats.groupsComplete, 0);
+    const planned = parts.reduce((sum, part) => sum + part.curriculum.stats.groupsPlanned, 0);
+    return { track, parts, concepts, groups, planned, href: `/${track.parts[0]}` };
   });
-  const totalConcepts = languages.reduce((sum, entry) => sum + entry.curriculum.stats.concepts, 0);
+  const totalConcepts = tracks.reduce((sum, entry) => sum + entry.concepts, 0);
 
   return (
     <div className="min-h-screen">
@@ -25,13 +32,13 @@ export default function HomePage() {
           </span>
           <span className="text-sm font-semibold tracking-tight">Learn Levels</span>
           <div className="ml-auto flex items-center gap-2">
-            {languages.map((entry) => (
+            {tracks.map((entry) => (
               <Link
-                key={entry.id}
-                href={`/${entry.id}`}
+                key={entry.track.id}
+                href={entry.href}
                 className="rounded-md px-3 py-1.5 text-xs text-fg-muted transition-colors hover:text-fg"
               >
-                {entry.curriculum.title}
+                {entry.track.title}
               </Link>
             ))}
             <ThemeToggle />
@@ -52,23 +59,23 @@ export default function HomePage() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            {languages.map((entry, index) => (
+            {tracks.map((entry, index) => (
               <Link
-                key={entry.id}
-                href={`/${entry.id}`}
+                key={entry.track.id}
+                href={entry.href}
                 className={
                   index === 0
                     ? "inline-flex h-10 items-center gap-2 rounded-md bg-fg px-5 text-sm font-medium text-bg transition-opacity hover:opacity-90"
                     : "inline-flex h-10 items-center gap-2 rounded-md border border-line px-5 text-sm font-medium text-fg-muted transition-colors hover:border-line-strong hover:text-fg"
                 }
               >
-                {entry.curriculum.title}
+                {entry.track.title}
                 <ArrowRight className="size-4" />
               </Link>
             ))}
             {stats ? (
               <p className="text-xs text-fg-subtle">
-                {totalConcepts} concepts across {languages.length} languages · 4 levels each
+                {totalConcepts} concepts across {tracks.length} curricula · 4 levels each
               </p>
             ) : null}
           </div>
@@ -144,58 +151,70 @@ export default function HomePage() {
         </section>
 
         {/* ---------------------------------------------------------- curricula */}
-        {languages.map((entry) => (
-          <section key={entry.id} className="border-t border-line py-14">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h2 className="text-sm font-semibold">{entry.curriculum.title} curriculum</h2>
-              <Link
-                href={`/${entry.id}`}
-                className="text-xs text-fg-muted transition-colors hover:text-fg"
-              >
-                Open dashboard →
-              </Link>
-            </div>
-            <p className="mt-1 max-w-2xl text-sm text-fg-muted">{entry.config.blurb}</p>
-            <p className="mt-1 text-xs text-fg-subtle">
-              {entry.curriculum.stats.concepts} concepts ·{" "}
-              {entry.curriculum.stats.groupsComplete}{" "}
-              {entry.curriculum.stats.groupsComplete === 1 ? "topic group" : "topic groups"} written
-              {entry.curriculum.stats.groupsPlanned > 0
-                ? ` · ${entry.curriculum.stats.groupsPlanned} still being written`
-                : ""}
-            </p>
-
-            <ul className="mt-4 grid gap-x-8 gap-y-px sm:grid-cols-2">
-              {entry.curriculum.groups.map((group) => (
-                <li
-                  key={group.slug}
-                  className="flex items-center gap-3 border-b border-line py-2.5 text-sm last:border-b-0"
+        {tracks.map((entry) => {
+          const multiPart = entry.parts.length > 1;
+          return (
+            <section key={entry.track.id} className="border-t border-line py-14">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-sm font-semibold">{entry.track.title} curriculum</h2>
+                <Link
+                  href={entry.href}
+                  className="text-xs text-fg-muted transition-colors hover:text-fg"
                 >
-                  <span className="font-mono text-xs tabular-nums text-fg-subtle">
-                    {group.number.padStart(2, "0")}
-                  </span>
-                  {group.concepts.length > 0 ? (
-                    <Link
-                      href={`/${entry.id}/${group.slug}`}
-                      className="min-w-0 flex-1 truncate transition-colors hover:text-fg"
-                    >
-                      {group.title}
-                    </Link>
-                  ) : (
-                    <span className="min-w-0 flex-1 truncate text-fg-subtle">{group.title}</span>
-                  )}
-                  {group.concepts.length > 0 ? (
-                    <span className="shrink-0 text-2xs text-fg-subtle">
-                      {group.concepts.length} concepts
-                    </span>
-                  ) : (
-                    <StatusPill status={group.status} />
-                  )}
-                </li>
+                  Open dashboard →
+                </Link>
+              </div>
+              <p className="mt-1 max-w-2xl text-sm text-fg-muted">{entry.track.blurb}</p>
+              <p className="mt-1 text-xs text-fg-subtle">
+                {entry.concepts} concepts · {entry.groups}{" "}
+                {entry.groups === 1 ? "topic group" : "topic groups"} written
+                {multiPart ? ` · ${entry.parts.length} parts` : ""}
+                {entry.planned > 0 ? ` · ${entry.planned} still being written` : ""}
+              </p>
+
+              {entry.parts.map((part, index) => (
+                <div key={part.id} className="mt-6">
+                  {multiPart ? (
+                    <p className="text-xs">
+                      <span className="eyebrow">Part {index + 1}</span>
+                      <span className="ml-2 font-semibold">{part.curriculum.title}</span>
+                      <span className="ml-2 text-fg-subtle">{part.config.blurb}</span>
+                    </p>
+                  ) : null}
+                  <ul className="mt-3 grid gap-x-8 gap-y-px sm:grid-cols-2">
+                    {part.curriculum.groups.map((group) => (
+                      <li
+                        key={group.slug}
+                        className="flex items-center gap-3 border-b border-line py-2.5 text-sm last:border-b-0"
+                      >
+                        <span className="font-mono text-xs tabular-nums text-fg-subtle">
+                          {group.number.padStart(2, "0")}
+                        </span>
+                        {group.concepts.length > 0 ? (
+                          <Link
+                            href={`/${part.id}/${group.slug}`}
+                            className="min-w-0 flex-1 truncate transition-colors hover:text-fg"
+                          >
+                            {group.title}
+                          </Link>
+                        ) : (
+                          <span className="min-w-0 flex-1 truncate text-fg-subtle">{group.title}</span>
+                        )}
+                        {group.concepts.length > 0 ? (
+                          <span className="shrink-0 text-2xs text-fg-subtle">
+                            {group.concepts.length} concepts
+                          </span>
+                        ) : (
+                          <StatusPill status={group.status} />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
-          </section>
-        ))}
+            </section>
+          );
+        })}
 
         <footer className="border-t border-line py-8 text-2xs text-fg-subtle">
           All educational content is rendered from the source Markdown curriculum. Groups marked

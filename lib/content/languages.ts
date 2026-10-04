@@ -129,6 +129,55 @@ export function languageConfig(id: string): LanguageConfig | null {
   return BY_ID.get(id) ?? null;
 }
 
+/**
+ * A track is what the site presents as one curriculum: one or more languages read in order.
+ *
+ * Each part keeps its own content, URLs and progress record — a track changes only how the parts
+ * are navigated, searched and summarised, so a learner moves from the last concept of one part
+ * straight into the first concept of the next. A language not listed in a track stands alone.
+ */
+export interface TrackConfig {
+  id: string;
+  /** Shown wherever the site names the curriculum: header, dashboard, breadcrumbs. */
+  title: string;
+  blurb: string;
+  /** Language ids in reading order. */
+  parts: string[];
+}
+
+const MULTI_PART_TRACKS: TrackConfig[] = [
+  {
+    id: "java-spring-boot",
+    title: "Java + Spring Boot",
+    blurb:
+      "The language first, then the framework built on it — one path from the JVM to production Spring services.",
+    parts: ["java", "spring-boot"],
+  },
+];
+
+/** The track a language belongs to: its multi-part track, or a track of its own. */
+export function trackFor(languageId: string): TrackConfig {
+  const shared = MULTI_PART_TRACKS.find((track) => track.parts.includes(languageId));
+  if (shared) return shared;
+  const config = BY_ID.get(languageId);
+  return {
+    id: languageId,
+    title: config?.title ?? languageId,
+    blurb: config?.blurb ?? "",
+    parts: [languageId],
+  };
+}
+
+/** Every track once, in the registry order of its first part. */
+export function trackConfigs(): TrackConfig[] {
+  const seen = new Map<string, TrackConfig>();
+  for (const language of LANGUAGES) {
+    const track = trackFor(language.id);
+    if (!seen.has(track.id)) seen.set(track.id, track);
+  }
+  return [...seen.values()];
+}
+
 /** Resolves a canonical concept number to the source concept number for a given level. */
 export function sourceNumberFor(
   config: LanguageConfig | null,

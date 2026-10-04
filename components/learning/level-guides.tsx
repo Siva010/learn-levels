@@ -7,13 +7,13 @@ import { BlockList } from "@/components/content/section-renderer";
  * reader where to go next. Both are source content, so both are surfaced here rather than being
  * parsed and then dropped.
  */
-export function LevelGuides({ levels }: { levels: LevelMeta[] }) {
+export function LevelGuides({ levels, title }: { levels: LevelMeta[]; title?: string }) {
   const withContent = levels.filter((level) => level.goal || level.epilogue);
   if (withContent.length === 0) return null;
 
   return (
     <section>
-      <h2 className="text-sm font-semibold">About each level</h2>
+      <h2 className="text-sm font-semibold">{title ?? "About each level"}</h2>
       <p className="mt-1 text-xs text-fg-subtle">
         Taken from the source files — what each level is for, and where it leads.
       </p>

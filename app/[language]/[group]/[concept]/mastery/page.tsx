@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Breadcrumbs } from "@/components/navigation/breadcrumbs";
 import { MasteryView } from "@/components/concepts/mastery-view";
-import { getConcept, getCurriculum, getLanguages } from "@/lib/content/curriculum";
+import { getConcept, getCurriculum, getLanguages, trackCrumbs } from "@/lib/content/curriculum";
 
 interface RouteParams {
   language: string;
@@ -44,7 +44,7 @@ export default async function MasteryPage({ params }: { params: Promise<RoutePar
     <div className="mx-auto max-w-3xl px-4 py-8 lg:px-8 lg:py-12">
       <Breadcrumbs
         items={[
-          { label: curriculum.title, href: `/${language}` },
+          ...trackCrumbs(language),
           { label: group.title, href: `/${language}/${groupSlug}` },
           { label: concept.title, href: `/${language}/${groupSlug}/${conceptSlug}` },
           { label: "Mastery" },

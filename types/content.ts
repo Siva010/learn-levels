@@ -283,6 +283,16 @@ export interface CurriculumSkeleton {
   levels: LevelMeta[];
 }
 
+/**
+ * The curriculum as the site presents it: one or more language skeletons read in order.
+ * A single-language track has one part.
+ */
+export interface TrackSkeleton {
+  id: string;
+  title: string;
+  parts: CurriculumSkeleton[];
+}
+
 /* ------------------------------------------------------------------ search */
 
 export interface SearchDoc {
@@ -295,4 +305,6 @@ export interface SearchDoc {
   sectionLabel: string;
   sectionKind: SectionKind;
   text: string;
+  /** Not stored in the index files; added in the browser when several parts are searched together. */
+  language?: string;
 }

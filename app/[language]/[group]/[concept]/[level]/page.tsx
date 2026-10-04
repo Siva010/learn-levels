@@ -8,12 +8,16 @@ import {
   getCurriculum,
   getLanguages,
   isLevelId,
+  getConceptNeighbours,
+  getTrack,
+  trackCrumbs,
 } from "@/lib/content/curriculum";
 import { Breadcrumbs } from "@/components/navigation/breadcrumbs";
 import { ConceptProgress } from "@/components/concepts/concept-progress";
 import { LevelFooter, LevelSwitcher } from "@/components/concepts/level-nav";
 import { OnThisPage } from "@/components/concepts/on-this-page";
 import { RelatedConcepts } from "@/components/concepts/related-concepts";
+import { SequenceNav, type SequenceItem } from "@/components/concepts/sequence-nav";
 import { SectionRenderer, sectionAnchor } from "@/components/content/section-renderer";
 import { LevelTag } from "@/components/ui/pill";
 
@@ -73,6 +77,20 @@ export default async function ConceptLevelPage({ params }: { params: Promise<Rou
     available,
   };
 
+  // Previous/next concept at this level, across the whole track — Java runs on into Spring Boot.
+  const track = getTrack(language);
+  const neighbours = getConceptNeighbours(language, concept.id, level);
+  const toItem = (ref: typeof neighbours.next): SequenceItem | null =>
+    ref
+      ? {
+          href: `/${ref.language}/${ref.group.slug}/${ref.concept.slug}/${level}`,
+          title: ref.concept.title,
+          context: ref.group.title,
+          language: ref.language,
+          partTitle: `Part ${track.parts.indexOf(ref.language) + 1} · ${ref.partTitle}`,
+        }
+      : null;
+
   const pageSections = (content?.sections ?? [])
     .map((section, index) => ({ anchor: sectionAnchor(section, index), label: section.label }))
     .filter((entry) => entry.label);
@@ -82,7 +100,7 @@ export default async function ConceptLevelPage({ params }: { params: Promise<Rou
       <div className="min-w-0 max-w-3xl flex-1">
       <Breadcrumbs
         items={[
-          { label: curriculum.title, href: `/${language}` },
+          ...trackCrumbs(language),
           { label: group.title, href: `/${language}/${groupSlug}` },
           { label: concept.title },
           { label: ui.title },
@@ -176,6 +194,13 @@ export default async function ConceptLevelPage({ params }: { params: Promise<Rou
         />
 
         <LevelFooter concept={conceptRef} current={level} />
+
+        <SequenceNav
+          label={`concept at ${ui.title}`}
+          language={language}
+          previous={toItem(neighbours.previous)}
+          next={toItem(neighbours.next)}
+        />
       </div>
 
       <aside className="hidden w-48 shrink-0 xl:block">

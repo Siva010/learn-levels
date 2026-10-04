@@ -9,19 +9,22 @@ import { ThemeToggle } from "@/components/layout/theme";
 import { CommandPalette } from "@/components/search/command-palette";
 import { Kbd } from "@/components/ui/pill";
 
-export interface LanguageLink {
+export interface TrackLink {
   id: string;
   title: string;
+  href: string;
+  /** Language ids in the track; the link is current when the page's language is one of them. */
+  parts: string[];
 }
 
 export function SiteHeader({
   language,
-  languages,
+  tracks,
 }: {
   language: string;
-  languages: LanguageLink[];
+  tracks: TrackLink[];
 }) {
-  const { skeleton } = useProgress();
+  const { track } = useProgress();
   const [navOpen, setNavOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -117,29 +120,32 @@ export function SiteHeader({
           </Link>
 
           <span className="hidden text-fg-subtle sm:inline">/</span>
-          {/* One language is a label; more than one is a switcher that keeps the current level. */}
-          <nav aria-label="Language" className="hidden items-center gap-1 sm:flex">
-            {languages.length > 1 ? (
-              languages.map((entry) => (
-                <Link
-                  key={entry.id}
-                  href={`/${entry.id}`}
-                  aria-current={entry.id === language ? "page" : undefined}
-                  className={
-                    entry.id === language
-                      ? "rounded-md bg-panel-raised px-2 py-1 text-sm text-fg"
-                      : "rounded-md px-2 py-1 text-sm text-fg-subtle transition-colors hover:text-fg"
-                  }
-                >
-                  {entry.title}
-                </Link>
-              ))
+          {/* One track is a label; more than one is a switcher. A multi-part track is one entry. */}
+          <nav aria-label="Curriculum" className="hidden items-center gap-1 sm:flex">
+            {tracks.length > 1 ? (
+              tracks.map((entry) => {
+                const current = entry.parts.includes(language);
+                return (
+                  <Link
+                    key={entry.id}
+                    href={entry.href}
+                    aria-current={current ? "page" : undefined}
+                    className={
+                      current
+                        ? "rounded-md bg-panel-raised px-2 py-1 text-sm text-fg"
+                        : "rounded-md px-2 py-1 text-sm text-fg-subtle transition-colors hover:text-fg"
+                    }
+                  >
+                    {entry.title}
+                  </Link>
+                );
+              })
             ) : (
               <Link
                 href={`/${language}`}
                 className="text-sm text-fg-muted transition-colors hover:text-fg"
               >
-                {skeleton.title}
+                {track.title}
               </Link>
             )}
           </nav>

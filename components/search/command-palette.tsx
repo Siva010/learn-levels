@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import type { LevelId } from "@/types/content";
 import { LEVEL_ORDER, LEVEL_UI, levelClass } from "@/lib/levels";
-import { findNextUp } from "@/lib/progress/compute";
+import { findTrackNextUp } from "@/lib/progress/compute";
 import { useProgress } from "@/lib/progress/provider";
 import { useSearch } from "@/lib/search/use-search";
 import { Highlight } from "@/components/search/highlight";
@@ -34,28 +34,33 @@ interface Command {
 /** Mounted only while open, so every invocation starts from a clean state. */
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const router = useRouter();
-  const { skeleton, progress } = useProgress();
+  const { skeleton, track, progressFor } = useProgress();
   const [query, setQuery] = useState("");
   // The active row is stored with the query it belongs to, so a new query resets the
   // highlight during render instead of through an effect.
   const [cursor, setCursor] = useState<{ query: string; index: number }>({ query: "", index: 0 });
   const listRef = useRef<HTMLUListElement>(null);
-  const { hits, terms } = useSearch(query, skeleton.language, 12);
+  const parts = track.parts.map((part) => part.language);
+  const { hits, terms } = useSearch(query, parts, 12);
+  const multiPart = track.parts.length > 1;
 
   const commands = useMemo<Command[]>(() => {
-    const language = skeleton.language;
     const trimmed = query.trim().toLowerCase();
     const results: Command[] = [];
+    // Every group and concept of the track, each with the part it belongs to.
+    const entries = track.parts.flatMap((part) =>
+      part.groups.map((group) => ({ part, group })),
+    );
 
     if (!trimmed) {
-      const next = findNextUp(skeleton, progress);
+      const next = findTrackNextUp(track, progressFor);
       if (next) {
         results.push({
           id: "continue",
           label: `Continue — ${next.concept.title}`,
           hint: LEVEL_UI[next.level].title,
           group: "Actions",
-          href: `/${language}/${next.group.slug}/${next.concept.slug}/${next.level}`,
+          href: `/${next.language}/${next.group.slug}/${next.concept.slug}/${next.level}`,
           icon: Play,
           level: next.level,
         });
@@ -64,48 +69,51 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         id: "dashboard",
         label: "Open dashboard",
         group: "Actions",
-        href: `/${language}`,
+        href: `/${skeleton.language}`,
         icon: Layers,
       });
     }
 
     // Topic groups
-    for (const group of skeleton.groups) {
+    for (const { part, group } of entries) {
       if (group.concepts.length === 0) continue;
       if (trimmed && !group.title.toLowerCase().includes(trimmed)) continue;
       results.push({
-        id: `group-${group.slug}`,
+        id: `group-${part.language}-${group.slug}`,
         label: group.title,
-        hint: `${group.concepts.length} concepts`,
+        hint: multiPart
+          ? `${part.title} · ${group.concepts.length} concepts`
+          : `${group.concepts.length} concepts`,
         group: "Topics",
-        href: `/${language}/${group.slug}`,
+        href: `/${part.language}/${group.slug}`,
         icon: BookOpen,
       });
     }
 
     // Concepts, matched on title
     if (trimmed) {
-      for (const group of skeleton.groups) {
+      for (const { part, group } of entries) {
         for (const concept of group.concepts) {
           if (!concept.title.toLowerCase().includes(trimmed)) continue;
           results.push({
-            id: `concept-${concept.id}`,
+            id: `concept-${part.language}-${concept.id}`,
             label: concept.title,
-            hint: group.title,
+            hint: multiPart ? `${part.title} · ${group.title}` : group.title,
             group: "Concepts",
-            href: `/${language}/${group.slug}/${concept.slug}/${concept.levels[0] ?? "foundation"}`,
+            href: `/${part.language}/${group.slug}/${concept.slug}/${concept.levels[0] ?? "foundation"}`,
             icon: FileText,
           });
         }
       }
     } else {
-      // "Go to <Level>" jumps to the first concept not yet completed at that level.
+      // "Go to <Level>" jumps to the first concept not yet completed at that level, across parts.
       for (const level of LEVEL_ORDER) {
-        const target = skeleton.groups
-          .flatMap((group) => group.concepts.map((concept) => ({ group, concept })))
+        const target = entries
+          .flatMap(({ part, group }) => group.concepts.map((concept) => ({ part, group, concept })))
           .find(
             (entry) =>
-              entry.concept.levels.includes(level) && !progress.levels?.[level]?.[entry.concept.id],
+              entry.concept.levels.includes(level) &&
+              !progressFor(entry.part.language).levels?.[level]?.[entry.concept.id],
           );
         if (!target) continue;
         results.push({
@@ -113,7 +121,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           label: `Go to ${LEVEL_UI[level].title}`,
           hint: target.concept.title,
           group: "Levels",
-          href: `/${language}/${target.group.slug}/${target.concept.slug}/${level}`,
+          href: `/${target.part.language}/${target.group.slug}/${target.concept.slug}/${level}`,
           icon: ArrowRight,
           level,
         });
@@ -121,7 +129,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
 
     return results.slice(0, 24);
-  }, [progress, query, skeleton]);
+  }, [multiPart, progressFor, query, skeleton.language, track]);
 
   const fullText = useMemo<Command[]>(
     () =>
@@ -130,7 +138,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         label: hit.conceptTitle,
         hint: hit.sectionLabel || LEVEL_UI[hit.level].title,
         group: "In the content",
-        href: `/${skeleton.language}/${hit.groupSlug}/${hit.conceptSlug}/${hit.level}`,
+        href: `/${hit.language ?? skeleton.language}/${hit.groupSlug}/${hit.conceptSlug}/${hit.level}`,
         icon: SearchIcon,
         level: hit.level,
         snippet: hit.snippet,

@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CurriculumSkeleton, LevelId } from "@/types/content";
+import type { CurriculumSkeleton, LevelId, TrackSkeleton } from "@/types/content";
 import { createLocalProgressStore } from "./local-store";
 import {
   emptyLanguageProgress,
@@ -21,25 +21,35 @@ import {
 } from "./types";
 
 interface ProgressContextValue {
+  /** The part this page belongs to. */
   skeleton: CurriculumSkeleton;
+  /** Every part of the curriculum, in reading order — one part for a standalone language. */
+  track: TrackSkeleton;
+  /** Progress for this page's part. */
   progress: LanguageProgress;
+  /** Progress for any part of the track. */
+  progressFor: (language: string) => LanguageProgress;
   /** False until the store has been read — render progress UI only after this flips. */
   ready: boolean;
   isComplete: (level: LevelId, conceptId: string) => boolean;
   setComplete: (level: LevelId, conceptId: string, complete: boolean) => void;
   toggleComplete: (level: LevelId, conceptId: string) => void;
   recordVisit: (visit: Omit<LastVisited, "at">) => void;
+  /** Clears progress for every part of the track. */
   reset: () => void;
 }
 
 const ProgressContext = createContext<ProgressContextValue | null>(null);
 
 export function ProgressProvider({
-  skeleton,
+  track,
+  language,
   children,
   store,
 }: {
-  skeleton: CurriculumSkeleton;
+  track: TrackSkeleton;
+  /** The part this page belongs to; must be one of `track.parts`. */
+  language: string;
   children: React.ReactNode;
   store?: ProgressStore;
 }) {
@@ -61,28 +71,36 @@ export function ProgressProvider({
     };
   }, []);
 
-  const language = skeleton.language;
+  const skeleton = track.parts.find((part) => part.language === language) ?? track.parts[0];
   const progress = snapshot.languages[language] ?? emptyLanguageProgress();
 
-  const update = useCallback(
-    (mutate: (draft: LanguageProgress) => LanguageProgress) => {
+  // Each part keeps its own progress record, so a track never changes what is stored.
+  const updateLanguages = useCallback(
+    (languages: string[], mutate: (draft: LanguageProgress) => LanguageProgress) => {
       setSnapshot((current) => {
-        const existing = current.languages[language] ?? emptyLanguageProgress();
-        const next: ProgressSnapshot = {
-          ...current,
-          languages: { ...current.languages, [language]: mutate(structuredClone(existing)) },
-        };
+        const updated = { ...current.languages };
+        for (const id of languages) {
+          updated[id] = mutate(structuredClone(current.languages[id] ?? emptyLanguageProgress()));
+        }
+        const next: ProgressSnapshot = { ...current, languages: updated };
         void storeRef.current.write(next);
         return next;
       });
     },
-    [language],
+    [],
+  );
+
+  const update = useCallback(
+    (mutate: (draft: LanguageProgress) => LanguageProgress) => updateLanguages([language], mutate),
+    [language, updateLanguages],
   );
 
   const value = useMemo<ProgressContextValue>(
     () => ({
       skeleton,
+      track,
       progress,
+      progressFor: (id) => snapshot.languages[id] ?? emptyLanguageProgress(),
       ready,
       isComplete: (level, conceptId) => Boolean(progress.levels?.[level]?.[conceptId]),
       setComplete: (level, conceptId, complete) =>
@@ -105,9 +123,12 @@ export function ProgressProvider({
           lastVisited: { ...visit, at: new Date().toISOString() },
         })),
       reset: () =>
-        update(() => emptyLanguageProgress()),
+        updateLanguages(
+          track.parts.map((part) => part.language),
+          () => emptyLanguageProgress(),
+        ),
     }),
-    [progress, ready, skeleton, update],
+    [progress, ready, skeleton, snapshot.languages, track, update, updateLanguages],
   );
 
   return <ProgressContext.Provider value={value}>{children}</ProgressContext.Provider>;

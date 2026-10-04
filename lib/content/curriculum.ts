@@ -7,9 +7,18 @@ import type {
   Group,
   LevelId,
   LevelMeta,
+  TrackSkeleton,
 } from "@/types/content";
 import { LEVEL_IDS } from "@/types/content";
-import { DEFAULT_LANGUAGE, LANGUAGES, languageIds } from "./languages";
+import {
+  DEFAULT_LANGUAGE,
+  LANGUAGES,
+  languageIds,
+  trackConfigs,
+  trackFor,
+  type TrackConfig,
+} from "./languages";
+import { partAnchor } from "@/lib/tracks";
 import javaJson from "@/data/generated/java.curriculum.json";
 import pythonJson from "@/data/generated/python.curriculum.json";
 import springBootJson from "@/data/generated/spring-boot.curriculum.json";
@@ -71,19 +80,68 @@ export function getAllConcepts(
   );
 }
 
-export interface ConceptNeighbours {
-  previous: { group: Group; concept: Concept } | null;
-  next: { group: Group; concept: Concept } | null;
+/** A concept located within its track: which part it is in, as well as where in that part. */
+export interface TrackConceptRef {
+  language: string;
+  partTitle: string;
+  group: Group;
+  concept: Concept;
 }
 
-/** Previous/next concept at the same level, skipping concepts that level does not cover. */
+export interface ConceptNeighbours {
+  previous: TrackConceptRef | null;
+  next: TrackConceptRef | null;
+}
+
+/**
+ * Previous/next concept at the same level, across the whole track — so the last concept of one
+ * part leads straight into the first concept of the next. Concepts a level does not cover are
+ * skipped.
+ */
 export function getConceptNeighbours(
   language: string,
   conceptId: string,
   level: LevelId,
 ): ConceptNeighbours {
-  const all = getAllConcepts(language).filter((entry) => entry.concept.levels[level]);
-  const index = all.findIndex((entry) => entry.concept.id === conceptId);
+  const all = getTrack(language).parts.flatMap((part) => {
+    const curriculum = getCurriculum(part);
+    if (!curriculum) return [];
+    return getAllConcepts(part)
+      .filter((entry) => entry.concept.levels[level])
+      .map((entry) => ({ language: part, partTitle: curriculum.title, ...entry }));
+  });
+  const index = all.findIndex(
+    (entry) => entry.language === language && entry.concept.id === conceptId,
+  );
+  if (index < 0) return { previous: null, next: null };
+  return {
+    previous: index > 0 ? all[index - 1] : null,
+    next: index < all.length - 1 ? all[index + 1] : null,
+  };
+}
+
+/** A topic group located within its track. */
+export interface TrackGroupRef {
+  language: string;
+  partTitle: string;
+  group: Group;
+}
+
+/** Previous/next written topic group across the whole track. */
+export function getGroupNeighbours(
+  language: string,
+  groupSlug: string,
+): { previous: TrackGroupRef | null; next: TrackGroupRef | null } {
+  const all = getTrack(language).parts.flatMap((part) => {
+    const curriculum = getCurriculum(part);
+    if (!curriculum) return [];
+    return curriculum.groups
+      .filter((group) => group.concepts.length > 0)
+      .map((group) => ({ language: part, partTitle: curriculum.title, group }));
+  });
+  const index = all.findIndex(
+    (entry) => entry.language === language && entry.group.slug === groupSlug,
+  );
   if (index < 0) return { previous: null, next: null };
   return {
     previous: index > 0 ? all[index - 1] : null,
@@ -121,6 +179,43 @@ export function getSkeleton(language = DEFAULT_LANGUAGE): CurriculumSkeleton | n
       })),
     })),
   };
+}
+
+/** The track a language belongs to, limited to parts whose model is generated. */
+export function getTrack(language: string): TrackConfig {
+  const track = trackFor(language);
+  return { ...track, parts: track.parts.filter((part) => part in CURRICULA) };
+}
+
+/** Every track with at least one generated part, in registry order. */
+export function getTracks(): TrackConfig[] {
+  return trackConfigs()
+    .map((track) => ({ ...track, parts: track.parts.filter((part) => part in CURRICULA) }))
+    .filter((track) => track.parts.length > 0);
+}
+
+/** The skeletons of every part of a language's track, in reading order, for client components. */
+export function getTrackSkeleton(language: string): TrackSkeleton | null {
+  const track = getTrack(language);
+  const parts = track.parts.flatMap((part) => {
+    const skeleton = getSkeleton(part);
+    return skeleton ? [skeleton] : [];
+  });
+  return parts.length > 0 ? { id: track.id, title: track.title, parts } : null;
+}
+
+/**
+ * The leading breadcrumbs for any page inside a part: the track, then — when the track has several
+ * parts — the part itself, linking to its section of the shared dashboard.
+ */
+export function trackCrumbs(language: string): Array<{ label: string; href: string }> {
+  const track = getTrack(language);
+  const title = getCurriculum(language)?.title ?? language;
+  if (track.parts.length <= 1) return [{ label: title, href: `/${language}` }];
+  return [
+    { label: track.title, href: `/${track.parts[0]}` },
+    { label: title, href: `/${language}#${partAnchor(language)}` },
+  ];
 }
 
 export function conceptHref(

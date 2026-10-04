@@ -8,12 +8,12 @@ import { LEVEL_UI, levelClass } from "@/lib/levels";
 import { useSearch } from "@/lib/search/use-search";
 import { Highlight } from "@/components/search/highlight";
 
-export function SearchResults({ language }: { language: string }) {
+export function SearchResults({ language, parts }: { language: string; parts: string[] }) {
   const params = useSearchParams();
   const router = useRouter();
   const initial = params.get("q") ?? "";
   const [query, setQuery] = useState(initial);
-  const { hits, terms, total, loading } = useSearch(query, language, 40);
+  const { hits, terms, total, loading } = useSearch(query, parts, 40);
 
   // Keep the URL shareable without pushing a history entry per keystroke.
   useEffect(() => {
@@ -52,7 +52,7 @@ export function SearchResults({ language }: { language: string }) {
         {hits.map((hit) => (
           <li key={hit.id}>
             <Link
-              href={`/${language}/${hit.groupSlug}/${hit.conceptSlug}/${hit.level}`}
+              href={`/${hit.language ?? language}/${hit.groupSlug}/${hit.conceptSlug}/${hit.level}`}
               className={`block rounded-lg border border-line bg-panel p-4 transition-colors hover:border-line-strong ${levelClass(hit.level)}`}
             >
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-fg-subtle">

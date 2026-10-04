@@ -17,8 +17,9 @@ export function Sidebar({
   className?: string;
   onNavigate?: () => void;
 }) {
-  const { skeleton, progress, ready } = useProgress();
+  const { track, progressFor, ready } = useProgress();
   const pathname = usePathname();
+  const multiPart = track.parts.length > 1;
 
   const active = useMemo(() => parsePath(pathname), [pathname]);
   const [openLevel, setOpenLevel] = useState<LevelId | null>(active.level ?? "foundation");
@@ -26,11 +27,11 @@ export function Sidebar({
   return (
     <nav className={cn("flex h-full flex-col gap-1 overflow-y-auto scrollbar-thin px-3 py-4", className)} aria-label="Curriculum">
       <div className="px-2 pb-2">
-        <p className="eyebrow">{skeleton.title}</p>
+        <p className="eyebrow">{track.title}</p>
       </div>
 
       <Link
-        href={`/${skeleton.language}`}
+        href={`/${active.language ?? track.parts[0].language}`}
         onClick={onNavigate}
         className={cn(
           "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
@@ -71,19 +72,45 @@ export function Sidebar({
 
               {isOpen ? (
                 <ul className="mb-2 ml-[1.1rem] space-y-0.5 border-l border-line pl-2">
-                  {skeleton.groups.map((group) => (
-                    <SidebarGroup
-                      key={group.slug}
-                      group={group}
-                      level={level}
-                      language={skeleton.language}
-                      ratio={ready ? groupLevelRatio(group, progress, level).percent : 0}
-                      isActiveGroup={active.groupSlug === group.slug && active.level === level}
-                      activeConcept={active.conceptSlug}
-                      onNavigate={onNavigate}
-                      completed={(conceptId) => ready && Boolean(progress.levels?.[level]?.[conceptId])}
-                    />
-                  ))}
+                  {track.parts.map((part, partIndex) => {
+                    const progress = progressFor(part.language);
+                    return (
+                      <li key={part.language}>
+                        {/* A multi-part track names each part, so the boundary is visible but not a wall. */}
+                        {multiPart ? (
+                          <p
+                            className={cn(
+                              "px-2 pb-1 text-2xs font-medium uppercase tracking-[0.1em] text-fg-subtle",
+                              partIndex > 0 ? "pt-3" : "pt-1",
+                            )}
+                          >
+                            Part {partIndex + 1} · {part.title}
+                          </p>
+                        ) : null}
+                        <ul className="space-y-0.5">
+                          {part.groups.map((group) => (
+                            <SidebarGroup
+                              key={group.slug}
+                              group={group}
+                              level={level}
+                              language={part.language}
+                              ratio={ready ? groupLevelRatio(group, progress, level).percent : 0}
+                              isActiveGroup={
+                                active.language === part.language &&
+                                active.groupSlug === group.slug &&
+                                active.level === level
+                              }
+                              activeConcept={active.conceptSlug}
+                              onNavigate={onNavigate}
+                              completed={(conceptId) =>
+                                ready && Boolean(progress.levels?.[level]?.[conceptId])
+                              }
+                            />
+                          ))}
+                        </ul>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </div>
@@ -177,15 +204,17 @@ function SidebarGroup({
 
 interface ActivePath {
   isOverview: boolean;
+  language?: string;
   groupSlug?: string;
   conceptSlug?: string;
   level?: LevelId;
 }
 
 function parsePath(pathname: string): ActivePath {
-  const [, , groupSlug, conceptSlug, level] = pathname.split("/");
+  const [, language, groupSlug, conceptSlug, level] = pathname.split("/");
   return {
     isOverview: !groupSlug,
+    language: language || undefined,
     groupSlug,
     conceptSlug,
     level: LEVEL_ORDER.includes(level as LevelId) ? (level as LevelId) : undefined,

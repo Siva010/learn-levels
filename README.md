@@ -6,7 +6,9 @@ A learning platform that teaches the same concept through four increasing levels
 
 Three curricula ship today — **Java** (132 concepts), **Python** (126 concepts) and **Spring Boot**
 (125 concepts, which assumes the Java curriculum) — each written as four Markdown files and rendered
-by the same pipeline.
+by the same pipeline. The site presents Java and Spring Boot as one curriculum, **Java + Spring
+Boot**, in two parts: one dashboard, sidebar, search and progress view, with navigation that runs
+from the last Java concept straight into the first Spring Boot one.
 
 ## Content is the source of truth
 
@@ -125,6 +127,11 @@ rewrite extensionless URLs still resolve `/java/generics/wildcards/interview/`.
 - **Section labels are preserved verbatim.** The Understand files use a long tail of distinct
   labels, most appearing once. Known labels get bespoke presentation; the rest render generically
   rather than being dropped.
+- **Tracks join languages without merging them.** A track in `lib/content/languages.ts` lists
+  languages in reading order. Each part keeps its own content, URLs (`/java/...`,
+  `/spring-boot/...`) and progress record, so nothing stored or linked changes; the track only
+  decides how the parts are navigated, searched and summarised. A language in no track stands
+  alone.
 - **Languages are registry entries.** `lib/content/languages.ts` holds the display title, the
   home-page blurb, and the two per-language parser inputs that cannot be derived from the source —
   the concept alias table and the generic-title stoplist.

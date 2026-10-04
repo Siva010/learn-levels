@@ -3,14 +3,15 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { LEVEL_UI, levelClass } from "@/lib/levels";
-import { findNextUp } from "@/lib/progress/compute";
+import { findTrackNextUp } from "@/lib/progress/compute";
 import { useProgress } from "@/lib/progress/provider";
 import { LevelTag } from "@/components/ui/pill";
 
 export function ContinueLearning() {
-  const { skeleton, progress, ready } = useProgress();
-  const next = findNextUp(skeleton, progress);
-  const hasStarted = Boolean(progress.lastVisited);
+  const { track, progressFor, ready } = useProgress();
+  const next = findTrackNextUp(track, progressFor);
+  const hasStarted = track.parts.some((part) => Boolean(progressFor(part.language).lastVisited));
+  const multiPart = track.parts.length > 1;
 
   if (!next) {
     return (
@@ -24,7 +25,7 @@ export function ContinueLearning() {
     );
   }
 
-  const href = `/${skeleton.language}/${next.group.slug}/${next.concept.slug}/${next.level}`;
+  const href = `/${next.language}/${next.group.slug}/${next.concept.slug}/${next.level}`;
 
   return (
     <section className={`rounded-lg border border-line bg-panel p-5 ${levelClass(next.level)}`}>
@@ -32,7 +33,10 @@ export function ContinueLearning() {
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-xs text-fg-muted">{next.group.title}</p>
+          <p className="text-xs text-fg-muted">
+            {multiPart ? `${next.partTitle} · ` : ""}
+            {next.group.title}
+          </p>
           <h2 className="mt-0.5 truncate text-lg font-semibold tracking-tight">
             {next.concept.title}
           </h2>

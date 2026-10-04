@@ -3,7 +3,15 @@ import { notFound } from "next/navigation";
 import { Breadcrumbs } from "@/components/navigation/breadcrumbs";
 import { TopicConcepts, TopicLevelSummary } from "@/components/learning/topic-concepts";
 import { StatusPill } from "@/components/ui/pill";
-import { getCurriculum, getGroup, getLanguages } from "@/lib/content/curriculum";
+import { SequenceNav, type SequenceItem } from "@/components/concepts/sequence-nav";
+import {
+  getCurriculum,
+  getGroup,
+  getGroupNeighbours,
+  getLanguages,
+  getTrack,
+  trackCrumbs,
+} from "@/lib/content/curriculum";
 
 export function generateStaticParams() {
   return getLanguages().flatMap((language) =>
@@ -30,11 +38,25 @@ export default async function TopicPage({
   const group = getGroup(language, groupSlug);
   if (!curriculum || !group) notFound();
 
+  // Previous/next topic across the whole track, so the last Java topic leads into Spring Boot.
+  const track = getTrack(language);
+  const neighbours = getGroupNeighbours(language, groupSlug);
+  const toItem = (ref: typeof neighbours.next): SequenceItem | null =>
+    ref
+      ? {
+          href: `/${ref.language}/${ref.group.slug}`,
+          title: ref.group.title,
+          context: `${ref.group.concepts.length} concepts`,
+          language: ref.language,
+          partTitle: `Part ${track.parts.indexOf(ref.language) + 1} · ${ref.partTitle}`,
+        }
+      : null;
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 lg:px-8 lg:py-12">
       <Breadcrumbs
         items={[
-          { label: curriculum.title, href: `/${language}` },
+          ...trackCrumbs(language),
           { label: group.title },
         ]}
       />
@@ -72,6 +94,15 @@ export default async function TopicPage({
           </section>
         </>
       )}
+
+      <div className="mt-10">
+        <SequenceNav
+          label="topic"
+          language={language}
+          previous={toItem(neighbours.previous)}
+          next={toItem(neighbours.next)}
+        />
+      </div>
     </div>
   );
 }

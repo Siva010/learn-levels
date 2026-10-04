@@ -2,6 +2,8 @@ import type { LevelId, SearchDoc } from "@/types/content";
 
 export interface SearchHit {
   id: string;
+  /** The part a hit belongs to, when several parts are searched together. */
+  language?: string;
   groupSlug: string;
   groupTitle: string;
   conceptSlug: string;
@@ -45,7 +47,8 @@ export function search(
     const score = scoreDoc(doc, terms);
     if (score <= 0) continue;
     scored.push({
-      id: doc.id,
+      id: doc.language ? `${doc.language}:${doc.id}` : doc.id,
+      language: doc.language,
       groupSlug: doc.groupSlug,
       groupTitle: doc.groupTitle,
       conceptSlug: doc.conceptSlug,
