@@ -11308,7 +11308,9 @@ A worked design of a complete Spring Boot service — an order service with REST
 Because interviews and real projects test integration: how the pieces interact, where consistency boundaries lie and how the whole behaves when one part fails.
 
 #### Interview explanation
-Present it as a modular monolith with explicit boundaries. Walk through one request — authenticate, validate, apply domain rules in a short transaction, write the outbox row, return — then the asynchronous tail: relay to Kafka, idempotent consumers downstream. Explain why each technology is there and what failure each design choice guards against.
+**In 30 seconds** — A sound design for an order service is a modular monolith with clear internal boundaries: REST controllers, a transactional service layer, JPA over PostgreSQL with Flyway migrations, Redis cache-aside for the read-heavy catalogue, a transactional outbox relayed to Kafka for events, a payment client with timeouts and a circuit breaker, JWT resource-server security, and Actuator with Micrometer and OpenTelemetry. Each piece is there because it guards against a specific failure.
+
+**If they push deeper** — present it as a modular monolith with explicit boundaries. Walk through one request — authenticate, validate, apply domain rules in a short transaction, write the outbox row, return — then the asynchronous tail: relay to Kafka, idempotent consumers downstream. Explain why each technology is there and what failure each design choice guards against.
 
 #### Syntax
 ```text
@@ -11328,13 +11330,36 @@ public OrderResponse place(PlaceOrderCommand command) {
 }
 ```
 
+Predict what happens while Redis is down — a question below asks for it:
+
+```text
+Peak traffic: 200 orders/second. Placing an order:
+  1. Authenticate (JWT)            4. Insert order + outbox row, commit
+  2. Validate the request          5. Return 201
+  3. Price lines (Redis cache)     6. Relay publishes OrderPlaced to Kafka
+                                   7. Payment consumer authorises the payment
+Redis goes down for five minutes.
+```
+
 #### Common interview questions
 - "Design an order service in Spring Boot." (A modular monolith: REST controllers, a transactional service layer, JPA over PostgreSQL with Flyway, Redis cache-aside for the catalogue, an outbox to Kafka for events, a resilient payment client, JWT resource-server security, and Actuator with Micrometer and OpenTelemetry.)
 - "Why not microservices from the start?" (Network calls, distributed data and operational overhead cost more than they return until scale or team structure demands it; clear module boundaries keep extraction possible.)
 - "How do you keep the database and Kafka consistent?" (A transactional outbox: the event row is committed with the business change, and a relay publishes it afterwards, giving at-least-once delivery.)
 - "Where does caching fit?" (Read-heavy, change-tolerant data such as the product catalogue, with cache-aside and TTLs, never the order state itself.)
+- "What happens to order placement in the example while Redis is down?" (It keeps working, more slowly: cache-aside falls back to the database for prices, so every order now reads the catalogue from PostgreSQL. Whether that is safe depends on sizing — the database must carry the uncached read load — and on the Redis client having short timeouts, so each failed cache call costs milliseconds, not seconds.)
+- "Why authorise the payment asynchronously from the event rather than inside the order request?" (Because the payment provider's latency and outages would otherwise become the order service's: the request would hold a thread and a database transaction while it waited. Committing the order as pending and authorising from the event keeps placement fast and available, at the price of an order being briefly unpaid.)
+- "An interviewer asks what you would add first if traffic grew tenfold. How do you answer?" (By the bottleneck, not by technology: measure where saturation appears — database connections, a slow query, the payment dependency — then name the next step and its cost: more instances within the database's connection limit, read replicas for catalogue reads, more partitions for Kafka consumers, or extracting a module whose load differs.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Design an order service in Spring Boot." — they drill down from your answer. Answer each step before opening it:
+
+- "Why a modular monolith rather than microservices?" (Because network calls, distributed data and per-service operations cost more than they return until scale or team structure demands them; clear module boundaries keep a later extraction possible.)
+- "How do the database and Kafka stay consistent?" (Through the outbox: the event row commits in the same transaction as the order, and a relay publishes it afterwards — at least once, so consumers are idempotent.)
+- "What happens when the payment provider is slow?" (Its client has a timeout and a circuit breaker; failures leave the order pending, and payment is retried from the event later, so the provider's outage never blocks order placement.)
+- "How do you know the whole thing is healthy?" (SLOs on order placement with burn-rate alerts, traces spanning the request and the event flow, consumer-lag monitoring on Kafka, and dashboards for pool saturation.)
+
+Other follow-ups:
+
 - "What happens if Redis is down?" (Cache-aside degrades to database reads; the database must be sized to survive it, possibly with a local fallback cache.)
 - "What if the payment service is slow?" (Timeouts and a circuit breaker bound the impact; the order stays pending and payment completes asynchronously.)
 - "How would you split it later?" (Extract a module whose boundary is already clean, give it its own database, and replace in-process calls with events or APIs.)
@@ -11377,7 +11402,9 @@ Modelling the business domain as aggregates with enforced invariants and explici
 Because the domain model and API contract are the hardest parts of a service to change, and errors in them propagate into the schema, the events and every client.
 
 #### Interview explanation
-Describe the aggregate — `Order` owning its lines, enforcing rules such as "cannot cancel once shipped" — and the state machine. Then describe API decisions: DTOs instead of entities, opaque ids, money as minor units, `ProblemDetail` errors, pagination, idempotency keys and explicit action endpoints for state changes.
+**In 30 seconds** — The domain is modelled as aggregates that enforce their own rules — an `Order` owns its lines and refuses to be cancelled once shipped — with explicit state transitions. The API exposes it through DTOs, not entities: opaque ids, money as integer minor units with a currency, `ProblemDetail` errors with specific types, paged collections, idempotency keys on creation, and explicit action endpoints, such as `POST /orders/{id}/cancel`, for state changes.
+
+**If they push deeper** — describe the aggregate — `Order` owning its lines, enforcing rules such as "cannot cancel once shipped" — and the state machine. Then describe API decisions: DTOs instead of entities, opaque ids, money as minor units, `ProblemDetail` errors, pagination, idempotency keys and explicit action endpoints for state changes.
 
 #### Syntax
 ```java
@@ -11402,13 +11429,32 @@ POST /api/orders/7f3c.../cancel HTTP/1.1
 }
 ```
 
+Spot what is wrong with this API for state changes — a question below asks for it:
+
+```text
+PATCH /api/orders/42      { "status": "SHIPPED" }
+PATCH /api/orders/42      { "status": "CANCELLED" }
+```
+
 #### Common interview questions
 - "Where do business rules belong?" (In the domain model and service layer — the aggregate enforces its own invariants — never in controllers or clients.)
 - "Why not expose JPA entities directly?" (It couples the API to the schema, leaks internal fields, and risks lazy-loading and serialisation failures.)
 - "How do you represent money?" (As integer minor units with a currency code, or `BigDecimal`, never `double`, which cannot represent most decimal fractions exactly.)
 - "How do you model state changes in REST?" (Explicit command endpoints such as `POST /orders/{id}/cancel`, letting the domain enforce valid transitions.)
+- "What is wrong with exposing order state changes as the example's generic `PATCH`?" (It lets the client decide which transitions are valid — cancelling a shipped order is just another field write — and the server must reverse-engineer intent from a diff. Explicit actions such as `POST /orders/42/ship` and `POST /orders/42/cancel` call domain methods that enforce the state machine and return a specific error — a 409 with an `order-already-shipped` problem type.)
+- "Why use opaque ids such as UUIDs in the API rather than database sequence numbers?" (Because sequential ids reveal volume — order 1,042 tells a competitor your sales — and invite enumeration by incrementing, while tying the API to one storage choice. Opaque ids leak nothing and can be generated anywhere.)
+- "A customer cancels an order at the same moment the warehouse marks it shipped, and both requests succeed. How do you prevent it?" (With optimistic locking on the aggregate: a `@Version` on `Order` makes the second commit fail, and the loser gets a 409 instead of overwriting the state; on retry, the domain rule is checked again against the current state.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Where do business rules belong?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does an aggregate enforce?" (Its own invariants — an order cannot be cancelled once shipped, lines cannot be added after payment — through methods that are the only way to change its state.)
+- "How do clients trigger a state change, then?" (Through explicit action endpoints such as `POST /orders/{id}/cancel`, each mapped to one domain method, so the server decides which transitions are valid.)
+- "How do you report a rule violation?" (As a 409 or 422 with a specific `ProblemDetail` type — `order-already-shipped` — distinct from a 400 for malformed input, so clients can react to each case.)
+- "How do you represent money in the API?" (As integer minor units with a currency code — `{"amountMinor": 12999, "currency": "EUR"}` — or as a decimal string; never as a binary floating-point number.)
+
+Other follow-ups:
+
 - "Why opaque ids rather than database keys?" (Sequential keys reveal volume and invite enumeration; UUIDs or other opaque ids decouple the API from storage.)
 - "How do you report validation versus business errors?" (`400` with field errors for malformed input; `409` or `422` with a specific problem type for rule violations.)
 - "How do you keep the API stable as the domain evolves?" (Version DTOs at the edge, evolve additively, and map onto one evolving domain model.)
@@ -11450,7 +11496,9 @@ Resilience patterns for remote calls: timeouts bound waiting, retries repeat tra
 Because in a distributed system a slow or failing dependency is normal, and a caller that waits patiently exhausts its own threads and connections — cascading the failure upstream. Bounding the wait, forgiving brief faults and failing fast during outages keep one sick service from making its callers sick.
 
 #### Interview explanation
-Start with timeouts, since every remote call needs one and the defaults are often infinite or very long. Explain retries with exponential back-off and jitter, only for transient errors and idempotent operations. Then explain the circuit breaker's closed, open and half-open states and its sliding window. Finish with how they compose — and how retry amplification across layers causes outages.
+**In 30 seconds** — Three patterns protect a service from its dependencies. A timeout bounds how long any call can wait — the defaults are often infinite. A retry repeats transient failures, with capped exponential back-off and jitter, and only for idempotent operations. A circuit breaker counts failures over a sliding window and, past a threshold, opens to reject calls instantly, then lets trial calls through after a wait to detect recovery. Combined carelessly, retries at several layers multiply the load on a dependency that is already struggling.
+
+**If they push deeper** — start with timeouts, since every remote call needs one and the defaults are often infinite or very long. Explain retries with exponential back-off and jitter, only for transient errors and idempotent operations. Then explain the circuit breaker's closed, open and half-open states and its sliding window. Finish with how they compose — and how retry amplification across layers causes outages.
 
 #### Syntax
 ```java
@@ -11476,13 +11524,33 @@ Timeout 2 s: threads freed quickly, but every request still waits 2 s and fails.
              orders go to PENDING, payments retried later; half-open probes detect recovery.
 ```
 
+Predict how many calls reach the payment service — a question below asks for it:
+
+```text
+Gateway → Order service → Payment client
+Each layer retries up to 3 times on failure, with no back-off.
+The payment service starts failing every request.
+```
+
 #### Common interview questions
 - "Why does every remote call need a timeout?" (Without one, a hung dependency holds the caller's thread and connection indefinitely, and the caller's capacity drains away.)
 - "When should you retry?" (For transient failures — timeouts, connection resets, `503` — on idempotent operations, with capped exponential back-off and jitter.)
 - "Explain the circuit breaker states." (Closed passes calls and counts failures; open rejects calls immediately for a wait period; half-open allows trial calls and closes on success or reopens on failure.)
 - "What is retry amplification?" (Retries at several layers multiply — three attempts at three layers gives twenty-seven calls — overwhelming a dependency that is already struggling.)
+- "How many calls reach the payment service for one user request in the example?" (Up to 27: three gateway attempts, each causing three order-service attempts, each making three payment calls — instantly, with no back-off, onto a service that is already failing. Retry at one layer only, with exponential back-off and jitter, and let a circuit breaker stop the calls once failure is clear.)
+- "Why must an inner timeout be shorter than the outer one?" (Because the caller gives up at its own deadline: if the inner call may wait longer, the caller times out first and the inner work carries on for nothing, still holding threads and connections. Deadlines should shrink as a request goes deeper.)
+- "A circuit breaker on a rarely used endpoint keeps opening after two or three errors. What is misconfigured?" (Its minimum number of calls — and possibly its window — is too small for the traffic: at low volume, a handful of errors is a high failure rate. Raise the minimum, or use a time-based window, so the breaker opens on evidence rather than noise.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Explain the circuit breaker states." — they drill down from your answer. Answer each step before opening it:
+
+- "What decides when it opens?" (The failure rate — and optionally the slow-call rate — over a sliding window of recent calls, once a minimum number of calls has been recorded.)
+- "What happens to calls while it is open?" (They are rejected immediately, without touching the dependency, so callers fail fast and the dependency gets room to recover; a fallback can supply a safe response.)
+- "How does it decide the dependency has recovered?" (After the wait duration it turns half-open and lets a few trial calls through: if they succeed it closes, and if they fail it opens again.)
+- "In what order do retry and the breaker apply in Resilience4j?" (Retry wraps the circuit breaker by default, so each retry attempt passes through the breaker — and once it opens, retries fail instantly instead of hammering the dependency. A fallback belongs on the outermost layer, or it hides failures from the retry.)
+
+Other follow-ups:
+
 - "Why add jitter?" (Without it, many clients retry in lockstep and hit the recovering service in synchronised waves.)
 - "What should a fallback return?" (Something honest and safe — a pending state, cached data, a degraded response — never a fake success.)
 - "How do you choose the timeout value?" (From the dependency's observed latency percentiles and the caller's own deadline, so the inner timeout is shorter than the outer.)
@@ -11524,7 +11592,9 @@ Rate limiting restricts the number of requests a client may make per time window
 Because capacity is finite, and a service that accepts unlimited work exhausts threads, connections or memory and fails for everyone. Refusing excess early keeps it within capacity, protects it from abusive or buggy clients, and keeps latency predictable for accepted work.
 
 #### Interview explanation
-Explain the token bucket and the alternatives, where limits are enforced (gateway, filter, per dependency), and the HTTP semantics — `429` with `Retry-After`. Then widen to backpressure: every pool in a Boot application is a queue with a limit — Tomcat threads, Hikari connections — and timeouts on waiting matter as much as sizes. Mention that virtual threads remove the thread pool as an implicit limit.
+**In 30 seconds** — Rate limiting caps how many requests a client may make per period — usually with a token bucket per client, answered with `429` and `Retry-After` when exceeded — protecting the service from abusive or buggy clients. Backpressure is the wider principle: every pool in a Boot service — Tomcat threads, Hikari connections, executors — is a queue with a limit, and bounding queues and wait times turns overload into fast rejection instead of collapse. Virtual threads remove the thread pool as an implicit limit, so explicit concurrency limits must replace it.
+
+**If they push deeper** — explain the token bucket and the alternatives, where limits are enforced (gateway, filter, per dependency), and the HTTP semantics — `429` with `Retry-After`. Then widen to backpressure: every pool in a Boot application is a queue with a limit — Tomcat threads, Hikari connections — and timeouts on waiting matter as much as sizes. Mention that virtual threads remove the thread pool as an implicit limit.
 
 #### Syntax
 ```http
@@ -11552,13 +11622,32 @@ t=1s   request → rejected (429)
 t=30s  ~50 tokens refilled → next 50 requests allowed
 ```
 
+Predict how many requests are allowed — a question below asks for it:
+
+```text
+Fixed-window limiter: 100 requests per client per minute, windows start on the minute.
+A client sends 100 requests at 10:00:59 and 100 more at 10:01:00.
+```
+
 #### Common interview questions
 - "How would you implement rate limiting?" (A token bucket per client key — in a servlet filter with Bucket4j for one instance, or backed by Redis or an API gateway for a fleet-wide limit — returning `429` with `Retry-After`.)
 - "Token bucket versus fixed window?" (Fixed windows allow double bursts at window boundaries; token buckets smooth the rate while permitting bounded bursts.)
 - "What is backpressure?" (Signalling or enforcing that a component cannot accept more work — bounded queues, rejection, or slowing the producer — instead of buffering without limit.)
 - "What happens when the Hikari pool is exhausted?" (Threads wait up to `connection-timeout` for a connection, then fail; latency rises sharply long before errors appear.)
+- "How many of the example's 200 requests are allowed, and over what span of time?" (All 200, within about a second: each burst falls into a different window, and each window allows 100. Fixed windows permit up to twice the limit around their edges; a token bucket — or a sliding window — enforces the rate smoothly, allowing a bounded burst but not two windows' worth at once.)
+- "Why is an unbounded queue worse than rejecting requests?" (Because it hides overload until it is catastrophic: latency grows with the queue, memory grows until the process dies, and most queued requests time out at the client anyway — work done for nobody. A bounded queue rejects early, so accepted requests stay fast and clients can back off.)
+- "After virtual threads are enabled, the service accepts far more concurrent requests — and the database starts timing out. Why?" (Platform threads had capped concurrency at 200 by accident; with virtual threads nearly every request proceeds at once, so far more of them reach the 20-connection pool and wait or time out. Add an explicit concurrency limit — a semaphore, or `@ConcurrencyLimit` around database-heavy work — sized to what the database can take.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How would you implement rate limiting?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where should the limit be enforced?" (Coarse limits at the gateway, per-user or per-endpoint limits in the application — a servlet filter — and bulkheads around each dependency.)
+- "How do you enforce one limit across many instances?" (Keep the bucket state in a shared store — Redis, updated atomically with a script — or enforce it at the gateway; per-instance limits multiply with the number of instances.)
+- "What should the client receive?" (A `429 Too Many Requests` with a `Retry-After` header saying when to try again, so well-behaved clients back off instead of retrying immediately.)
+- "And what is the equivalent inside the service?" (Bounded pools with wait timeouts — `connection-timeout` on Hikari, `accept-count` on Tomcat — so excess work is rejected quickly rather than queueing without limit.)
+
+Other follow-ups:
+
 - "How do virtual threads affect this?" (They remove the thread-pool ceiling, so far more concurrent requests reach downstream pools; explicit concurrency limits must replace the implicit one.)
 - "Where should rate limiting live?" (Coarse limits at the gateway, finer per-user or per-endpoint limits in the application, and bulkheads around each dependency.)
 - "How do Kafka consumers handle backpressure?" (Naturally — they pull at their own pace, and lag grows instead of the consumer being overwhelmed.)
@@ -11603,7 +11692,9 @@ APIs where repeating a request produces the same effect as a single request, ach
 Because clients cannot distinguish "the request failed" from "the response was lost", so safe retries require the server to recognise repeats.
 
 #### Interview explanation
-Start from HTTP semantics — `GET`, `PUT` and `DELETE` are idempotent by definition, `POST` is not required to be. Then describe the idempotency-key protocol: client-generated key per operation, stored server-side with a request hash and response, unique constraint to resolve races, same transaction as the effect, `409` for in-progress repeats, and expiry after a retention window.
+**In 30 seconds** — An idempotent API has the same effect whether a request is processed once or several times, which is what makes retries safe. `GET`, `PUT` and `DELETE` are idempotent by definition; `POST` is not, so creation endpoints accept an `Idempotency-Key` generated by the client. The server stores the key with a hash of the request and the response, in the same transaction as the effect, lets a unique constraint settle concurrent repeats, and replays the stored response for any retry.
+
+**If they push deeper** — start from HTTP semantics — `GET`, `PUT` and `DELETE` are idempotent by definition, `POST` is not required to be. Then describe the idempotency-key protocol: client-generated key per operation, stored server-side with a request hash and response, unique constraint to resolve races, same transaction as the effect, `409` for in-progress repeats, and expiry after a retention window.
 
 #### Syntax
 ```http
@@ -11627,13 +11718,37 @@ public StoredResponse placeOnce(String key, PlaceOrderRequest request) {
 }
 ```
 
+Spot what can still go wrong — a question below asks for it:
+
+```java
+@PostMapping("/orders")
+ResponseEntity<OrderResponse> create(@RequestHeader("Idempotency-Key") String key,
+                                     @RequestBody PlaceOrderRequest request) {
+    var response = orders.place(request);                        // commits the order
+    idempotencyKeys.save(new IdempotencyKey(key, response));     // separate transaction, afterwards
+    return ResponseEntity.status(201).body(response);
+}
+```
+
 #### Common interview questions
 - "What does idempotent mean for an HTTP API?" (Repeating the request has the same effect on server state as making it once; responses may differ, effects may not.)
 - "How do you make `POST /orders` safe to retry?" (Require an `Idempotency-Key`, store it with the request hash and response, and return the stored response for repeats.)
 - "How do you handle two concurrent requests with the same key?" (A unique constraint lets only one insert succeed; the other receives `409` or waits and then replays the stored result.)
 - "Why not deduplicate by request content?" (Two identical orders can both be intentional; only the client knows whether a request is a retry.)
+- "What can still go wrong with the example's idempotency handling?" (Two things. The key is recorded after the order, in a separate transaction, so a crash in between leaves an order with no key — and the retry creates a second order. And nothing checks the key before placing the order, so two concurrent requests with the same key both create orders. Insert the key first, letting a unique constraint settle races, and record the response in the same transaction as the order.)
+- "Why must the client generate the idempotency key, not the server?" (Because only the client knows whether a request is a retry of an earlier attempt or a genuinely new order. A key generated by the server is new for every request, so it can never recognise a repeat.)
+- "A client reuses yesterday's idempotency key for a different order today. What should the server do?" (Reject it — typically with 422 — because the stored request hash does not match: the key belongs to a different operation, and replaying yesterday's response would silently drop today's order. Keys should also expire after the retry window.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you make `POST /orders` safe to retry?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly is stored with the key?" (A hash of the request, a status — in progress or complete — and, once complete, the response's status code and body, so a retry receives exactly what the first attempt returned.)
+- "How are two concurrent requests with the same key resolved?" (A unique constraint on the key lets only one insert succeed; the other sees the conflict and receives a 409 — or waits for the first to finish and replays its stored response.)
+- "Why must the key record commit together with the order?" (Otherwise a crash between the two leaves an order without its key, or a key without its order — and the retry either duplicates the order or replays a response for something that never happened.)
+- "What happens to a request left in progress by a crash?" (In-progress records get a timeout: once it passes, the key becomes retryable, so a client is not blocked forever by an attempt that died.)
+
+Other follow-ups:
+
 - "How long do you keep keys?" (Longer than any realistic client retry window — commonly 24 hours or more — then delete them on a schedule.)
 - "What if the same key arrives with a different body?" (Reject it — typically `422` — because the client is misusing the key.)
 - "How does this relate to Kafka consumers?" (Same principle: a processed-events table keyed by event id makes redelivery harmless — see [[#10.10 Delivery Semantics and Idempotency]].)
@@ -11677,7 +11792,9 @@ Measuring a service's throughput, latency and resource use under controlled, rea
 Because concurrency-dependent problems — contention, pool exhaustion, slow queries at scale, leaks — are invisible in functional tests, and production is an expensive place to discover them.
 
 #### Interview explanation
-State the question first (capacity per instance within the SLO, or the breaking point), choose the test type, use realistic data and an open workload model, and watch percentiles and saturation rather than averages. Then describe finding the bottleneck: metrics first (pool usage, GC, CPU throttling), then profiling with JFR or async-profiler, then database query plans.
+**In 30 seconds** — Performance testing measures throughput, latency and resource use under realistic load: load tests check the expected peak, stress tests find the breaking point, soak tests run for hours to expose leaks, and spike tests check sudden bursts. Start from the question — capacity per instance within the SLO, say — use production-like data and an open workload model, and judge by percentiles and saturation, not averages. Then find the bottleneck: saturation metrics first, then profiling with JFR, then query plans.
+
+**If they push deeper** — state the question first (capacity per instance within the SLO, or the breaking point), choose the test type, use realistic data and an open workload model, and watch percentiles and saturation rather than averages. Then describe finding the bottleneck: metrics first (pool usage, GC, CPU throttling), then profiling with JFR or async-profiler, then database query plans.
 
 #### Syntax
 ```bash
@@ -11697,13 +11814,33 @@ DB: one query doing a sequential scan on order_lines
 Fix: add index on order_lines(order_id) → p99 < 300 ms at 450 req/s with the same pool
 ```
 
+Predict why this result can mislead — a question below asks for it:
+
+```text
+Load test with 50 virtual users, each sending a request and waiting for its response.
+During the test, the service stalls for 5 seconds.
+Reported result: p99 = 180 ms.
+```
+
 #### Common interview questions
 - "How would you load test a Spring Boot service?" (Production-like environment and data, a tool such as Gatling, k6 or JMeter with an open workload model, SLO-based pass criteria, and monitoring of percentiles, errors and saturation.)
 - "What is the difference between load, stress and soak tests?" (Load verifies expected peak, stress finds the breaking point, soak runs for hours to expose leaks and slow degradation.)
 - "Why percentiles rather than averages?" (Averages hide the slow tail that real users experience; p95 and p99 show it.)
 - "How do you find a performance bottleneck?" (Check saturation metrics to find the constrained resource, profile with JFR or async-profiler, and inspect query plans for slow SQL.)
+- "Why can the example's p99 be misleading?" (A closed workload — users who wait for each response — stops sending while the service is stalled, so the stall produces only 50 slow samples instead of the hundreds of requests real users would have sent: coordinated omission. The p99 looks healthy because the tool under-sampled exactly the bad period. Use an open workload model that sends at a fixed arrival rate.)
+- "Why must performance tests run against production-like data volumes?" (Because the problems you are looking for depend on size: an index that is not used, a query that scans, a cache that does not fit. On a tiny database every plan is fast and everything fits in memory, so the test passes and production does not.)
+- "A load test shows p99 climbing steeply above 250 requests per second while CPU sits at 40%. Where do you look?" (At saturation that is not CPU: the connection pool — active connections at the maximum, pending threads rising — then at what holds the connections, with JFR showing threads parked on the pool, and at the plans of the slow queries. Idle CPU with rising latency means something is waiting.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you find a performance bottleneck?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which metrics do you check first?" (The saturation of each resource — CPU and its throttling, heap and GC pauses, connection-pool active and pending counts, thread-pool usage — to find the one that is full.)
+- "What does a profiler add?" (Where the time actually goes: JFR or async-profiler show hot methods, lock contention and threads parked waiting — the code behind the saturated resource.)
+- "What does Little's Law tell you during a test?" (That concurrency equals throughput times latency: at 400 requests per second and 0.25 seconds each, about 100 requests are in flight — which must fit the thread and connection pools, and lets you sanity-check the tool's numbers.)
+- "How do you know the fix worked?" (Rerun the same test, with the same data and load, and compare percentiles at the same throughput — then keep the test in the pipeline so the regression cannot quietly return.)
+
+Other follow-ups:
+
 - "What is coordinated omission?" (A closed load generator waits for slow responses before sending more, so it under-samples exactly the slow periods and reports misleadingly good latency.)
 - "What does Little's Law tell you?" (Concurrency equals throughput times latency, which sizes thread and connection pools and checks test results for consistency.)
 - "How do you microbenchmark a method?" (With JMH, which handles JIT warm-up, dead-code elimination and measurement pitfalls that naive timing gets wrong.)
@@ -11748,7 +11885,9 @@ Releasing a new version without failed requests or unavailability, using rolling
 Because frequent deployment is only sustainable if each deployment is invisible to users — and during every rollout old and new versions run side by side, so invisibility depends on draining instances cleanly and keeping every change compatible with the previous version.
 
 #### Interview explanation
-Cover the mechanics — readiness gates new pods, a `preStop` delay covers endpoint propagation, graceful shutdown drains in-flight work within the grace period — and then the harder part: compatibility. During a rollout two versions share the database, topics and caches, so schema changes use expand-and-contract and event and API changes are additive.
+**In 30 seconds** — Deploying without downtime has two halves. The mechanics: readiness probes keep traffic off pods until they are ready, a `preStop` delay keeps a terminating pod serving while it is removed from load balancing, and graceful shutdown drains in-flight requests within the grace period. And compatibility, which is harder: during a rollout the old and new versions run side by side against the same database, topics and caches, so schema changes follow expand and contract, and API and event changes are additive.
+
+**If they push deeper** — cover the mechanics — readiness gates new pods, a `preStop` delay covers endpoint propagation, graceful shutdown drains in-flight work within the grace period — and then the harder part: compatibility. During a rollout two versions share the database, topics and caches, so schema changes use expand-and-contract and event and API changes are additive.
 
 #### Syntax
 ```yaml
@@ -11774,13 +11913,36 @@ Release 3: stop writing customer_ref
 Release 4: drop customer_ref
 ```
 
+Predict what happens to in-flight requests on shutdown — a question below asks for it:
+
+```yaml
+terminationGracePeriodSeconds: 30
+lifecycle:
+  preStop:
+    exec:
+      command: ["sh", "-c", "sleep 10"]
+# application: spring.lifecycle.timeout-per-shutdown-phase=30s
+```
+
 #### Common interview questions
 - "How do you deploy without downtime?" (Rolling or canary deployment with readiness probes, a `preStop` delay, graceful shutdown inside the grace period, and backward-compatible schema, API and event changes.)
 - "How do you handle database migrations with zero downtime?" (Expand and contract: additive changes first, migrate data, switch reads, then remove old structures in a later release.)
 - "Blue-green or canary?" (Blue-green gives instant full switch and rollback at double capacity; canary limits blast radius by exposing a small share of traffic first.)
 - "Why do requests fail during a rolling deploy even with graceful shutdown?" (Endpoint removal and `SIGTERM` happen concurrently, so traffic still arrives at a terminating pod unless a `preStop` delay is added.)
+- "What can happen to in-flight requests when the example's pod is stopped?" (The budget does not add up: the `preStop` sleep uses 10 of the 30 seconds before the JVM even receives `SIGTERM`, leaving 20 — but Boot is allowed 30 seconds to drain. Requests still running after 20 seconds are cut off when Kubernetes sends `SIGKILL`. The grace period must exceed the `preStop` delay plus the shutdown timeout — 45 seconds, for example.)
+- "Why do some requests fail during a rolling deploy even with graceful shutdown?" (Because removing the pod from the load balancer and sending `SIGTERM` happen at the same time, and endpoint removal takes a few seconds to propagate. Until it does, new requests still reach a pod that has begun shutting down; a short `preStop` delay keeps it serving through that window.)
+- "A release renames a column in its migration, and the rollout produces errors for several minutes. What went wrong, and what should the release have done?" (The migration ran when the first new pod started, and every old pod still serving traffic queried a column that no longer existed. Expand and contract instead: add the new column and write both, backfill, switch reads, and drop the old column only in a later release, once no running version uses it.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you deploy without downtime?" — they drill down from your answer. Answer each step before opening it:
+
+- "What stops traffic reaching a pod that is not ready yet?" (The readiness probe: Kubernetes routes traffic only to pods whose readiness passes, and Boot reports ready only after startup — runners included — has finished.)
+- "What happens to the old pod when it is stopped?" (It is removed from the endpoints and receives `SIGTERM`; Boot stops accepting new requests, lets in-flight ones finish within the shutdown timeout, and exits before the grace period ends.)
+- "Why is compatibility the harder half?" (Because for the whole rollout, old and new versions run at once against one database, one set of topics and one cache — every change must work for both, which is what expand and contract and additive changes guarantee.)
+- "How do you roll back a release that included a migration?" (By designing every migration so the previous version still works with the new schema — then a rollback is just redeploying the old image, with no schema change at all.)
+
+Other follow-ups:
+
 - "How do you roll back a release with a migration?" (Design migrations so the previous version still works with the new schema; then rollback is just redeploying the old image.)
 - "What about Kafka event schema changes?" (Additive, backward-compatible changes with a schema registry, so old and new consumers can read both versions.)
 - "What about in-memory sessions?" (Keep the service stateless — tokens or an external session store — so any instance can serve any request.)
@@ -11822,7 +11984,9 @@ Runtime switches that enable or disable code paths per request context without r
 Because once code is deployed everyone gets it, and undoing it takes another deployment. Moving the decision about who sees new behaviour to run time separates deploying code from releasing behaviour — allowing gradual exposure, instant rollback and trunk-based development.
 
 #### Interview explanation
-Name the flag types and their lifetimes, describe progressive rollout with monitoring at each step, mention vendor-neutral evaluation through OpenFeature with providers such as Unleash, LaunchDarkly or flagd, and close with the costs: testing both paths, flag debt, and the flag system becoming a runtime dependency that needs safe defaults.
+**In 30 seconds** — A feature flag is a runtime switch that turns a code path on or off for some requests — by user, percentage or environment — without redeploying. It separates deploying code from releasing behaviour: new code ships switched off, is enabled for staff, then 1% of users, then everyone, with monitoring at each step and an instant kill switch if something goes wrong. The costs are testing both paths, removing flags once they have served their purpose, and a flag service that must fall back to safe defaults.
+
+**If they push deeper** — name the flag types and their lifetimes, describe progressive rollout with monitoring at each step, mention vendor-neutral evaluation through OpenFeature with providers such as Unleash, LaunchDarkly or flagd, and close with the costs: testing both paths, flag debt, and the flag system becoming a runtime dependency that needs safe defaults.
 
 #### Syntax
 ```java
@@ -11841,13 +12005,36 @@ day 7   100%
 day 21  remove flag and legacy engine from the code
 ```
 
+Predict what can happen when the flag changes mid-request — a question below asks for it:
+
+```java
+boolean newPricing = flags.isEnabled("new-pricing", user);          // evaluated here
+var quote = newPricing ? newEngine.quote(cart) : legacy.quote(cart);
+// ... later in the same request
+var invoice = flags.isEnabled("new-pricing", user)                  // evaluated again
+        ? newInvoices.create(quote) : legacyInvoices.create(quote);
+// The flag is switched off between the two evaluations.
+```
+
 #### Common interview questions
 - "What are feature flags for?" (Releasing features gradually and reversibly, separating deployment from release, and providing kill switches for risky or expensive functionality.)
 - "What is the difference between deploying and releasing?" (Deploying puts code in production; releasing exposes behaviour to users — flags let the two happen at different times.)
 - "What are the risks of feature flags?" (Untested flag combinations, accumulated stale flags, and a dependency on the flag service whose failure must fall back to safe defaults.)
 - "How do you roll out to a percentage of users consistently?" (Hash a stable identifier such as the user id into buckets, so each user sees the same variant on every request.)
+- "What can happen to a request in the example when the flag changes mid-request?" (It can price with the new engine and invoice with the legacy one — a mix that neither path was designed for, producing an inconsistent invoice. Evaluate a flag once per request and pass the decision along.)
+- "Why separate deploying from releasing?" (Because a deployment then carries no user-visible risk: the code is in production but switched off, can be enabled gradually while the metrics are watched, and can be switched off in seconds — with no redeployment and no rollback of unrelated changes.)
+- "A two-year-old codebase has 140 flags, and nobody knows which are still needed. How did that happen, and what do you put in place?" (Release flags were added and never removed after their rollouts finished. Give every release flag an owner and an expiry date when it is created, track them, raise a ticket or fail a build when one expires, and treat removing the flag and its dead path as part of finishing the feature.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What are feature flags for?" — they drill down from your answer. Answer each step before opening it:
+
+- "How do you roll out to 1% of users consistently?" (Hash a stable identifier — the user id — into buckets, so each user always lands in the same bucket and sees the same behaviour on every request.)
+- "What should happen if the flag service is down?" (Evaluation falls back to the last cached value, or to a safe default given at the call site — normally the existing behaviour — so a flag outage never becomes an application outage.)
+- "Can a flag hide a database change?" (No — the schema is shared by every code path. The change still needs expand and contract; the flag only switches which code uses it.)
+- "How do you stop flags piling up?" (Give release flags an owner and an expiry, track them, and remove each flag — with its dead code path — as soon as its rollout is complete.)
+
+Other follow-ups:
+
 - "How do you avoid flag debt?" (Give release flags an owner and an expiry date, track them, and remove them as part of finishing the feature.)
 - "What should happen if the flag service is down?" (Evaluate to a cached value or a safe default supplied at the call site.)
 - "Flags or branches?" (Flags keep everyone on trunk with small merges; long-lived branches defer integration pain.)
@@ -11889,7 +12076,9 @@ Running a service reliably through SLIs, SLOs and error budgets, symptom-based a
 Because reliability must be defined in user terms and managed deliberately, or teams either over-invest in it or discover its absence from customers.
 
 #### Interview explanation
-Define SLI, SLO and error budget with an example, explain why alerts should be on SLO burn rate and user-facing symptoms, name the golden signals, and describe incident handling: mitigate first, communicate, diagnose, then run a blameless review with concrete follow-up actions.
+**In 30 seconds** — Reliability is defined in users' terms. An SLI measures it — the fraction of requests that succeed within 300 ms, say; an SLO sets a target over a window — 99.9% over 30 days; and the remainder is the error budget — about 43 minutes a month — which the team can spend on releases and must protect when it runs low. Alerts fire on user-facing symptoms and budget burn rate, not on every internal cause; incidents are mitigated first, diagnosed second, and reviewed without blame.
+
+**If they push deeper** — define SLI, SLO and error budget with an example, explain why alerts should be on SLO burn rate and user-facing symptoms, name the golden signals, and describe incident handling: mitigate first, communicate, diagnose, then run a blameless review with concrete follow-up actions.
 
 #### Syntax
 ```text
@@ -11908,13 +12097,32 @@ Incident: deploy at 14:02, error rate 4% at 14:05, page at 14:09
 Review: missing contract test for payment API change; canary step added to pipeline
 ```
 
+Predict how much error budget this incident consumed — a question below asks for it:
+
+```text
+SLO: 99.9% of requests succeed over 30 days (≈ 43 minutes of budget).
+A bad deploy fails 5% of requests for 2 hours before anyone notices.
+```
+
 #### Common interview questions
 - "What is an SLO?" (A target for a service level indicator over a time window — for example, 99.9% of requests succeed within 300 ms over 30 days.)
 - "What is an error budget used for?" (It quantifies acceptable unreliability, so a team can spend it on releases and experiments and slow down when it is nearly exhausted.)
 - "What should you alert on?" (User-visible symptoms and SLO burn rate, not every internal cause; causes are for diagnosis.)
 - "What do you do first in an incident?" (Mitigate — roll back, disable a flag, shed load — before root-causing, and communicate status.)
+- "How much of the month's error budget did the example's incident consume?" (About 6 minutes of full-outage equivalent — 5% of 120 minutes — so roughly 14% of the month's budget in one afternoon. It also exposes a gap in alerting: a fast-burn alert on the error budget would have paged within minutes, not after two hours.)
+- "Why alert on symptoms and burn rate rather than on causes such as high CPU?" (Because users feel symptoms — errors, latency — while causes are many and often harmless: high CPU at night may hurt nobody, and a new failure mode has no cause-based alert yet. Burn-rate alerts page only when users are being failed fast enough to threaten the objective.)
+- "Ten minutes after a deploy, the error rate jumps to 4%, and the on-call engineer starts reading logs to find the bug. What should happen first?" (Mitigation: roll back the deploy — or switch off its flag — and confirm the error rate recovers, while communicating status. Finding the bug comes once users are no longer affected; the review afterwards asks why the pipeline let it through.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is an error budget used for?" — they drill down from your answer. Answer each step before opening it:
+
+- "How is it calculated?" (From the SLO: 99.9% over 30 days leaves 0.1% of requests that may fail — about 43 minutes of full outage.)
+- "What changes when it runs low?" (The team slows risky changes and spends effort on reliability until the budget recovers; while plenty remains, releases and experiments go ahead.)
+- "What should page someone at night?" (A fast burn — the budget being consumed many times faster than is sustainable, confirmed over a short window — because users are being failed now. A slow burn becomes a ticket for working hours.)
+- "What makes a post-incident review useful?" (Treating the failure as a property of the system rather than one person's mistake, so the facts come out — and ending with owned, concrete actions, such as a missing test or a canary step, tracked to completion.)
+
+Other follow-ups:
+
 - "What are the four golden signals?" (Latency, traffic, errors and saturation.)
 - "What is a blameless post-mortem?" (A review that treats failure as a property of the system and process rather than individual fault, so people share facts openly and fixes target causes.)
 - "What belongs in a runbook?" (Symptoms, dashboards to check, likely causes, safe mitigation steps and escalation contacts.)
@@ -11956,7 +12164,9 @@ Moving an application to newer Spring Boot minor and major versions to stay with
 Because each minor version's free support is limited, and unsupported versions stop receiving security fixes — while the longer an upgrade waits, the larger and riskier it becomes.
 
 #### Interview explanation
-Describe the cadence — minor releases every six months, each with a limited OSS support window — and the approach: keep current on patches, move one minor at a time, eliminate deprecation warnings before a major, use `spring-boot-properties-migrator` and OpenRewrite recipes, and lean on a strong test suite. Give one concrete major upgrade as an example: 2.x to 3.0 (`javax` to `jakarta`, Java 17, Hibernate 6, Security 6) or 3.x to 4.0 (Spring Framework 7, Jakarta EE 11, Jackson 3).
+**In 30 seconds** — Spring Boot releases a minor version every six months, each with a limited window of free support, so staying current is routine maintenance rather than a project. The safe path: keep up with patch releases, move one minor version at a time, and clear every deprecation warning at each step — what is deprecated in one major is removed in the next — using `spring-boot-properties-migrator` and OpenRewrite recipes, a strong test suite and a canary release.
+
+**If they push deeper** — describe the cadence — minor releases every six months, each with a limited OSS support window — and the approach: keep current on patches, move one minor at a time, eliminate deprecation warnings before a major, use `spring-boot-properties-migrator` and OpenRewrite recipes, and lean on a strong test suite. Give one concrete major upgrade as an example: 2.x to 3.0 (`javax` to `jakarta`, Java 17, Hibernate 6, Security 6) or 3.x to 4.0 (Spring Framework 7, Jakarta EE 11, Jackson 3).
 
 #### Syntax
 ```xml
@@ -11982,13 +12192,32 @@ Describe the cadence — minor releases every six months, each with a limited OS
 4. 4.0 via OpenRewrite recipe + manual fixes; full test suite, staging soak, canary
 ```
 
+Spot what is wrong with this plan — a question below asks for it:
+
+```text
+Current: Spring Boot 3.1.4 (out of support), hundreds of deprecation warnings.
+Plan: change the parent version straight to 4.0.0 and fix whatever breaks.
+```
+
 #### Common interview questions
 - "How do you upgrade Spring Boot safely?" (One minor at a time, starting from the latest patch, fixing deprecations at each step, using the properties migrator and OpenRewrite, with a strong test suite and a canary release.)
 - "What changed in the Spring Boot 3 migration?" (Java 17 baseline, `javax.*` to `jakarta.*`, Spring Framework 6, Hibernate 6, Spring Security 6 configuration with `SecurityFilterChain`, and Micrometer Tracing replacing Sleuth.)
 - "What is new in Spring Boot 4?" (It is built on Spring Framework 7 and Jakarta EE 11, keeps a Java 17 minimum, uses Jackson 3 by default, modularises auto-configuration and adds native API versioning and core resilience annotations.)
 - "Why do deprecation warnings matter?" (Deprecated APIs are removed in the next major version; clearing them first makes the major upgrade a small step.)
+- "What is wrong with the example's upgrade plan, and what would you do instead?" (Jumping four minors and a major at once mixes every change into one huge failure that is hard to bisect, and the deprecated APIs it relies on are already gone in 4.0. Go to 3.1's latest patch, then 3.2, 3.3, 3.4 and 3.5 one at a time — fixing deprecations and running the properties migrator at each step — and take the major only once the build is clean on 3.5.)
+- "Why upgrade one minor version at a time?" (Because each step then brings a small, documented set of changes — one version's release notes and deprecations — and any breakage has an obvious cause. Skipping versions combines them all, so failures are hard to attribute and fix.)
+- "After a minor upgrade, a service takes up to 30 seconds to shut down and deployments slow down, though nothing in the code changed. What happened?" (A default changed: since Boot 3.4, graceful shutdown is on by default, so shutdown now waits for in-flight requests up to the configured timeout. Read the release notes for changed defaults and decide deliberately — usually keep it, and tune the timeout against the platform's grace period.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you upgrade Spring Boot safely?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does `spring-boot-properties-migrator` do?" (At startup it reports properties that were renamed or removed and temporarily maps the old names to the new ones, so configuration can be updated safely; remove it once the configuration is clean.)
+- "Where does OpenRewrite help?" (It applies recipes that rewrite code and build files mechanically — package renames such as `javax` to `jakarta`, changed APIs, dependency versions — leaving the judgement calls to you.)
+- "What usually breaks in a major upgrade?" (Removed deprecated APIs, changed defaults, raised baselines — Java, Jakarta EE, Hibernate — and third-party libraries that do not yet support the new major.)
+- "How do you release it safely?" (With the full test suite, a soak in staging, and a canary in production — comparing error rates and latency before the rest of the fleet moves.)
+
+Other follow-ups:
+
 - "What does `spring-boot-properties-migrator` do?" (At start-up it reports renamed or removed properties and temporarily maps old names, so configuration can be updated safely; remove it afterwards.)
 - "What if a library does not support the new major yet?" (Wait or replace it; forcing incompatible versions produces runtime failures that tests may not catch.)
 - "How long is a Boot minor supported?" (A limited OSS window of around a year, published on the Spring support timeline; commercial support extends it.)
@@ -12030,7 +12259,9 @@ A structured walkthrough of a system you designed or worked on: problem, archite
 Because "tell me about a system you built" tests depth, judgement and honesty in one question, and an unstructured answer wastes the opportunity.
 
 #### Interview explanation
-Open with the problem and its scale in two sentences. Sketch the architecture and justify each component. Walk one request end to end. Then go to the parts that show seniority: consistency boundaries, what happens when a dependency fails, how you know the system is healthy, the trade-offs you accepted and what you would change. Pause to let the interviewer steer.
+**In 30 seconds** — Walk through a system you built in a fixed arc: the problem and its scale in two sentences; the architecture, justifying each component; one request end to end; then what shows seniority — consistency boundaries, what happens when a dependency fails, how you know it is healthy, the trade-offs you accepted and what you would change. Give decisions and reasons, not a technology list — and pause so the interviewer can steer.
+
+**If they push deeper** — open with the problem and its scale in two sentences. Sketch the architecture and justify each component. Walk one request end to end. Then go to the parts that show seniority: consistency boundaries, what happens when a dependency fails, how you know the system is healthy, the trade-offs you accepted and what you would change. Pause to let the interviewer steer.
 
 #### Syntax
 ```text
@@ -12049,13 +12280,36 @@ sees orders a second or two later — fine for the business. If I did it again, 
 keyset pagination from the start; offset paging hurt our export jobs."
 ```
 
+Decide which answer is stronger — a question below asks for it:
+
+```text
+Candidate A: "We used Spring Boot, PostgreSQL, Redis, Kafka, Docker, Kubernetes,
+              Prometheus and Grafana. It was a microservices architecture."
+
+Candidate B: "Orders peak at 200 a second. Placing one is a single transaction that
+              also writes an outbox row, so an event can't be lost or sent for a
+              rolled-back order. The trade-off is that shipping sees orders a second late."
+```
+
 #### Common interview questions
 - "Walk me through a system you built." (Problem and scale, architecture with reasons, one key flow end to end, failure handling and consistency, observability, trade-offs and what you would change.)
 - "What was the hardest problem you solved in it?" (A specific incident or design challenge, what you tried, what worked, and the measurable outcome.)
 - "How does it scale?" (Name the current bottleneck, how you know it from metrics, and the next step — more instances, read replicas, caching, partitioning — with its cost.)
 - "What would you do differently?" (One or two concrete, honest changes and why, showing you learned from operating it.)
+- "Which of the example's answers is stronger, and why?" (B. A lists tools, which says nothing about judgement and invites 'why?' for each of them. B gives the scale, one design decision, the failure it prevents and the trade-off accepted — exactly what the interviewer is trying to learn — in three sentences.)
+- "Why mention trade-offs and mistakes when describing your own system?" (Because every real design makes trade-offs, and naming them shows you understood the alternatives and chose deliberately. An answer in which everything went perfectly sounds rehearsed or shallow; honest reflection is what signals seniority.)
+- "Halfway through your walkthrough, the interviewer interrupts to ask about something you have not reached yet. What do you do?" (Follow them: answer the question directly, then offer to return to the thread. They are steering towards what they need to assess, and insisting on your prepared order wastes the time that matters most.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Walk me through a system you built." — they drill down from your answer. Answer each step before opening it:
+
+- "What happens if the database fails over?" (In-flight transactions fail, the pool drops its connections and reconnects to the new primary, and clients retry — safely, because the creation endpoints use idempotency keys.)
+- "How do you know it is working right now?" (SLO dashboards and burn-rate alerts for the user-facing flows, traces spanning the request and the event flow, and consumer-lag monitoring for the asynchronous parts.)
+- "Why did you choose that technology over a simpler one?" (Give the requirement that forced it — replayability, multiple consumers, ordering per key — or say honestly that a simpler option would have done.)
+- "What would you change if you started again?" (One or two concrete, honest changes, with the reason — showing what operating the system taught you.)
+
+Other follow-ups:
+
 - "What happens if the database fails over?" (Connections drop, in-flight transactions fail and are retried by clients with idempotency keys, and the pool reconnects to the new primary.)
 - "How do you know it is working right now?" (SLO dashboards, burn-rate alerts, traces across the event flow and consumer-lag monitoring.)
 - "Why did you choose Kafka over a simple queue?" (Replayability, multiple independent consumers and ordering per key — or, honestly, if a simpler queue would have done, say so.)
