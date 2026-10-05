@@ -6131,7 +6131,9 @@ A transaction is a unit of work that the database executes with atomicity, consi
 Because business operations span several rows and statements, and a failure part-way through must not leave the data half-changed — yet a failure can strike between any two statements. Grouping them so they commit together or not at all removes every half-changed state at once.
 
 #### Interview explanation
-Define each ACID letter with the failure it prevents, then mention the write-ahead log as the mechanism behind atomicity and durability. Finish by separating what the database guarantees from what the application must still get right.
+**In 30 seconds** — A transaction groups statements into one unit that takes effect entirely or not at all. ACID names its guarantees: atomicity — all or nothing; consistency — constraints hold before and after; isolation — concurrent transactions do not interfere, as strictly as the isolation level says; and durability — once committed, it survives a crash. The write-ahead log provides atomicity and durability. ACID does not make the business logic right: a transaction commits wrong values just as reliably.
+
+**If they push deeper** — define each ACID letter with the failure it prevents, then mention the write-ahead log as the mechanism behind atomicity and durability. Finish by separating what the database guarantees from what the application must still get right.
 
 #### Syntax
 ```sql
@@ -6150,13 +6152,34 @@ public void transfer(Long from, Long to, long cents) {
 }   // commits both, or rolls back both
 ```
 
+Predict the state after the restart — a question below asks for it:
+
+```sql
+-- auto-commit mode: each statement is its own transaction
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+-- the server crashes here
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+```
+
 #### Common interview questions
 - "What does ACID stand for?" (Atomicity — all or nothing; consistency — constraints hold; isolation — concurrent transactions are kept from interfering, as strictly as the isolation level says; durability — committed data survives a crash.)
 - "How does a database guarantee atomicity and durability?" (A write-ahead log records changes before the data pages, so after a crash committed work can be replayed and uncommitted work undone.)
 - "Does ACID guarantee my application is correct?" (No — it guarantees the database keeps its promises; a transaction that commits wrong values commits them reliably.)
 - "Why not wrap everything in one big transaction?" (It holds locks and a connection for the duration and makes a single failure roll back all prior work.)
+- "After the database restarts, what state are the example's accounts in?" (Account 1 has lost 100 and account 2 never received it: in auto-commit mode, the first update was a complete, durable transaction of its own, so recovery keeps it. Wrapped in `BEGIN … COMMIT`, recovery would undo the unfinished transaction, and neither change would survive.)
+- "Why does the database write to a log before changing the data pages?" (Because a crash can interrupt a page write at any moment. Recording each change in the log first — and flushing the log at commit — lets recovery replay committed work that never reached the pages and undo uncommitted work that did, so the data always ends all-or-nothing.)
+- "A transfer runs in a transaction, yet balances occasionally come out wrong under concurrent load. Isn't ACID supposed to prevent that?" (Atomicity and durability hold, but isolation at the default read-committed level still lets two transactions read the same balance and both write it, so one update is lost. Use an atomic `UPDATE ... SET balance = balance - ?`, optimistic locking, or `SELECT ... FOR UPDATE`.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What does ACID stand for?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does the database make a transaction atomic?" (Every change is recorded in the write-ahead log before it reaches the data pages; if the transaction rolls back, or the server crashes before commit, the log lets the engine undo it.)
+- "And durable?" (Commit returns only after the log record is flushed to disk, so after a crash the engine replays committed changes from the log, even if their data pages were never written.)
+- "Does isolation mean transactions behave as if they ran one at a time?" (Only at `SERIALIZABLE`. The default levels allow some anomalies in exchange for concurrency — under read committed, two transactions can read the same row and both overwrite it.)
+- "So what is still the application's job?" (Choosing the boundaries — which statements belong together — and the business rules. ACID guarantees that the database keeps its promises, not that the values you commit are right.)
+
+Other follow-ups:
+
 - "What is the C in ACID really about?" (Moving the database between valid states — partly enforced by constraints, partly the application's responsibility.)
 - "What is BASE?" (Basically available, soft state, eventually consistent — the property set many distributed stores choose instead of ACID.)
 - "Are single statements transactional?" (Yes — in auto-commit mode each statement is its own transaction.)
@@ -6198,7 +6221,9 @@ ACID consistency versus CAP consistency — different definitions in different c
 Because every transactional operation needs the same begin, commit, rollback and close code, and repeating it by hand in every method is error-prone. Writing it once, in a proxy, and requesting it by annotation makes transaction management declarative and consistent.
 
 #### Interview explanation
-Explain that the annotation is honoured by a proxy, list the ways it silently fails — self-invocation, and methods the proxy cannot override (`private`, `static`, `final`) — and say what `readOnly` does and does not do. That combination answers most follow-ups before they are asked.
+**In 30 seconds** — `@Transactional` asks Spring to run a method in a transaction: a proxy intercepts the call, begins a transaction — or joins the caller's — invokes the method, then commits, or rolls back if a runtime exception or `Error` escapes. Because it is a proxy, it fails silently when a call does not pass through one: a call on `this` from the same class, or a method the proxy cannot override, such as a `private` or `final` one. `readOnly = true` is an optimisation, not access control.
+
+**If they push deeper** — explain that the annotation is honoured by a proxy, list the ways it silently fails — self-invocation, and methods the proxy cannot override (`private`, `static`, `final`) — and say what `readOnly` does and does not do. That combination answers most follow-ups before they are asked.
 
 #### Syntax
 ```java
@@ -6222,13 +6247,42 @@ public class InvoiceService {
 }
 ```
 
+Predict which code runs in a transaction — a question below asks for it:
+
+```java
+@Service
+public class ReportService {
+    public void generateAll(List<Long> ids) {
+        ids.forEach(this::generate);              // called on this
+    }
+
+    @Transactional(timeout = 5)
+    public void generate(Long id) { ... }
+
+    @Transactional
+    private void archive(Long id) { ... }
+}
+```
+
 #### Common interview questions
 - "How does `@Transactional` work?" (A proxy intercepts the call, obtains a connection, begins a transaction, invokes the method, and commits or rolls back depending on the outcome.)
 - "Why does `@Transactional` not work on a method called from the same class?" (The internal call bypasses the proxy, so no interceptor runs.)
 - "What does `readOnly = true` do?" (It lets Hibernate skip dirty checking and marks the connection read-only, which can route to a replica. Whether the database then refuses writes depends on the driver — PostgreSQL's does — so treat it as an optimisation, not access control.)
 - "Where should the annotation go?" (On service methods that define a business operation — not on controllers, and not on individual repository calls of a multi-step operation.)
+- "When a controller calls the example's `generateAll`, which code runs in a transaction?" (None of it. `generateAll` is not transactional, and its calls to `generate` go through `this`, bypassing the proxy — so neither the transaction nor the timeout applies. `archive` would never be transactional either, because the proxy cannot intercept a `private` method. Move `generate` to another bean, or wrap each call in a `TransactionTemplate`.)
+- "Why is `@Transactional` implemented with a proxy rather than by changing your class?" (Because the container already hands out every bean, so wrapping it in a proxy adds behaviour without touching your code or weaving bytecode. The price is that only calls through the proxy are intercepted — the root of every self-invocation surprise.)
+- "An integration test annotated `@Transactional` passes, but the same code fails in production with `LazyInitializationException`. Why?" (In the test, the transaction stays open for the whole test method — Spring's test support wraps it and rolls back afterwards — so lazy associations load fine. In production the service's transaction ends when the method returns, and the caller touches the association afterwards. Test the real boundary: no `@Transactional` on that test.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does `@Transactional` work?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where does the proxy come from?" (The auto-proxy creator, a `BeanPostProcessor`, wraps each bean that has transactional methods when it is created, and every other bean is injected with the proxy.)
+- "What decides whether it commits or rolls back?" (How the method exits: a `RuntimeException` or `Error` escaping it rolls back; a checked exception commits unless `rollbackFor` says otherwise; a normal return commits.)
+- "What if the method is called from another method of the same class?" (The call goes through `this`, not the proxy, so the annotation is ignored: no transaction starts, and settings such as `REQUIRES_NEW` or `timeout` have no effect.)
+- "Which transaction manager does it use?" (The single `PlatformTransactionManager` bean — `JpaTransactionManager` with Spring Data JPA. With several, the annotation names one: `@Transactional(transactionManager = "reportingTx")`.)
+
+Other follow-ups:
+
 - "Can you put it on a class?" (Yes — it applies to every public method, with method-level annotations overriding it.)
 - "What about private methods?" (They are not intercepted; the annotation is ignored.)
 - "What does `timeout` do?" (It applies the remaining time as a timeout to the queries the transaction runs, so a slow query — or one issued after the deadline — fails and the transaction rolls back. It does not interrupt Java code running between queries.)
@@ -6270,7 +6324,9 @@ The rule governing how a transactional method behaves when called within an exis
 Because transactional methods call each other, and every such call must answer whether to share the caller's fate or stand alone. Different operations need different answers — an audit record must survive the caller's rollback, a sub-step must not — so the choice is declared per method.
 
 #### Interview explanation
-Give `REQUIRED` as the default and `REQUIRES_NEW` as the important alternative, with the audit-log example. Then raise the rollback-only trap, because it is the propagation question interviewers actually use to probe experience.
+**In 30 seconds** — Propagation decides what a transactional method does when it is called while a transaction is already running. The default, `REQUIRED`, joins it, so caller and callee commit or roll back together. `REQUIRES_NEW` suspends it and runs an independent transaction on a second connection — right for an audit record that must survive the caller's rollback. The trap: when a joined `REQUIRED` method fails, the shared transaction is marked rollback-only, even if the caller catches the exception.
+
+**If they push deeper** — give `REQUIRED` as the default and `REQUIRES_NEW` as the important alternative, with the audit-log example. Then raise the rollback-only trap, because it is the propagation question interviewers actually use to probe experience.
 
 #### Syntax
 ```java
@@ -6293,13 +6349,39 @@ public void placeOrder(Order order) {
 }
 ```
 
+Predict what happens when this method returns — a question below asks for it:
+
+```java
+@Transactional
+public void placeOrder(Order order) {
+    orders.save(order);
+    try {
+        loyalty.addPoints(order);      // @Transactional (REQUIRED) on another bean; throws
+    } catch (LoyaltyException e) {     // a RuntimeException
+        log.warn("points not added", e);
+    }
+}
+```
+
 #### Common interview questions
 - "What is the default propagation?" (`REQUIRED` — join an existing transaction or start a new one.)
 - "When would you use `REQUIRES_NEW`?" (When work must commit regardless of the caller's outcome — audit records, failure logs, sequence allocation.)
 - "What is `UnexpectedRollbackException`?" (Thrown when an outer transaction tries to commit after an inner `REQUIRED` method marked it rollback-only — catching the inner exception did not undo the mark.)
 - "What is the difference between `REQUIRES_NEW` and `NESTED`?" (`REQUIRES_NEW` is an independent transaction on a separate connection; `NESTED` is a savepoint in the same transaction, rolled back with the outer one.)
+- "What happens when the example's `placeOrder` returns?" (It throws `UnexpectedRollbackException`, and the order is not saved. `addPoints` joined the same transaction, and its exception passed through its proxy, which marked the shared transaction rollback-only; catching it afterwards cannot clear the mark, so the commit becomes a rollback. Make `addPoints` `REQUIRES_NEW` if it may fail independently.)
+- "Why does `REQUIRES_NEW` need a second connection?" (Because a connection carries one transaction at a time: the outer transaction is suspended but not finished, so it keeps its connection, and the new transaction needs its own until it commits.)
+- "Under load, requests hang until the pool times out, and thread dumps show threads waiting for a connection inside a `REQUIRES_NEW` method. What is happening?" (Each request holds one connection for its outer transaction and needs a second for the inner one. Once every connection is held by an outer transaction, every thread waits for a second connection that nobody will release — a pool deadlock. Avoid `REQUIRES_NEW` on hot paths, or size the pool for two connections per concurrent request.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the default propagation?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly does joining mean?" (The method runs in the caller's transaction, on the same connection: its changes commit only when the outermost method commits, and a failure anywhere rolls back everything.)
+- "So what if an inner `REQUIRED` method throws and the caller catches it?" (The inner proxy has already marked the shared transaction rollback-only. The caller carries on, but the commit at the end becomes a rollback and throws `UnexpectedRollbackException`.)
+- "How do you let an inner step fail without dooming the outer one?" (Run it as `REQUIRES_NEW` — its own transaction, committing or rolling back independently — or as `NESTED`, a savepoint, where the transaction manager supports it.)
+- "Why does `JpaTransactionManager` refuse `NESTED` by default?" (Because rolling back to a savepoint undoes the SQL but not the entities already changed in the persistence context, which would then disagree with the database.)
+
+Other follow-ups:
+
 - "What does `REQUIRES_NEW` cost?" (A second connection while the outer one is suspended — under load this can exhaust the pool and deadlock.)
 - "When is `MANDATORY` useful?" (To assert that a method must only be called within an existing transaction, failing fast if misused.)
 - "Is `NESTED` always supported?" (No — it needs savepoint support from the driver and the transaction manager. `JpaTransactionManager` disallows it by default, because a savepoint rolls back the SQL but not the entities already changed in the persistence context.)
@@ -6341,7 +6423,9 @@ Settings controlling which concurrency anomalies a transaction may observe — r
 Because concurrent transactions can see each other's in-flight work, and full isolation — behaving as if they ran one at a time — costs throughput through waiting and aborts. Levels let each operation pay only for the guarantees it needs.
 
 #### Interview explanation
-Define the three anomalies concretely, map them to levels in a table, and mention that engine defaults differ — PostgreSQL `READ_COMMITTED`, MySQL `REPEATABLE_READ`. Add that `SERIALIZABLE` requires retry logic, which shows you have used it.
+**In 30 seconds** — Isolation levels decide which effects of concurrent transactions a transaction may see. Read committed — PostgreSQL's default — never shows uncommitted data but lets a re-read see newly committed changes; repeatable read — MySQL InnoDB's default — keeps re-reads stable; serializable makes transactions behave as if they ran one at a time, by aborting some of them, so it needs retries. And read committed does not prevent lost updates.
+
+**If they push deeper** — define the three anomalies concretely, map them to levels in a table, and mention that engine defaults differ — PostgreSQL `READ_COMMITTED`, MySQL `REPEATABLE_READ`. Add that `SERIALIZABLE` requires retry logic, which shows you have used it.
 
 #### Syntax
 ```java
@@ -6357,13 +6441,35 @@ Define the three anomalies concretely, map them to levels in a table, and mentio
 public void allocateSeat(Long flightId, Long passengerId) { ... }
 ```
 
+Predict the final stock — a question below asks for it:
+
+```text
+Read committed, stock = 10
+T1: SELECT stock FROM items WHERE id = 7;              -- reads 10
+T2: SELECT stock FROM items WHERE id = 7;              -- reads 10
+T1: UPDATE items SET stock = 9 WHERE id = 7; COMMIT;   -- wrote 10 - 1
+T2: UPDATE items SET stock = 9 WHERE id = 7; COMMIT;   -- wrote 10 - 1
+```
+
 #### Common interview questions
 - "What is a dirty read?" (Reading another transaction's uncommitted change, which may later be rolled back.)
 - "What is a non-repeatable read versus a phantom?" (Non-repeatable: the same row returns different values on a second read. Phantom: the same query returns different rows because another transaction inserted or deleted matching ones.)
 - "What is the default isolation level?" (Spring uses the database's default — `READ_COMMITTED` on PostgreSQL and Oracle, `REPEATABLE_READ` on MySQL InnoDB.)
 - "Why not always use `SERIALIZABLE`?" (It reduces concurrency and causes serialisation failures that the application must catch and retry.)
+- "What is the stock after the example's two transactions, and what would have prevented the problem?" (9, though two items were sold — a lost update. Read committed allows it, because each transaction read a committed value. In PostgreSQL, repeatable read or serializable would abort T2's update; the simpler fixes are an atomic `SET stock = stock - 1`, optimistic locking, or `SELECT ... FOR UPDATE`.)
+- "Why doesn't every database run at `SERIALIZABLE`?" (Because guaranteeing a serial-equivalent outcome costs concurrency: transactions either wait on locks or — as in PostgreSQL — some are aborted and must be retried. Most workloads accept weaker guarantees and handle the specific races that matter explicitly.)
+- "A service moves from MySQL to PostgreSQL, and a report that reads one table twice in a transaction now returns inconsistent totals. Why?" (The default isolation changed: MySQL InnoDB defaults to repeatable read, where both reads see one snapshot, while PostgreSQL defaults to read committed, where the second read sees changes committed in between. Set `isolation = REPEATABLE_READ` on that transaction.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is a non-repeatable read versus a phantom?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which isolation level prevents each?" (Repeatable read prevents non-repeatable reads; the standard still allows phantoms there, though PostgreSQL's snapshot-based repeatable read prevents them too. Serializable prevents both.)
+- "How does PostgreSQL implement repeatable read?" (With snapshot isolation: the transaction sees the database as of its first query and never sees later commits; if it tries to update a row changed since then, it is aborted with a serialization error.)
+- "Does a higher isolation level fix lost updates?" (Under PostgreSQL's repeatable read or serializable, yes — the second writer is aborted and must retry. Under read committed, no. An atomic update or a version check is often simpler than raising isolation.)
+- "What must code do at `SERIALIZABLE`?" (Retry. The database aborts transactions that could produce a non-serial outcome — even ones that never touched the same row — so the whole transaction must be re-run, typically by a retry wrapped around the transactional method.)
+
+Other follow-ups:
+
 - "What is snapshot isolation?" (Each transaction reads a consistent snapshot as of its start; PostgreSQL implements `REPEATABLE_READ` this way.)
 - "Does `READ_COMMITTED` prevent lost updates?" (No — two transactions can read the same value and both write; optimistic locking or `FOR UPDATE` is needed.)
 - "Can you change isolation per transaction?" (Yes, with the `isolation` attribute, if the transaction manager and driver support it.)
@@ -6409,7 +6515,9 @@ The rules determining which exceptions cause a Spring-managed transaction to rol
 Because the framework must decide whether a failure invalidates the work done so far, and the default reflects Java's historical view, inherited from EJB: checked exceptions are expected outcomes the caller handles, so earlier work may still be valid; unchecked exceptions are unexpected failures that must undo everything.
 
 #### Interview explanation
-State the default and call it out as surprising, show `rollbackFor` as the fix, and connect to rollback-only marking from propagation. Interviewers use this to check whether you have been bitten by it.
+**In 30 seconds** — By default, a Spring transaction rolls back when a `RuntimeException` or an `Error` escapes the method — and commits when a checked exception escapes, a rule inherited from EJB that treated checked exceptions as expected outcomes. The default surprises people: a method that throws a checked `PaymentException` after writing an order commits the order. `rollbackFor` changes it per method, and since Spring Framework 6.2 `rollbackOn = ALL_EXCEPTIONS` changes it globally.
+
+**If they push deeper** — state the default and call it out as surprising, show `rollbackFor` as the fix, and connect to rollback-only marking from propagation. Interviewers use this to check whether you have been bitten by it.
 
 #### Syntax
 ```java
@@ -6427,13 +6535,45 @@ public void checkout(Cart cart) throws PaymentException {
 }
 ```
 
+Predict whether each method commits or rolls back — a question below asks for it:
+
+```java
+@Transactional
+public void checkout(Cart cart) throws PaymentDeclinedException {   // a checked exception
+    orders.save(Order.from(cart));
+    payments.charge(cart.total());           // throws PaymentDeclinedException
+}
+
+@Transactional
+public void ship(Long orderId) {
+    shipments.markRequested(orderId);
+    try {
+        courier.book(orderId);               // plain HTTP client; throws CourierException (unchecked)
+    } catch (CourierException e) {
+        log.warn("retry later", e);
+    }
+}
+```
+
 #### Common interview questions
 - "Which exceptions trigger a rollback by default?" (`RuntimeException` and `Error`; checked exceptions commit.)
 - "How do you roll back on a checked exception?" (`@Transactional(rollbackFor = ...)`, often `rollbackFor = Exception.class`.)
 - "If I catch an exception inside the method, does the transaction roll back?" (Not unless something marked it rollback-only — the interceptor never sees a caught exception.)
 - "How do you force a rollback without throwing?" (`TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()`.)
+- "Does each of the example's methods commit or roll back?" (Both commit. `checkout` keeps the order although the payment was declined, because a checked exception does not trigger a rollback by default — add `rollbackFor = PaymentDeclinedException.class`. `ship` commits too: its exception was caught, so the transaction interceptor never saw it.)
+- "Why did Spring choose to commit on checked exceptions?" (It followed EJB's convention that checked exceptions are anticipated business outcomes the caller will handle, so the work done before them still counts. Most teams now see it differently, which is why `rollbackFor` is common and Spring 6.2 added a global switch.)
+- "A Kotlin service throws an `IOException` from a `@Transactional` method, and the data written before it stays committed. Why, when Kotlin has no checked exceptions?" (Spring decides by the exception's Java type, not the language: `IOException` is a checked type, so it commits by default — Kotlin simply never forced anyone to declare or notice it. Spring recommends `rollbackOn = ALL_EXCEPTIONS` for Kotlin applications.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Which exceptions trigger a rollback by default?" — they drill down from your answer. Answer each step before opening it:
+
+- "How do you make a checked exception roll back?" (With `@Transactional(rollbackFor = PaymentException.class)` on the method — or `rollbackFor = Exception.class` for any exception.)
+- "What if you catch the exception inside the method?" (Then the interceptor never sees it and commits — unless the exception already passed through another transactional proxy on its way to you, which marked the shared transaction rollback-only.)
+- "How do you roll back without throwing?" (Mark the transaction yourself: `TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()` — or, inside a `TransactionTemplate`, `status.setRollbackOnly()`.)
+- "Can you change the rule for the whole application?" (Since Spring Framework 6.2, `@EnableTransactionManagement(rollbackOn = ALL_EXCEPTIONS)` rolls back on every exception; before that, teams used a composed annotation meta-annotated `@Transactional(rollbackFor = Exception.class)`.)
+
+Other follow-ups:
+
 - "Why is the default this way?" (It mirrors EJB's convention that checked exceptions are application outcomes, not system failures — a convention most teams now disagree with.)
 - "What happens if the commit itself fails?" (An exception is thrown from the proxy after the method returned — the caller sees a failure even though the method body completed.)
 - "Can you set the rule globally?" (Since Spring Framework 6.2, `@EnableTransactionManagement(rollbackOn = ALL_EXCEPTIONS)` rolls back on every exception. Before that, a custom annotation meta-annotated with `@Transactional(rollbackFor = Exception.class)`, used project-wide.)
@@ -6475,7 +6615,9 @@ The start and end of a transaction — in Spring, the entry and exit of the `@Tr
 Because a transaction holds a connection and its locks from begin to commit, so its width trades correctness against concurrency — wider means more atomic and more waiting — and that choice has to be made deliberately per operation.
 
 #### Interview explanation
-Argue for narrow boundaries: load, decide, write, commit. Then give the concrete failure of a wide one — a remote call inside the transaction holding a pooled connection for its full duration — because it is the most common production consequence.
+**In 30 seconds** — A transaction's boundaries — in Spring, entering and leaving the `@Transactional` method — decide what is atomic and how long a connection and its locks are held. Draw them as narrowly as atomicity allows: load, decide, write, commit. Keep remote calls and slow computation outside, because a transaction waiting on the network still holds a pooled connection, and split large batch jobs into chunks, each with its own transaction.
+
+**If they push deeper** — argue for narrow boundaries: load, decide, write, commit. Then give the concrete failure of a wide one — a remote call inside the transaction holding a pooled connection for its full duration — because it is the most common production consequence.
 
 #### Syntax
 ```java
@@ -6494,13 +6636,36 @@ public void reprice(List<Long> ids) {
 }
 ```
 
+Spot what is wrong with this job — a question below asks for it:
+
+```java
+@Transactional
+public void repriceAll() {
+    for (Product p : products.findAll()) {               // 2 million products
+        p.setPrice(pricingClient.quote(p.getSku()));     // HTTP call, ~50 ms each
+    }
+}
+```
+
 #### Common interview questions
 - "Where should transaction boundaries be?" (Around the business operation in the service layer, as narrow as atomicity allows.)
 - "Why keep remote calls out of transactions?" (They hold a database connection and locks for the duration of a network call, exhausting the pool under load.)
 - "How do you handle large batch jobs?" (Commit in chunks, so failures roll back one chunk and locks are released regularly.)
 - "What is `TransactionTemplate` for?" (Programmatic boundaries around a block of code — useful when a method needs several transactions or when self-invocation would defeat the proxy.)
+- "What is wrong with the example's `repriceAll`?" (Everything runs in one transaction: about 28 hours of HTTP calls while holding a connection, with two million entities accumulating in the persistence context until memory runs out — and a failure near the end rolls back all of it. Fetch the quotes outside any transaction, then write in chunks of a few hundred, each in its own transaction, and make the job restartable.)
+- "Why does a transaction's length matter if the database is fast?" (Because a transaction holds resources for as long as it is open, not just while querying: a pooled connection, the row locks it has taken, and — in MVCC databases — a snapshot that delays cleanup. Time spent waiting on anything else is time those resources are unavailable to other requests.)
+- "A chunked import fails at chunk 412 of 1,000. What did you need to design in advance?" (Restartability: chunks 1 to 411 are committed, so the job must resume at 412 — by tracking progress, or by making each chunk idempotent so re-running it is harmless — rather than starting over and duplicating data.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Where should transaction boundaries be?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why as narrow as possible?" (Because a transaction holds a connection and its locks from begin to commit; the shorter it is, the less other work waits, and the smaller the pool can be.)
+- "But narrower means less atomic — how do you decide?" (By the business invariant: everything that must succeed or fail together goes in one transaction, and nothing else does. Work that can be retried or compensated separately belongs outside.)
+- "How do you make one method use several transactions?" (Call transactional methods on another bean, or wrap blocks programmatically with `TransactionTemplate` — calling `@Transactional` methods on `this` would bypass the proxy.)
+- "And side effects that must follow the commit?" (Publish an event and handle it with `@TransactionalEventListener(AFTER_COMMIT)`, or write it to an outbox table in the same transaction, so a relay can deliver it reliably.)
+
+Other follow-ups:
+
 - "How do you keep side effects consistent with the commit?" (Publish them after commit with `@TransactionalEventListener(AFTER_COMMIT)` or the outbox pattern.)
 - "What about `open-in-view`?" (It extends the persistence context, not the transaction, but still holds a connection from its first query to the end of the request — disable it.)
 - "How long is too long for a transaction?" (Anything that includes waiting on something other than the database; in absolute terms, seconds rather than milliseconds is a warning sign.)
@@ -6542,7 +6707,9 @@ Concurrency control using a `@Version` column: updates include the expected vers
 Because two concurrent edits of the same row otherwise end with the second silently overwriting the first, and holding a lock between reading and writing is impossible when that gap spans HTTP requests. A version number lets the write detect the conflict instead.
 
 #### Interview explanation
-Describe the versioned update and the zero-rows-affected detection, then say how you handle the exception — retry for mechanical operations, 409 for human edits. Handling is what interviewers want to hear, not just the annotation.
+**In 30 seconds** — Optimistic locking detects conflicting updates instead of preventing them. A `@Version` column is read with the row; Hibernate's update includes `WHERE version = ?` and increments it, so if another transaction changed the row in between, the update matches nothing and fails with an optimistic-locking exception. You then retry, for a mechanical operation, or return 409 so a person can reload — and for edits that span requests, the version must travel through the API.
+
+**If they push deeper** — describe the versioned update and the zero-rows-affected detection, then say how you handle the exception — retry for mechanical operations, 409 for human edits. Handling is what interviewers want to hear, not just the annotation.
 
 #### Syntax
 ```java
@@ -6559,13 +6726,35 @@ public void incrementViews(Long articleId) {
 }
 ```
 
+Predict what happens to user B's update — a question below asks for it:
+
+```sql
+-- Both users loaded product 7 at version 3, price 10
+-- User A changes the price:
+UPDATE products SET name = 'Mug', price = 12, version = 4 WHERE id = 7 AND version = 3;     -- 1 row
+-- User B changes the name a moment later:
+UPDATE products SET name = 'Mug XL', price = 10, version = 4 WHERE id = 7 AND version = 3;  -- ?
+```
+
 #### Common interview questions
 - "What is optimistic locking?" (Detecting concurrent modification at write time using a version column, rather than locking at read time.)
 - "How does Hibernate implement it?" (It adds `AND version = ?` to the update and increments the version; zero affected rows raises `OptimisticLockException`.)
 - "What is a lost update?" (Two transactions read the same value and both write, so one overwrites the other's change without knowing it existed.)
 - "How should the API respond to a conflict?" (409 Conflict, so the client can reload and reapply — or the server retries if the operation is mechanical.)
+- "What happens to user B's update in the example?" (It matches no rows — the version is now 4 — so Hibernate throws an optimistic-locking exception and B's transaction rolls back. Without `@Version`, B's update would succeed and write back the old price of 10, silently undoing A's change.)
+- "Why can't a database lock protect an edit form that a user keeps open for five minutes?" (Because the read and the write happen in separate HTTP requests, and so separate transactions: a lock would have to be held between them, across the user's think time, blocking everyone else. A version number lets the write detect the conflict without holding anything.)
+- "A view counter with `@Version` throws optimistic-locking exceptions constantly during a traffic spike. What do you change?" (Optimistic locking is the wrong tool for a hot row, because every concurrent increment conflicts. Use an atomic update — `UPDATE articles SET views = views + 1 WHERE id = ?` — or buffer increments and write them in batches.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is optimistic locking?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does Hibernate detect the conflict?" (Its update carries `WHERE id = ? AND version = ?` and sets the next version. If another transaction changed the row first, the version no longer matches, no row is updated and Hibernate throws — which Spring translates into `ObjectOptimisticLockingFailureException`.)
+- "How do you handle the exception?" (Retry the whole transaction, re-reading the row, for mechanical operations; return 409 Conflict for human edits, so the user can reload and reapply their change.)
+- "How does it work across HTTP requests?" (The client receives the version with the data — in the body or as an ETag — and sends it back with the update; the server applies it to the entity, so the check compares against what the user actually saw.)
+- "When would you choose pessimistic locking instead?" (When contention on the same row is high and short transactions can afford to wait: retries would then waste more work than queueing.)
+
+Other follow-ups:
+
 - "When is optimistic locking a poor choice?" (Under high contention on the same row, where repeated conflicts and retries waste more work than queueing.)
 - "Can you use a timestamp instead of a number?" (Yes, but timestamps can collide within clock resolution; an integer is safer.)
 - "How do you carry the version across requests?" (Return it in the response — or as an ETag — and require it on the update, so the check spans the user's edit.)
@@ -6607,7 +6796,9 @@ Acquiring a database row lock at read time — typically `SELECT ... FOR UPDATE`
 Because on a heavily contended row, detecting conflicts afterwards means most transactions fail and retry repeatedly. Locking the row on read makes the others wait their turn instead — cheaper and fairer when collisions are the norm.
 
 #### Interview explanation
-Show `@Lock(PESSIMISTIC_WRITE)` and explain the two operational requirements: a lock timeout, and consistent lock ordering to avoid deadlocks. Then contrast with optimistic locking by contention level.
+**In 30 seconds** — Pessimistic locking takes the lock when reading — `SELECT ... FOR UPDATE`, or `@Lock(PESSIMISTIC_WRITE)` in Spring Data — so other writers wait until the transaction ends. It suits rows under heavy contention, such as stock levels or seat allocation, where optimistic retries would keep failing. Two rules come with it: always set a lock timeout, and acquire locks in a consistent order, or concurrent transactions deadlock.
+
+**If they push deeper** — show `@Lock(PESSIMISTIC_WRITE)` and explain the two operational requirements: a lock timeout, and consistent lock ordering to avoid deadlocks. Then contrast with optimistic locking by contention level.
 
 #### Syntax
 ```java
@@ -6626,13 +6817,38 @@ public void transfer(Long a, Long b, long cents) {
 }
 ```
 
+Predict what can happen when these run together — a question below asks for it:
+
+```java
+@Transactional
+public void transfer(Long from, Long to, long cents) {
+    var a = accounts.lockById(from);      // SELECT ... FOR UPDATE
+    var b = accounts.lockById(to);
+    a.debit(cents);
+    b.credit(cents);
+}
+// At the same moment: transfer(1, 2, 100) and transfer(2, 1, 50)
+```
+
 #### Common interview questions
 - "What is pessimistic locking?" (Locking a row when it is read so no other transaction can modify it until commit.)
 - "When would you choose it over optimistic locking?" (When contention on a row is high and conflicts would cause many retries — stock levels, seat allocation, counters.)
 - "What is a deadlock and how do you avoid it?" (Two transactions each waiting for a lock the other holds; avoid it by acquiring locks in a consistent order and using timeouts.)
 - "What happens without a lock timeout?" (A blocked transaction waits indefinitely, holding its own connection and locks, which can cascade into pool exhaustion.)
+- "What can happen when the example's two transfers run at the same moment?" (A deadlock: the first locks account 1 and waits for 2, while the second locks 2 and waits for 1. The database detects the cycle and aborts one of them, which must be retried. Lock in a consistent order — lower id first — so both transactions queue on the same row instead.)
+- "Why must a pessimistic lock have a timeout?" (Because a blocked transaction waits while holding its own connection and locks. Without a limit, one stuck lock holder makes waiters pile up until the connection pool is exhausted and the whole service stalls.)
+- "Several workers poll a jobs table with `SELECT ... FOR UPDATE LIMIT 1`, and adding workers does not raise throughput. Why, and what is the fix?" (Every worker selects the same first row and waits on its lock, so jobs are processed one at a time. Add `SKIP LOCKED`, so each worker skips rows that others have locked and takes the next free one.)
 
 #### Follow-up questions
+Interviewers rarely stop at "When would you choose it over optimistic locking?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does the lock actually do?" (`FOR UPDATE` takes an exclusive row lock that blocks other writers and other locking reads until commit or rollback; plain reads under MVCC still proceed.)
+- "How long is the lock held?" (Until the transaction ends — which is why the transaction must be short and contain no remote calls.)
+- "How do you avoid deadlocks?" (Acquire locks in one consistent order — by ascending id, for instance — and keep transactions short. The database still detects deadlocks and aborts one transaction, so be ready to retry.)
+- "What is the difference between `PESSIMISTIC_READ` and `PESSIMISTIC_WRITE`?" (A read lock is shared — others may also read-lock the row, but nobody may write it; a write lock is exclusive and blocks other locking reads too.)
+
+Other follow-ups:
+
 - "What is `SKIP LOCKED`?" (A clause that skips already-locked rows — ideal for work queues where several workers take the next available item.)
 - "What is the difference between `PESSIMISTIC_READ` and `PESSIMISTIC_WRITE`?" (Read takes a shared lock allowing other readers; write takes an exclusive lock.)
 - "Does the database detect deadlocks?" (Yes — it aborts one transaction, which the application must be ready to retry.)
@@ -6677,7 +6893,9 @@ Maintaining a bounded set of open database connections — HikariCP in Spring Bo
 Because opening a connection is expensive, and an unbounded number of connections would overwhelm the database — so connections are opened once and reused, and the pool's size doubles as a cap on how much load one instance can put on the database.
 
 #### Interview explanation
-Explain borrow-and-return, then sizing: small pools are usually right, and pool size times instance count must stay below the database's limit. Diagnose "connection timeout" as long-held transactions rather than a slow database — that is the experienced answer.
+**In 30 seconds** — A connection pool — HikariCP in Spring Boot — keeps a bounded set of open database connections and lends one to a thread for the length of its transaction, because opening a connection per request is expensive. The pool size also caps the load one instance puts on the database, so pools should be small, and pool size times instance count must stay below the database's connection limit. A 'connection is not available' timeout usually means connections are held too long, not that the database is slow.
+
+**If they push deeper** — explain borrow-and-return, then sizing: small pools are usually right, and pool size times instance count must stay below the database's limit. Diagnose "connection timeout" as long-held transactions rather than a slow database — that is the experienced answer.
 
 #### Syntax
 ```yaml
@@ -6697,13 +6915,34 @@ PostgreSQL max_connections = 100
 → scaling to 6 instances (120) exhausts the database for every service
 ```
 
+Predict what happens under this traffic — a question below asks for it:
+
+```text
+maximum-pool-size: 10, connection-timeout: 3 s
+Each request holds a connection for its whole transaction,
+which includes a 2-second call to a payment service.
+Traffic: 8 requests per second.
+```
+
 #### Common interview questions
 - "Why use a connection pool?" (Creating connections is expensive; a pool reuses them and bounds concurrency against the database.)
 - "How do you size the pool?" (Small — often 10–20 per instance — and constrained so that pool size times instances stays below the database's connection limit.)
 - "What does a 'connection is not available' timeout usually mean?" (Connections are held too long — typically transactions open across slow work — not that the database is slow.)
 - "What is HikariCP's leak detection?" (A warning, with a stack trace, when a connection is held longer than a threshold — the fastest way to find the code holding it.)
+- "What happens to the example's service under that traffic?" (Each request holds a connection for over 2 seconds, so 8 requests per second need about 16 connections, and the pool has 10. Requests queue for a connection, and after 3 seconds of waiting they fail with a connection timeout — while the database itself is idle. Move the payment call out of the transaction rather than raising the pool size.)
+- "Why can a smaller pool give higher throughput than a larger one?" (Because the database has finite CPU, disks and locks. Past its capacity, extra concurrent queries only contend with each other — more context switching, more lock waits — so each runs slower. A small pool queues work in the application instead, where waiting is cheap.)
+- "Autoscaling adds instances during a spike, and suddenly every service sharing the database fails to connect. Why?" (Each new instance opens its own pool, so total connections grew with the instance count until they reached the database's `max_connections` — after which no service could open a new one. Size pools against maximum scale, or put a pooler such as PgBouncer in front of the database.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you size the pool?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where does the limit come from?" (From the database: every instance's pool counts against its `max_connections`, so pool size times the maximum instance count — plus other clients — must stay below it.)
+- "What does a 'connection is not available' timeout tell you?" (That every connection stayed in use for the whole timeout — usually because transactions hold them while doing something slow, such as a remote call. Find the holders with leak detection rather than raising the size.)
+- "What does leak detection show?" (When a connection is held longer than `leak-detection-threshold`, Hikari logs a warning with the stack trace of where it was borrowed — pointing straight at the code holding it.)
+- "Why set `max-lifetime`?" (To retire connections before a firewall, load balancer or the database closes them silently — otherwise the next borrower gets a dead connection and an error.)
+
+Other follow-ups:
+
 - "Why does a bigger pool sometimes make things slower?" (More concurrent queries contend for the database's CPU, I/O and locks; past its capacity, throughput falls.)
 - "What is `max-lifetime` for?" (Retiring connections before a network device or the database closes them silently, avoiding errors on stale connections.)
 - "How does PgBouncer change this?" (It pools at the database side, letting many application connections share fewer server connections.)
@@ -6748,7 +6987,9 @@ Transactions spanning several resources — databases, brokers — either coordi
 Because business operations increasingly span systems, and a local transaction cannot make writes to two systems atomic — one can succeed while the other fails. The choice is between coordinating the systems (two-phase commit) and designing so that only one local transaction needs to be atomic (outbox, sagas).
 
 #### Interview explanation
-Explain why 2PC is avoided — blocking, coordinator failure, poor availability — then present the outbox pattern for "database write plus event" and sagas with compensations for multi-service workflows. The dual-write problem is the question underneath most of these interviews.
+**In 30 seconds** — A local transaction cannot make writes to two systems atomic — a database and a message broker, or two services — so one can succeed while the other fails: the dual-write problem. Two-phase commit can coordinate them, but it blocks participants and depends on a coordinator, so it is usually avoided. Instead, the outbox pattern writes the event to a table in the same database transaction for a relay to publish, and a saga runs a sequence of local transactions with compensating actions.
+
+**If they push deeper** — explain why 2PC is avoided — blocking, coordinator failure, poor availability — then present the outbox pattern for "database write plus event" and sagas with compensations for multi-service workflows. The dual-write problem is the question underneath most of these interviews.
 
 #### Syntax
 ```sql
@@ -6772,13 +7013,36 @@ public void place(Order order) {
 // A relay (polling or CDC with Debezium) publishes unpublished rows to Kafka.
 ```
 
+Predict what consumers see when the last step throws — a question below asks for it:
+
+```java
+@Transactional
+public void place(Order order) {
+    orders.save(order);
+    kafkaTemplate.send("orders", toEvent(order));   // published directly
+    inventory.reserve(order);                       // throws OutOfStockException
+}
+```
+
 #### Common interview questions
 - "What is the dual-write problem?" (Writing to a database and publishing to a broker are two operations that cannot be made atomic together, so one can succeed while the other fails.)
 - "How does the outbox pattern solve it?" (The event is written to an outbox table in the same database transaction; a separate relay publishes it afterwards, giving at-least-once delivery.)
 - "What is a saga?" (A sequence of local transactions across services, each with a compensating action executed if a later step fails.)
 - "Why avoid two-phase commit?" (It blocks participants during the commit window, depends on a coordinator that can fail, and reduces availability.)
+- "What do downstream consumers see when the example's `reserve` throws?" (An `OrderPlaced` event for an order that does not exist: the send went to Kafka while the transaction was still open, and the rollback cannot recall it. The reverse also happens — the commit succeeds, the publish fails, and the event is lost. Write the event to an outbox table in the same transaction, and let a relay publish it after commit.)
+- "Why does the outbox pattern give at-least-once rather than exactly-once delivery?" (Because the relay can publish an event and crash before recording that it did, then publish it again on restart. Exactly-once would need the publish and the record to be atomic — the same dual-write problem — so consumers must be idempotent instead.)
+- "An order saga reserves stock, charges the payment, then fails to book shipping. What should happen next?" (The saga runs compensations in reverse — refund the payment, then release the stock — each as its own local transaction, retried until it succeeds, with alerting if it cannot. Compensations are new actions, not rollbacks, so the customer may briefly see the charge.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the dual-write problem?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why not just publish inside the transaction?" (Because the broker is not part of the database transaction: the message can go out before a rollback — announcing something that never happened — or the commit can succeed and the publish fail, losing the event.)
+- "How does the outbox fix it?" (The event is written to an outbox table in the same local transaction as the business change, so both commit or neither does; a relay then publishes committed outbox rows — by polling, or by change data capture with Debezium.)
+- "What must consumers do?" (Be idempotent: the relay can publish an event more than once, so processing it twice must have the effect of once — typically by recording processed event ids, or by using natural keys.)
+- "And when a workflow spans several services?" (A saga: each service commits its own local transaction and publishes an event, and if a later step fails, earlier steps are undone by compensating actions — coordinated by an orchestrator, or by the services reacting to events.)
+
+Other follow-ups:
+
 - "What must consumers do with at-least-once delivery?" (Be idempotent — processing the same event twice must have the same effect as once, usually via a processed-event table or natural keys.)
 - "Orchestration or choreography for sagas?" (Orchestration has a central coordinator and is easier to follow; choreography uses events between services and is more decoupled but harder to trace.)
 - "What is change data capture?" (Reading the database's transaction log — Debezium does this — to publish outbox rows without polling.)
