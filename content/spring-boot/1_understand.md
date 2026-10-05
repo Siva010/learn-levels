@@ -252,18 +252,54 @@ flowchart TD
 **Example:**
 ```java
 @Component
-public class ConnectionWarmer {
+public class DatabaseService implements InitializingBean, DisposableBean {
+
     private final DataSource dataSource;
 
-    ConnectionWarmer(DataSource dataSource) { this.dataSource = dataSource; }
+    // 1. CONSTRUCTION + DEPENDENCY INJECTION
+    //
+    // Spring creates DatabaseService.
+    // It sees that DataSource is required,
+    // so it provides the DataSource bean.
+    public DatabaseService(DataSource dataSource) {
+        this.dataSource = dataSource;
 
-    @PostConstruct
-    void warmUp() throws SQLException {
-        try (var connection = dataSource.getConnection()) { connection.isValid(1); }
+        System.out.println("1. Constructor");
     }
 
+    // 2. INITIALIZATION
+    //
+    // Runs AFTER dependencies have been injected.
+    @PostConstruct
+    public void setup() {
+        System.out.println("2. @PostConstruct");
+    }
+
+    // 3. INITIALIZATION CALLBACK
+    //
+    // Spring calls this because we implemented
+    // InitializingBean.
+    @Override
+    public void afterPropertiesSet() {
+        System.out.println("3. afterPropertiesSet()");
+    }
+
+    // 4. DESTRUCTION
+    //
+    // Runs before Spring destroys the bean.
     @PreDestroy
-    void shutdown() { log.info("closing"); }
+    public void cleanup() {
+        System.out.println("4. @PreDestroy");
+    }
+
+    // 5. DESTRUCTION CALLBACK
+    //
+    // Spring calls this because we implemented
+    // DisposableBean.
+    @Override
+    public void destroy() {
+        System.out.println("5. destroy()");
+    }
 }
 ```
 
