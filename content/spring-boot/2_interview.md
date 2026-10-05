@@ -7107,7 +7107,9 @@ Authentication verifies identity; authorisation decides whether that identity ma
 Because proving who someone is and deciding what they may do are different problems with different failure responses — an unknown caller should be asked to authenticate (401), a known one refused (403) — and keeping them separate lets each change independently.
 
 #### Interview explanation
-Define both, map them to 401 and 403, and mention the `SecurityContext` and its thread-local storage — then the consequence for `@Async` and thread pools, which is where people get caught.
+**In 30 seconds** — Authentication establishes who the caller is; authorisation decides whether that identity may do what it asks. They fail differently: an unauthenticated request gets 401, so the client can log in, while an authenticated one that is not allowed gets 403. Spring Security keeps the authenticated identity in a `SecurityContext` held in a `ThreadLocal` — which is why it is missing on other threads, such as in `@Async` methods, unless you propagate it.
+
+**If they push deeper** — define both, map them to 401 and 403, and mention the `SecurityContext` and its thread-local storage — then the consequence for `@Async` and thread pools, which is where people get caught.
 
 #### Syntax
 ```java
@@ -7130,13 +7132,39 @@ TaskDecorator securityContextPropagation() {
 }
 ```
 
+Predict what happens when this runs — a question below asks for it:
+
+```java
+@Service
+class ReportService {
+    @Async
+    public void exportForCurrentUser() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        exporter.export(auth.getName());
+    }
+}
+// Called from a controller by an authenticated user; no context propagation configured
+```
+
 #### Common interview questions
 - "What is the difference between authentication and authorisation?" (Authentication establishes identity; authorisation decides permissions for that identity.)
 - "When do you return 401 versus 403?" (401 when the request is not authenticated; 403 when it is authenticated but not permitted.)
 - "Where does Spring keep the current user?" (In the `SecurityContext`, held by `SecurityContextHolder` in a `ThreadLocal` by default.)
 - "Why is the user null in my `@Async` method?" (The context is thread-local and is not propagated to the executor's thread unless you configure it.)
+- "What happens when the example's `exportForCurrentUser` runs?" (`getAuthentication()` returns `null` on the executor's thread, so `auth.getName()` throws `NullPointerException`: the context is thread-local, and the async task runs on another thread. Propagate it — with `DelegatingSecurityContextExecutor` or a `TaskDecorator` like the one above — or pass the user name as an argument.)
+- "Why does Spring Security store the context in a `ThreadLocal`?" (Because in the servlet model one thread handles a request from start to finish, so a thread-local makes the current user available anywhere in that request without passing it through every method. The cost appears when work moves to another thread.)
+- "A logged-in user who lacks permission is sent to the login page instead of getting an error. What is wrong?" (Either the request is not actually authenticated — the session or token never reached the server, so the user is anonymous and Spring correctly asks them to log in — or a custom handler turns access denials into authentication challenges. A known user without permission should get 403.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between authentication and authorisation?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which status code does each failure produce?" (401 when authentication is missing or invalid — the client should authenticate; 403 when the caller is known but not permitted — authenticating again will not help.)
+- "Where does Spring keep the result of authentication?" (In an `Authentication` object inside the `SecurityContext`, held by `SecurityContextHolder` — by default in a `ThreadLocal` for the request's thread.)
+- "What does that mean for `@Async` code?" (The executor's thread starts with an empty context, so the user is missing. Wrap the executor with `DelegatingSecurityContextExecutor`, or decorate tasks to copy the context in and clear it afterwards.)
+- "Is an unauthenticated user represented by `null`?" (Not once the security filters have run: Spring sets an `AnonymousAuthenticationToken`, so check `isAuthenticated()` and the token type rather than testing for `null`.)
+
+Other follow-ups:
+
 - "How do you propagate the context to other threads?" (`DelegatingSecurityContextExecutor`, a `TaskDecorator`, or the `MODE_INHERITABLETHREADLOCAL` strategy for child threads.)
 - "What is a principal?" (The identity of the authenticated party — a username, user object or token subject.)
 - "How does this work in WebFlux?" (The context lives in the reactive `Context`, not a `ThreadLocal`, accessed via `ReactiveSecurityContextHolder`.)
@@ -7178,7 +7206,9 @@ A chain of servlet filters, selected per request by `FilterChainProxy`, that per
 Because relying on each controller to check credentials means one forgotten check is an open endpoint that looks like a correct one. Running security as filters, before any controller, enforces it uniformly at the edge.
 
 #### Interview explanation
-Walk the path — `DelegatingFilterProxy`, `FilterChainProxy`, the selected `SecurityFilterChain`, its ordered filters — and name `ExceptionTranslationFilter` as the place 401s and 403s are produced. Mention multiple chains with `securityMatcher`.
+**In 30 seconds** — Spring Security runs as servlet filters, before a request reaches the `DispatcherServlet`. A `DelegatingFilterProxy` hands each request to `FilterChainProxy`, which picks the first `SecurityFilterChain` whose matcher applies and runs its ordered filters — authentication, then authorisation — and `ExceptionTranslationFilter` turns security failures into 401 or 403 responses. Because all of this happens outside Spring MVC, `@ControllerAdvice` never sees security exceptions.
+
+**If they push deeper** — walk the path — `DelegatingFilterProxy`, `FilterChainProxy`, the selected `SecurityFilterChain`, its ordered filters — and name `ExceptionTranslationFilter` as the place 401s and 403s are produced. Mention multiple chains with `securityMatcher`.
 
 #### Syntax
 ```java
@@ -7200,13 +7230,41 @@ http.exceptionHandling(e -> e
     .accessDeniedHandler((req, res, ex) -> writeProblem(res, 403, "Forbidden")));
 ```
 
+Predict what happens with this configuration — a question below asks for it:
+
+```java
+@Bean @Order(1)
+SecurityFilterChain all(HttpSecurity http) throws Exception {
+    return http.authorizeHttpRequests(a -> a.anyRequest().authenticated()).build();   // no securityMatcher
+}
+
+@Bean @Order(2)
+SecurityFilterChain publicApi(HttpSecurity http) throws Exception {
+    return http.securityMatcher("/public/**")
+               .authorizeHttpRequests(a -> a.anyRequest().permitAll())
+               .build();
+}
+```
+
 #### Common interview questions
 - "How does Spring Security intercept requests?" (A `DelegatingFilterProxy` delegates to `FilterChainProxy`, which runs the filters of the first matching `SecurityFilterChain` before the dispatcher.)
 - "Where are 401 and 403 responses produced?" (`ExceptionTranslationFilter` converts authentication failures through the entry point and access denials through the access-denied handler.)
 - "Can you have several security configurations?" (Yes — several `SecurityFilterChain` beans with `securityMatcher` and `@Order`; the first matching chain handles the request.)
 - "How do you add a custom filter?" (`http.addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class)` or `addFilterAfter`, positioned relative to a known filter.)
+- "What happens with the example's two chains?" (Recent Spring Security versions refuse to start: a chain without a `securityMatcher` matches every request, so it must come last, and Spring detects that the public chain could never be reached. Without that check, the first chain would silently handle every request, public ones included. Give the catch-all chain the lowest priority.)
+- "Why is security implemented as filters rather than in controllers or interceptors?" (So that it runs first and for every request — including requests that match no controller, static resources and error pages — and so one forgotten check in a controller cannot leave an endpoint open. Filters can also reject a request before any application code runs.)
+- "A custom JWT filter, annotated `@Component` and added with `addFilterBefore`, runs twice per request — and even on paths the security chain ignores. Why?" (Spring Boot registers every `Filter` bean with the servlet container automatically, so it runs in the container's main chain as well as inside the security chain. Remove `@Component` and create the filter inside the security configuration — or disable its container registration with a `FilterRegistrationBean`.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does Spring Security intercept requests?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does a request get from the servlet container into Spring Security?" (Through `DelegatingFilterProxy`, a servlet filter that delegates to the `FilterChainProxy` bean — the bridge from the container's filters to Spring-managed ones.)
+- "With several `SecurityFilterChain`s, which one runs?" (The first, by `@Order`, whose `securityMatcher` matches the request — and only that one. A chain without a matcher matches everything, so it must come last.)
+- "Where do 401 and 403 come from?" (From `ExceptionTranslationFilter`, which catches security exceptions thrown by the filters after it: authentication failures go to the authentication entry point — a 401 or a login redirect — and access denials to the access-denied handler, a 403.)
+- "How do you customise those responses?" (In the chain's `exceptionHandling` configuration, with a custom `AuthenticationEntryPoint` and `AccessDeniedHandler` — not in `@ControllerAdvice`, which runs too late to see them.)
+
+Other follow-ups:
+
 - "Why does `@ControllerAdvice` not catch security exceptions?" (They are thrown in filters, before the dispatcher, so MVC exception handling never sees them.)
 - "How do you debug which filter rejected a request?" (Enable TRACE logging for `org.springframework.security`.)
 - "What does `web.ignoring()` do and why avoid it?" (It bypasses the security chain entirely, including header protections; `permitAll()` is preferred.)
@@ -7248,7 +7306,9 @@ Declaring `SecurityFilterChain` beans built from `HttpSecurity`'s lambda DSL, wi
 Because rules scattered across controllers cannot be reviewed as a whole, and a forgotten rule must not mean an open endpoint. One ordered list in code, ending in a deny-by-default rule, makes the whole access policy readable and safe by default.
 
 #### Interview explanation
-Show the modern DSL, state that `WebSecurityConfigurerAdapter` and `antMatchers` are gone in Spring Security 6, and stress first-match ordering plus deny-by-default — the two properties that prevent accidental exposure.
+**In 30 seconds** — Security is configured by declaring `SecurityFilterChain` beans built with `HttpSecurity`'s lambda DSL — `WebSecurityConfigurerAdapter` and `antMatchers` are gone since Spring Security 6. The rules in `authorizeHttpRequests` are evaluated top to bottom and the first match decides, so specific rules come before general ones, and the list ends with `anyRequest().authenticated()` — deny by default, so a forgotten endpoint stays closed.
+
+**If they push deeper** — show the modern DSL, state that `WebSecurityConfigurerAdapter` and `antMatchers` are gone in Spring Security 6, and stress first-match ordering plus deny-by-default — the two properties that prevent accidental exposure.
 
 #### Syntax
 ```java
@@ -7271,13 +7331,35 @@ http.authorizeHttpRequests(auth -> auth
 .requestMatchers("/api/**").authenticated()
 ```
 
+Spot the problems in these rules — a question below asks for it:
+
+```java
+http.authorizeHttpRequests(auth -> auth
+    .requestMatchers("/api/orders/**").hasRole("USER")
+    .requestMatchers(HttpMethod.DELETE, "/api/orders/**").hasRole("ADMIN")
+    .requestMatchers("/api/reports/**").permitAll()
+    .anyRequest().permitAll());
+```
+
 #### Common interview questions
 - "How do you configure Spring Security 6?" (Declare a `SecurityFilterChain` bean and configure `HttpSecurity` with the lambda DSL.)
 - "What replaced `WebSecurityConfigurerAdapter`?" (Component-based configuration — `SecurityFilterChain` beans — after deprecation in 5.7 and removal in 6.)
 - "How are URL rules evaluated?" (Top to bottom; the first matching rule decides, so specific rules must precede general ones.)
 - "Why end with `anyRequest().authenticated()`?" (Deny by default — any endpoint not explicitly opened requires authentication.)
+- "What is wrong with the example's rules?" (Two things. The `DELETE` rule is never reached — the broader `/api/orders/**` rule matches first, so any `USER` can delete orders. And the final `permitAll()` leaves every unlisted endpoint open to anyone, including endpoints added later. Put the specific rule first, and end with `anyRequest().authenticated()`.)
+- "Why should the rule list end with `anyRequest().authenticated()` rather than `permitAll()`?" (Because the last rule covers every endpoint nobody thought about — including ones added next year. Ending with a deny means a forgotten rule leaves an endpoint closed, which someone will notice; ending with an allow means it is silently open.)
+- "A team disables CSRF to make their React app's `POST` requests work, but the app logs in with a session cookie. What have they done?" (Opened a real CSRF hole: the browser attaches the session cookie to requests forged by any other site, and nothing now checks that a request came from their own pages. Keep CSRF on and send the token from the SPA — `CookieCsrfTokenRepository` with a SPA-aware request handler — or switch to header-based tokens.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How are URL rules evaluated?" — they drill down from your answer. Answer each step before opening it:
+
+- "So what happens when a broad rule comes before a specific one?" (The broad rule matches first and decides, so the specific rule below it is never reached — `/api/**` above `/api/admin/**` lets every authenticated user into the admin endpoints.)
+- "How do you restrict a rule to one HTTP method?" (Pass the method to the matcher — `requestMatchers(HttpMethod.DELETE, "/api/orders/**")` — otherwise the rule applies to every method.)
+- "When is it safe to disable CSRF?" (When the chain authenticates only with headers — `Authorization: Bearer` — uses no cookies for authentication, and sets sessions to `STATELESS`.)
+- "How do you prove the rules are right?" (Test them: `MockMvc` requests per endpoint and role — anonymous, `@WithMockUser(roles = ...)`, JWT post-processors — asserting 401, 403 or 200, so a reordered rule fails the build.)
+
+Other follow-ups:
+
 - "What replaced `antMatchers`?" (`requestMatchers`, which picks a matcher consistent with Spring MVC's own path matching.)
 - "How do you secure Actuator?" (A dedicated chain or rules for `/actuator/**`, exposing health publicly and everything else to an admin role or the internal network only.)
 - "How do you test the configuration?" (`@WebMvcTest` with `MockMvc`, `@WithMockUser` or JWT post-processors, asserting 401/403/200 per endpoint and role.)
@@ -7319,7 +7401,9 @@ Storing passwords as salted, deliberately slow one-way hashes produced by a `Pas
 Because databases leak, and a stored password leaks with them — including everywhere the user reused it. A salted, deliberately slow one-way hash means a leaked database does not reveal passwords, and brute-forcing the hashes is computationally impractical.
 
 #### Interview explanation
-Explain salt (defeats precomputed tables and identical-password correlation) and work factor (makes each guess expensive). Name BCrypt as Spring's default, Argon2id as the current recommendation, and say plainly that fast hashes like SHA-256 are wrong for passwords.
+**In 30 seconds** — Passwords are stored as salted, deliberately slow, one-way hashes — BCrypt, Spring's default, or Argon2id — produced by a `PasswordEncoder`. The salt makes every hash unique, defeating precomputed tables; the work factor makes each guess expensive, so a leaked database cannot be brute-forced cheaply. Fast hashes such as SHA-256 are wrong for passwords precisely because they are fast, and encryption is wrong because it can be reversed.
+
+**If they push deeper** — explain salt (defeats precomputed tables and identical-password correlation) and work factor (makes each guess expensive). Name BCrypt as Spring's default, Argon2id as the current recommendation, and say plainly that fast hashes like SHA-256 are wrong for passwords.
 
 #### Syntax
 ```java
@@ -7337,13 +7421,34 @@ if (encoder.upgradeEncoding(user.getPasswordHash())) {
 }
 ```
 
+Predict what an attacker learns from these hashes — a question below asks for it:
+
+```java
+// Stored when the users signed up
+String ana = DigestUtils.sha256Hex("Summer2024!");
+String ben = DigestUtils.sha256Hex("Summer2024!");
+// The users table leaks.
+```
+
 #### Common interview questions
 - "How should passwords be stored?" (As salted, slow, adaptive hashes — BCrypt, Argon2id, SCrypt or PBKDF2 — never encrypted and never with a fast hash.)
 - "Why not SHA-256?" (It is designed to be fast; GPUs compute billions per second, making brute force feasible.)
 - "What does the salt do?" (Makes each hash unique even for identical passwords, defeating rainbow tables and cross-account correlation.)
 - "What is the `{bcrypt}` prefix?" (The `DelegatingPasswordEncoder`'s algorithm identifier, which allows upgrading algorithms without invalidating existing hashes.)
+- "What does an attacker learn from the example's leaked hashes?" (That ana and ben share a password — identical inputs give identical unsalted hashes — and because SHA-256 is fast, a GPU tries billions of guesses per second, so a common password like this one falls almost at once. BCrypt or Argon2id would produce two different hashes and make each guess cost real time.)
+- "Why is the `{bcrypt}` prefix stored with the hash?" (So the `DelegatingPasswordEncoder` knows which algorithm produced each hash. New hashes can use a stronger algorithm while old ones still verify, and each user is re-hashed at their next successful login.)
+- "After the BCrypt cost is raised from 10 to 14, logins take over a second and the login endpoint is easy to overload. What went wrong?" (Each step of cost doubles the work, so 14 is sixteen times slower than 10 — and every login attempt, valid or not, now burns that CPU. Choose a cost that takes a fraction of a second on your hardware, and rate-limit the login endpoint so hashing cannot be turned into a denial of service.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How should passwords be stored?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does the salt protect against?" (Precomputed tables and correlation: with a random salt per user, identical passwords produce different hashes, so an attacker must attack each hash separately.)
+- "And the work factor?" (Brute force: it makes each hash — and so each guess — deliberately slow, and can be raised as hardware gets faster.)
+- "BCrypt or Argon2id?" (Argon2id is the current recommendation, because it is memory-hard, which blunts GPU attacks; BCrypt remains acceptable and is Spring's default.)
+- "How do you migrate existing hashes to a stronger algorithm?" (Rehash at login, the only moment the raw password is available: if `upgradeEncoding` reports an old algorithm or cost, encode the password again and store the new hash.)
+
+Other follow-ups:
+
 - "How do you choose a BCrypt cost?" (High enough that one hash takes a noticeable fraction of a second on your hardware — commonly 10–12 — and revisited as hardware improves.)
 - "Why not encrypt passwords?" (Encryption is reversible; anyone obtaining the key recovers every password.)
 - "What is a pepper?" (A secret added to passwords before hashing, stored outside the database — defence in depth if only the database leaks.)
@@ -7388,7 +7493,9 @@ Hashing versus encryption.
 Because users may live in a database, a directory or an external system, and credentials may be passwords, tokens or certificates. Splitting login into a coordinator, providers and a user source lets each be replaced without rewriting the rest.
 
 #### Interview explanation
-Trace a login through `ProviderManager`, `DaoAuthenticationProvider`, `UserDetailsService` and `PasswordEncoder`. Then mention user-enumeration protection, because custom login endpoints routinely break it.
+**In 30 seconds** — A login flows through three pieces. The `AuthenticationManager` — usually a `ProviderManager` — asks each `AuthenticationProvider` whether it supports the credential type; `DaoAuthenticationProvider` loads the user through a `UserDetailsService` and checks the password with a `PasswordEncoder`; success returns an authenticated `Authentication`, and failure throws. The split lets users live in a database, a directory or elsewhere without changing the rest.
+
+**If they push deeper** — trace a login through `ProviderManager`, `DaoAuthenticationProvider`, `UserDetailsService` and `PasswordEncoder`. Then mention user-enumeration protection, because custom login endpoints routinely break it.
 
 #### Syntax
 ```java
@@ -7410,13 +7517,38 @@ TokenResponse login(@RequestBody @Valid LoginRequest request) {
 }
 ```
 
+Spot what this endpoint reveals — a question below asks for it:
+
+```java
+@PostMapping("/api/auth/login")
+ResponseEntity<?> login(@RequestBody LoginRequest r) {
+    var user = users.findByEmail(r.email());
+    if (user.isEmpty()) return ResponseEntity.status(401).body("No account with that email");
+    if (!encoder.matches(r.password(), user.get().getPasswordHash()))
+        return ResponseEntity.status(401).body("Wrong password");
+    return ResponseEntity.ok(tokens.issue(user.get()));
+}
+```
+
 #### Common interview questions
 - "What does `UserDetailsService` do?" (Loads a user's details — username, password hash, authorities, account status — by username.)
 - "What is the role of `AuthenticationManager`?" (It coordinates one or more `AuthenticationProvider`s, returning an authenticated token or throwing.)
 - "How do you authenticate users from a database?" (A `UserDetailsService` backed by a repository, plus `DaoAuthenticationProvider` with a `PasswordEncoder`.)
 - "What is user enumeration and how is it prevented?" (Distinguishing "no such user" from "wrong password" lets attackers discover accounts; returning the same response and timing prevents it.)
+- "What does the example's login endpoint reveal to an attacker?" (Which emails have accounts. The two failures return different messages — and different timings, because only existing users pay for the password hash — so an attacker can enumerate users, then target them. Return one identical response for every failure, and let `DaoAuthenticationProvider` do the work: it hashes a dummy password for unknown users, so the timing matches too.)
+- "Why does `DaoAuthenticationProvider` turn `UsernameNotFoundException` into `BadCredentialsException`?" (So that responses never reveal which accounts exist: an unknown user and a wrong password must look identical to the caller, or the login form becomes a tool for discovering accounts.)
+- "An attacker tries thousands of common passwords against many accounts from one IP address. What protects you?" (Rate limiting per account and per source address, temporary lockouts or growing delays after failures, and alerting on failure spikes — slow hashing alone only makes each guess cost more. Spring's authentication-failure events are a convenient place to count failures.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the role of `AuthenticationManager`?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does it decide which provider handles a login?" (`ProviderManager` asks each `AuthenticationProvider` in turn whether it supports the token type — username and password, JWT, certificate — and uses the first that does.)
+- "What does `DaoAuthenticationProvider` do with a username and password?" (It loads the user through the `UserDetailsService`, checks the account status — locked, disabled, expired — and verifies the password with the `PasswordEncoder`.)
+- "What should a failed login tell the client?" (Nothing about why: the same 401 and message whether the user is unknown, the password wrong or the account locked, with similar timing.)
+- "With JWT authentication, is the user loaded on every request?" (Usually not: the token's signature and claims are validated, and the identity and roles come from the claims. Loading the user each time brings back the database dependency that stateless tokens were meant to remove.)
+
+Other follow-ups:
+
 - "How do you support several login mechanisms?" (Several providers in one `ProviderManager`, each supporting its own `Authentication` type.)
 - "How are locked or expired accounts handled?" (Through `UserDetails` flags, checked by the provider before or after the password check.)
 - "Where should brute-force protection go?" (Rate limiting per account and per IP, plus temporary lockout — at the edge or in an authentication event listener.)
@@ -7459,7 +7591,9 @@ Authentication where the server keeps no session; each request carries a token �
 Because a session lives in one server's memory, so with many instances it needs sticky routing or a shared store. A token carried by every request lets any instance authenticate any request without shared session storage, which suits horizontally scaled services and non-browser clients.
 
 #### Interview explanation
-Compare it honestly with sessions: easier to scale, harder to revoke. Then describe the standard mitigation — short-lived access tokens plus revocable refresh tokens — because "how do you log someone out?" is the question that follows.
+**In 30 seconds** — In stateless authentication the server keeps no session: every request carries a token — usually a JWT in an `Authorization: Bearer` header — that any instance can validate on its own, which makes scaling out simple. The trade-off is revocation: there is no session to delete, so logout and stolen tokens are handled with short-lived access tokens plus longer-lived refresh tokens that the server stores, rotates and can revoke.
+
+**If they push deeper** — compare it honestly with sessions: easier to scale, harder to revoke. Then describe the standard mitigation — short-lived access tokens plus revocable refresh tokens — because "how do you log someone out?" is the question that follows.
 
 #### Syntax
 ```java
@@ -7481,13 +7615,32 @@ TokenResponse refresh(@RequestBody RefreshRequest request) {
 }
 ```
 
+Predict how long the stolen token works — a question below asks for it:
+
+```text
+Access tokens: 7-day lifetime, no refresh tokens, no denylist.
+A user's laptop is stolen on Monday; they change their password the same day.
+```
+
 #### Common interview questions
 - "What is stateless authentication?" (The server stores no session; each request presents a token the server validates on its own.)
 - "How do you log out a user with JWTs?" (Short access-token lifetimes plus server-side revocation of refresh tokens; for immediate revocation, a denylist checked per request.)
 - "What is a refresh token?" (A longer-lived credential, stored and revocable server-side, exchanged for new short-lived access tokens.)
 - "Sessions or JWTs?" (Sessions for traditional browser applications with easy revocation; stateless tokens for APIs, mobile clients and multi-service architectures.)
+- "Until when can the thief in the example use the stolen access token?" (Until it expires — up to seven days. Changing the password does not invalidate a token that is checked only by signature and expiry, because nothing on the server remembers it. Short access tokens — minutes — with revocable refresh tokens limit that window; a denylist can close it immediately, at the cost of per-request state.)
+- "Why are access tokens short-lived when refresh tokens can live for weeks?" (Because the access token is presented on every request and checked only by its signature, so it cannot be revoked — a short lifetime caps the damage if it leaks. The refresh token is used rarely and checked against the server's store, so it can be revoked, which makes a long lifetime acceptable.)
+- "A refresh token arrives that was already used and rotated. What should the server do?" (Treat it as theft: either the legitimate client or an attacker is replaying an old token, and the server cannot tell which. Revoke the whole token family — every refresh token descended from it — so the user must log in again.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you log out a user with JWTs?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why is that harder than with sessions?" (With a session, you delete it on the server and the cookie becomes worthless. A JWT is valid wherever its signature and expiry check out — there is nothing server-side to delete.)
+- "So what does logout actually do?" (Revokes the refresh token on the server and discards the tokens on the client. The current access token stays valid until it expires — which is why it must be short-lived.)
+- "What if you need immediate revocation?" (A denylist of revoked token ids checked on every request — which brings back per-request state, often in a fast store such as Redis — or opaque tokens validated by introspection.)
+- "Where should a browser keep the tokens?" (In an `HttpOnly`, `Secure`, `SameSite` cookie, out of reach of JavaScript and so of XSS — which then requires CSRF protection, because the browser sends cookies automatically.)
+
+Other follow-ups:
+
 - "What is refresh-token rotation?" (Each refresh issues a new refresh token and invalidates the old one, so a stolen token is detected when reused.)
 - "Where should a browser store tokens?" (In an HttpOnly, Secure, SameSite cookie to resist XSS — which then requires CSRF protection — rather than `localStorage`.)
 - "Does stateless mean no database access?" (For access-token validation, yes; refresh and revocation still need state.)
@@ -7529,7 +7682,9 @@ A compact, URL-safe token of base64url-encoded header, claims and signature, ver
 Because a stateless token must let any server verify — without calling anyone — both who the user is and that the token came from a trusted issuer unchanged. A signature over the claims provides exactly that, carrying verifiable identity between parties without a shared session store.
 
 #### Interview explanation
-Describe the structure and verification steps — signature, then `exp`, `iss`, `aud` — and explain RS256 over HS256 for multi-service systems. Close with what not to do: secrets in claims, trusting the header's algorithm.
+**In 30 seconds** — A JWT is three base64url parts separated by dots: a header naming the algorithm and key, a payload of claims — subject, roles, expiry, issuer, audience — and a signature over both. A signed JWT can be read by anyone but not altered without the key. Verifying one means checking the signature with a pinned algorithm, then expiry, issuer and audience; with several verifying services, asymmetric keys such as RS256 let them verify without being able to mint tokens.
+
+**If they push deeper** — describe the structure and verification steps — signature, then `exp`, `iss`, `aud` — and explain RS256 over HS256 for multi-service systems. Close with what not to do: secrets in claims, trusting the header's algorithm.
 
 #### Syntax
 ```java
@@ -7551,13 +7706,35 @@ JwtDecoder jwtDecoder(@Value("${jwt.public-key}") RSAPublicKey key) {
 }
 ```
 
+Predict whether the tampered token works — a question below asks for it:
+
+```text
+Header:  {"alg":"HS256","typ":"JWT"}
+Payload: {"sub":"ana","role":"USER","exp":1767225600}
+
+An attacker decodes the payload, changes "role" to "ADMIN", re-encodes it,
+and sends the token with the original signature.
+```
+
 #### Common interview questions
 - "What are the parts of a JWT?" (A header with the algorithm and key id, a payload of claims, and a signature over both, separated by dots.)
 - "Is a JWT encrypted?" (A signed JWT (JWS) is not — the payload is readable by anyone; encryption requires JWE.)
 - "HS256 or RS256?" (RS256 or ES256 when several services verify tokens, because they only need the public key; HS256 shares one secret that could also mint tokens.)
 - "What must a verifier check?" (The signature with a pinned algorithm, then expiry, not-before, issuer and audience.)
+- "Does the example's tampered token work?" (Not if the server verifies the signature: it covers the header and the payload, so changing the role invalidates it, and the attacker cannot produce a new one without the key. The real dangers are a verifier that skips the check — or obeys an `alg: none` header — and a shared HS256 secret leaking from any service that holds it.)
+- "Why must the verifier pin the algorithm instead of reading it from the token's header?" (Because the header is written by whoever sends the token. A verifier that obeys it can be told `alg: none` — no signature at all — or tricked into checking an RS256 token as HS256, with the public key as the secret. The expected algorithm must come from configuration.)
+- "Your service accepts tokens that were issued for a different internal API, from the same identity provider. What check is missing?" (The audience. Both APIs trust the same issuer and keys, so the signature and issuer checks pass; validating that `aud` contains your API's identifier rejects tokens minted for other services.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What must a verifier check?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why check the signature first?" (Because every other claim is meaningless until you know the token is authentic and unaltered — an unverified `exp` or role is whatever the sender typed.)
+- "What does the signature not protect?" (Confidentiality: the payload is only encoded, so anyone holding the token can read it. Never put secrets or sensitive personal data in claims — or use an encrypted JWE.)
+- "How do services get the keys to verify with?" (From the issuer's JWKS endpoint: a published set of public keys, each identified by a `kid` that the token's header names — so keys can rotate without redeploying verifiers.)
+- "How do you rotate a signing key safely?" (Publish the new key in the JWKS before signing with it, keep the old one published until every token it signed has expired, then remove it.)
+
+Other follow-ups:
+
 - "What is the `alg: none` attack?" (A verifier that trusts the header accepts an unsigned token; always enforce the expected algorithm.)
 - "What is a JWKS endpoint?" (A published set of public keys, identified by `kid`, allowing key rotation without redeploying verifiers.)
 - "How large should a JWT be?" (Small — it travels on every request; include identity, roles and expiry, not profile data.)
@@ -7599,7 +7776,9 @@ Authorisation by roles and permissions expressed as `GrantedAuthority` strings, 
 Because granting permissions user by user stops scaling after a few dozen people — nobody can answer who may do what. Grouping permissions into roles makes access manageable and auditable at the level the organisation thinks in.
 
 #### Interview explanation
-Explain the `ROLE_` prefix behaviour, recommend fine-grained authorities assigned to roles, and say what RBAC cannot do — ownership checks — which leads naturally into method security.
+**In 30 seconds** — Role-based access control grants permissions through roles, which Spring represents as `GrantedAuthority` strings. `hasRole("ADMIN")` checks for the authority `ROLE_ADMIN` — it adds the prefix — while `hasAuthority` compares the exact string. A sound design checks fine-grained permissions, such as `orders:refund`, and treats roles as named bundles of them. What RBAC cannot express are data-dependent rules, such as letting users see only their own orders.
+
+**If they push deeper** — explain the `ROLE_` prefix behaviour, recommend fine-grained authorities assigned to roles, and say what RBAC cannot do — ownership checks — which leads naturally into method security.
 
 #### Syntax
 ```java
@@ -7619,13 +7798,33 @@ enum Role {
 }
 ```
 
+Predict whether the admin gets in — a question below asks for it:
+
+```java
+// The JWT carries:  "roles": ["ADMIN"]
+// Default JwtAuthenticationConverter, no customisation
+.requestMatchers("/api/admin/**").hasRole("ADMIN")
+```
+
 #### Common interview questions
 - "What is the difference between `hasRole` and `hasAuthority`?" (`hasRole("X")` checks for `ROLE_X`; `hasAuthority("X")` checks the exact string.)
 - "How do you get roles from a JWT into Spring?" (A `JwtAuthenticationConverter` with a `JwtGrantedAuthoritiesConverter` reading the roles claim and applying the prefix.)
 - "Roles or permissions?" (Permissions in checks, roles as named bundles of permissions — it avoids role explosion as requirements grow.)
 - "What can RBAC not express?" (Data-dependent rules such as ownership — those need method-level or domain checks.)
+- "Can the admin in the example reach `/api/admin`?" (No — they get 403. The default converter builds authorities from the `scope` or `scp` claim, prefixed `SCOPE_`, and ignores `roles`; and even if it read them, `hasRole` expects `ROLE_ADMIN`. Configure a `JwtGrantedAuthoritiesConverter` with the `roles` claim and the `ROLE_` prefix.)
+- "Why check permissions rather than roles in the code?" (Because roles change with the organisation — new roles appear, responsibilities move — while the operations stay the same. Code that asks for `orders:refund` keeps working when a new role gains that permission; code that lists roles must be edited for every change.)
+- "A support agent is demoted, yet keeps admin access for hours. Why?" (The roles are embedded in their JWT, which stays valid until it expires — the token is never re-checked against the current user record. Keep access tokens short-lived, or look up current permissions for sensitive operations.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between `hasRole` and `hasAuthority`?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why does Spring add the `ROLE_` prefix?" (To distinguish roles from other authorities — such as OAuth2 scopes, prefixed `SCOPE_` — within one flat list of `GrantedAuthority` strings.)
+- "How do roles from a JWT become authorities?" (Through a `JwtAuthenticationConverter` whose `JwtGrantedAuthoritiesConverter` names the claim to read and the prefix to apply — by default, it reads only scopes.)
+- "How do you make `ADMIN` imply `USER` without listing both?" (Declare a `RoleHierarchy` bean — `ROLE_ADMIN > ROLE_USER` — and the checks honour it.)
+- "How would you let users see only their own orders?" (Not with RBAC, because the rule depends on the data. Check ownership with method security — `@PreAuthorize` calling a bean that compares the order's owner with the caller — or filter the query by the current user.)
+
+Other follow-ups:
+
 - "What is role hierarchy?" (`RoleHierarchy` declares that `ADMIN` implies `USER`, so checks need not list both.)
 - "What is ABAC?" (Attribute-based access control — decisions using attributes of the user, resource and context, for rules RBAC cannot express.)
 - "How do you audit permissions?" (Keep roles and permissions in data or a single enum, so the mapping is reviewable in one place.)
@@ -7667,7 +7866,9 @@ Annotation-driven authorisation on methods — `@PreAuthorize`, `@PostAuthorize`
 Because a URL rule protects one entry point while an operation can be reached through several, and because rules such as "only the owner" depend on data no URL contains. Attaching the rule to the method protects the operation wherever it is invoked.
 
 #### Interview explanation
-Show an ownership check through a bean reference, note that `@EnableMethodSecurity` (added in Spring Security 5.6, standard in 6) replaces the deprecated `@EnableGlobalMethodSecurity`, and mention the proxy limitation — self-invocation skips the check.
+**In 30 seconds** — Method security puts authorisation on the operation itself: with `@EnableMethodSecurity`, annotations such as `@PreAuthorize("hasRole('ADMIN')")` are checked by a proxy before the method runs, whichever entry point called it. Its strength is data-dependent rules — an expression can use the method's arguments and the current user, typically calling a bean that checks ownership. Being proxy-based, it shares `@Transactional`'s limitation: a call on `this` skips the check.
+
+**If they push deeper** — show an ownership check through a bean reference, note that `@EnableMethodSecurity` (added in Spring Security 5.6, standard in 6) replaces the deprecated `@EnableGlobalMethodSecurity`, and mention the proxy limitation — self-invocation skips the check.
 
 #### Syntax
 ```java
@@ -7684,13 +7885,41 @@ Show an ownership check through a bean reference, note that `@EnableMethodSecuri
 public OrderDetail detail(Long orderId) { ... }
 ```
 
+Predict whether a user can read someone else's order — a question below asks for it:
+
+```java
+@Service
+public class OrderService {
+    @PreAuthorize("@orderAccess.isOwner(#orderId, authentication)")
+    public OrderDetail detail(Long orderId) { ... }
+
+    public OrderSummary summary(Long orderId) {
+        var detail = detail(orderId);          // internal call
+        return OrderSummary.from(detail);
+    }
+}
+// A controller exposes both detail() and summary()
+```
+
 #### Common interview questions
 - "What is method security for?" (Protecting service operations regardless of entry point, and expressing rules that depend on arguments or data.)
 - "How do you check that a user owns a resource?" (`@PreAuthorize` referencing a bean method that queries ownership, using the method arguments and `authentication`.)
 - "What is the difference between `@PreAuthorize` and `@PostAuthorize`?" (`@Pre` checks before execution; `@Post` checks after, against the returned object — suitable only for side-effect-free reads.)
 - "Why might `@PreAuthorize` not apply?" (Self-invocation bypasses the proxy, and private methods are not intercepted.)
+- "Can a user read someone else's order through the example's `OrderService`?" (Yes, through `summary`: it has no annotation, and its call to `detail` goes through `this`, so the ownership check never runs. Annotate every entry point — or keep the check on a method reachable only through the proxy — and test the denial for each.)
+- "Why isn't a URL rule enough to protect an operation?" (Because one operation can be reached through several URLs, a message consumer or a scheduled job, and because many rules — only the owner may see this order — depend on data the URL does not contain. A check on the method covers every path to it.)
+- "Changing `/api/orders/41` to `/api/orders/42` shows another customer's order. What is the vulnerability, and where does the fix go?" (An insecure direct object reference (IDOR): the endpoint checks that the caller is logged in, not that the order is theirs. Add an ownership check on the service method — `@PreAuthorize` with an access bean — or load the order by both id and owner, and test it with a second user.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you check that a user owns a resource?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where does `#orderId` in the expression come from?" (From the method's parameter names, which must be compiled in with `-parameters` — Spring Boot's build plugins do it — or declared with `@P`; otherwise the expression cannot resolve them.)
+- "Why call a bean instead of writing the rule in SpEL?" (Because a bean method is typed, readable and unit-testable, while a long SpEL string fails only at runtime, on first use.)
+- "When is `@PostAuthorize` appropriate?" (For reads whose decision needs the result — the owner is on the loaded object. It runs after the method, so the method must have no side effects.)
+- "Why might the check silently not run?" (Self-invocation, a `private` method, an object created with `new`, or a missing `@EnableMethodSecurity` — each bypasses or removes the proxy.)
+
+Other follow-ups:
+
 - "What is IDOR?" (Insecure direct object reference — accessing another user's resource by changing an id — which ownership checks prevent.)
 - "How do you test method security?" (Call the service through the Spring context with `@WithMockUser` or a custom security context factory, asserting `AccessDeniedException`.)
 - "What does `@PreFilter` do?" (Filters a collection argument before the method runs, keeping only elements the expression allows.)
@@ -7732,7 +7961,9 @@ OAuth2 delegates authorisation: an authorisation server issues tokens, clients o
 Because every application implementing its own login means every application storing passwords and issuing tokens, each with its own mistakes. Centralising login, credential storage and token issuance in one trusted service lets every API simply verify tokens.
 
 #### Interview explanation
-Name the roles, explain that a resource server validates JWTs locally using the issuer's JWKS, list the grant types that remain current (authorisation code with PKCE, client credentials), and say when you would build your own token issuance versus use an identity provider.
+**In 30 seconds** — OAuth2 separates roles: an authorisation server — an identity provider such as Keycloak — authenticates users and issues tokens, clients obtain them, and resource servers — your APIs — only validate them. A Spring resource server validates JWTs locally with the issuer's public keys, fetched from its JWKS endpoint, so no call to the issuer is needed per request. Today's grants are Authorization Code with PKCE for user-facing apps and Client Credentials between services; OpenID Connect adds identity on top.
+
+**If they push deeper** — name the roles, explain that a resource server validates JWTs locally using the issuer's JWKS, list the grant types that remain current (authorisation code with PKCE, client credentials), and say when you would build your own token issuance versus use an identity provider.
 
 #### Syntax
 ```yaml
@@ -7756,13 +7987,38 @@ RestClient inventoryClient(RestClient.Builder builder, OAuth2AuthorizedClientMan
 }
 ```
 
+Predict whether this API accepts another service's tokens — a question below asks for it:
+
+```yaml
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://idp.example.com/realms/shop
+          # no audiences configured
+# The same identity provider also issues tokens for the internal billing API.
+```
+
 #### Common interview questions
 - "What are the OAuth2 roles?" (Resource owner, client, authorisation server and resource server.)
 - "What is a resource server?" (An API that accepts access tokens and validates them — locally for JWTs using the issuer's public keys, or by introspection for opaque tokens.)
 - "Which grant types should be used today?" (Authorization Code with PKCE for user-facing apps, Client Credentials for service-to-service; Implicit and Password are deprecated.)
 - "What is the difference between OAuth2 and OpenID Connect?" (OAuth2 delegates authorisation; OIDC adds an identity layer with an ID token describing the authenticated user.)
+- "Will the example's API accept a token issued for the billing API?" (Yes: its signature and issuer are valid, and nothing checks whom the token was meant for. Add `audiences: shop-api`, so tokens minted for other services are rejected.)
+- "Why is the Implicit grant deprecated?" (Because it returned the access token in the URL fragment of a browser redirect, where it could leak through history, logs and referrers, with no way to bind it to the client that asked. Authorization Code with PKCE returns a short-lived code instead, which only the client holding the PKCE secret can redeem.)
+- "A team wants to build its own login and token issuance for three internal services. What would you ask first?" (Whether an existing identity provider — Keycloak, a cloud provider, or Spring Authorization Server — already does it: issuing tokens means storing credentials, rotating keys, implementing the flows correctly and staying patched. Building it yourself is justified only by requirements those cannot meet.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is a resource server?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does it validate a JWT without calling the issuer?" (It fetches the issuer's public keys from its JWKS endpoint — discovered through `issuer-uri` — caches them, and verifies each token's signature locally, then checks expiry, issuer and audience.)
+- "What about opaque tokens?" (They carry no verifiable content, so the resource server calls the issuer's introspection endpoint for each request — slower, but revocation takes effect immediately.)
+- "How does one service call another with OAuth2?" (With the Client Credentials grant: the calling service authenticates as itself, obtains an access token and sends it as a bearer token — Spring's OAuth2 client support obtains and renews it automatically.)
+- "Where does PKCE fit?" (In the Authorization Code flow: the client sends a hash of a one-time secret with the authorisation request and must present the secret itself to redeem the code — so an intercepted code is useless.)
+
+Other follow-ups:
+
 - "JWT or opaque tokens?" (JWTs validate locally and scale well; opaque tokens require introspection but can be revoked immediately.)
 - "What is PKCE?" (Proof Key for Code Exchange — a per-request secret that prevents an intercepted authorisation code from being redeemed.)
 - "Why validate the audience?" (So a token issued for another API cannot be replayed against yours.)
@@ -7804,7 +8060,9 @@ CORS is the browser mechanism by which a server permits cross-origin JavaScript 
 Because browsers attach cookies automatically, so other sites could otherwise read sensitive responses or trigger actions as the user.
 
 #### Interview explanation
-Separate them clearly — CORS controls reading, CSRF controls forging — and then state when CSRF may be disabled: stateless APIs authenticated by an `Authorization` header and no cookies. Emphasise that CORS is not a server-side security boundary.
+**In 30 seconds** — Both exist because browsers attach cookies automatically. CORS lets a server tell the browser which other origins' JavaScript may read its responses — it controls reading, and only browsers enforce it. CSRF protection stops other sites from making a user's browser send state-changing requests with the user's cookies — it controls forged writes. CSRF protection can be disabled only for APIs authenticated purely by headers, with no cookies.
+
+**If they push deeper** — separate them clearly — CORS controls reading, CSRF controls forging — and then state when CSRF may be disabled: stateless APIs authenticated by an `Authorization` header and no cookies. Emphasise that CORS is not a server-side security boundary.
 
 #### Syntax
 ```java
@@ -7821,13 +8079,33 @@ config.setAllowCredentials(true);
 config.setMaxAge(Duration.ofHours(1));      // cache preflight responses
 ```
 
+Predict what a malicious site can do — a question below asks for it:
+
+```java
+config.setAllowedOriginPatterns(List.of("*"));   // reflects any origin
+config.setAllowCredentials(true);
+// The API authenticates with a session cookie, and CSRF protection is disabled.
+```
+
 #### Common interview questions
 - "What is CORS?" (A browser mechanism where the server's `Access-Control-Allow-*` headers decide whether JavaScript from another origin may read the response.)
 - "What is CSRF?" (An attack where another site causes the victim's browser to send an authenticated, state-changing request using its cookies.)
 - "When can CSRF protection be disabled?" (For APIs authenticated solely by headers such as `Authorization: Bearer`, with no cookie-based authentication.)
 - "Does CORS protect the API from attackers?" (No — it is enforced by browsers only; any non-browser client ignores it.)
+- "What can a malicious website do against the example's API?" (Everything the user can. Any origin is allowed with credentials, so a page on any site can send requests carrying the user's session cookie and read the responses — and with CSRF disabled, it can make changes too. List your real origins, and keep CSRF protection on while cookies authenticate.)
+- "Why doesn't CORS protect an API from attackers?" (Because it is enforced by browsers, on behalf of users. An attacker calling the API from outside a browser — with curl, or from a server — ignores the headers entirely. CORS stops other sites reading responses in a victim's browser; authentication and authorisation protect the API itself.)
+- "Cross-origin requests from your SPA fail in the browser, though the same requests work from Postman. What do you check?" (The CORS configuration and the preflight: the browser sends an `OPTIONS` request without credentials before the real one, and if the security chain rejects it — or the response lacks `Access-Control-Allow-Origin` for your origin — the browser blocks the call. Enable `http.cors()` with a configuration listing the SPA's origin; Postman never sends a preflight.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is CSRF?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why does it work at all?" (Because the browser attaches a site's cookies to every request to it — including requests triggered by another site's form or script — so the forged request arrives authenticated.)
+- "How does a CSRF token stop it?" (The server requires a secret token with each state-changing request, delivered only to its own pages. Another site cannot read it, so its forged requests arrive without it and are rejected.)
+- "Does `SameSite` make tokens unnecessary?" (It helps a lot — `Lax` and `Strict` cookies are not sent on most cross-site requests — but it has gaps, such as sibling subdomains counting as the same site, so it complements tokens rather than replacing them.)
+- "So when is disabling CSRF correct?" (When nothing authenticates automatically: a stateless API that reads an `Authorization` header — which the browser never adds on its own — and uses no authentication cookies.)
+
+Other follow-ups:
+
 - "What is a preflight request?" (An `OPTIONS` request the browser sends before non-simple cross-origin requests to check permissions.)
 - "What do SameSite cookies change?" (`SameSite=Lax` or `Strict` stop browsers sending cookies on most cross-site requests, reducing CSRF risk — complementary to tokens, not a full replacement.)
 - "Why can't you use `*` with credentials?" (Browsers forbid it; a wildcard with credentials would let any site make authenticated requests.)
