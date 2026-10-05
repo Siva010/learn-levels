@@ -1093,7 +1093,9 @@ Spring Boot is a layer over the Spring Framework providing auto-configuration, c
 Because Spring removed hand-written object creation but not hand-written *configuration*: every application still declared the same servlet container, dispatcher servlet, data source and transaction manager, and kept library versions compatible by hand. Boot automates exactly those repeated chores — starters for versions, auto-configuration for beans, an embedded server for deployment — while letting any default be replaced.
 
 #### Interview explanation
-Start from what was still repetitive after Spring — infrastructure configuration and dependency versions. Then name the three additions — starters, auto-configuration, embedded server — and stress that the programming model is unchanged. Then make the key point: every default backs off when you define your own bean, so Boot is opinionated but never closed.
+**In 30 seconds** — Spring Boot is not a separate framework — it configures Spring for you. Starters bring in a tested set of dependencies, auto-configuration registers the beans most applications need based on the classpath and properties, and an embedded server lets the application run as a plain `java -jar`. Every default backs off when you define your own bean, so Boot is opinionated but never closed.
+
+**If they push deeper** — start from what was still repetitive after Spring — infrastructure configuration and dependency versions. Then name the three additions — starters, auto-configuration, embedded server — and stress that the programming model is unchanged. Then make the key point: every default backs off when you define your own bean, so Boot is opinionated but never closed.
 
 #### Syntax
 ```java
@@ -1112,13 +1114,35 @@ ObjectMapper objectMapper() {
 }
 ```
 
+Predict what changes when this dependency is added to a working web application — a question below asks for it:
+
+```xml
+<!-- added to an existing Boot web application; no code changes -->
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+```
+
 #### Common interview questions
 - "What is the difference between Spring and Spring Boot?" (Spring is the framework and container; Boot adds auto-configuration, starters, an embedded server and externalised configuration so the application runs with almost no setup.)
 - "Does Spring Boot replace Spring?" (No — it configures it. The same annotations and container behaviour apply.)
 - "How do you override a Boot default?" (Define the bean yourself, or set the corresponding property; auto-configuration backs off when a bean already exists.)
 - "What does `@SpringBootApplication` consist of?" (`@Configuration`, `@EnableAutoConfiguration` and `@ComponentScan`.)
+- "What happens to the application's endpoints after the dependency in the example is added?" (Every endpoint now requires authentication. Spring Security is on the classpath, so Boot's security auto-configuration applies: it secures all requests with HTTP Basic and form login, and creates a single user whose generated password is printed in the startup log. Declaring your own `SecurityFilterChain` bean makes that default back off.)
+- "Why does Boot apply its defaults after your own configuration rather than before it?" (So that it can check what you defined. Each default is guarded by conditions such as `@ConditionalOnMissingBean`, which can only see your beans if yours are registered first — that ordering is what makes your choice always win.)
+- "After an unexpected bean appears, a teammate wants to drop Boot because it does too much magic. What do you suggest instead?" (Make it visible: run with `--debug`, or open `/actuator/conditions`, to see which auto-configuration created the bean and which condition matched — then exclude it or define your own. It is ordinary conditional configuration, not hidden behaviour.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between Spring and Spring Boot?" — they drill down from your answer. Answer each step before opening it:
+
+- "What did plain Spring still leave you to do?" (Declare the same infrastructure in every application — servlet container, `DispatcherServlet`, `DataSource`, transaction manager, JSON mapper — and keep dozens of library versions compatible by hand.)
+- "How does Boot decide which of those beans to create?" (Auto-configuration classes check conditions — is a class on the classpath, is a property set, does a bean of that type already exist — and register their beans only when the conditions match.)
+- "And if you want something other than the default?" (Set a property for the common adjustments, or define the bean yourself: the auto-configured one is guarded by `@ConditionalOnMissingBean`, so it steps aside.)
+- "Is anything still decided at deployment, as it was with an application server?" (Only configuration. The server, its version and its settings are dependencies and properties of the application, so the artifact you tested is the artifact that runs; environment-specific values come from outside the jar.)
+
+Other follow-ups:
+
 - "What are the downsides of Boot?" (Behaviour arrives from dependencies rather than code, dependency footprints are larger, and startup does more work.)
 - "Can you use Spring without Boot?" (Yes — plenty of applications do, particularly older ones deployed as WARs.)
 - "What is Spring Cloud?" (A separate set of projects for distributed systems — configuration servers, service discovery, resilience — built on Boot.)
@@ -1161,7 +1185,9 @@ Starters are dependency aggregators for one capability; the Boot parent POM or B
 Because every library depends on others and only certain version combinations work; picked by hand, a mismatch compiles and then fails at runtime. Starters fix *which* libraries belong together for a job, and the parent or BOM fixes *which versions* — tested as one set.
 
 #### Interview explanation
-Start from the failure it prevents — `NoSuchMethodError` from mismatched versions. Explain that a starter is a POM with no code, and that version management comes from the parent or the imported BOM. Then mention the right way to change a version — a property — and why pinning one dependency by hand is risky.
+**In 30 seconds** — A starter is a dependency with no code: its POM pulls in a tested set of libraries for one job — web, JPA, security. Boot's parent POM, or its imported BOM, pins compatible versions for the whole ecosystem, so your build omits version numbers. To change one, you set the version property Boot defines, which moves the whole library family together.
+
+**If they push deeper** — start from the failure it prevents — `NoSuchMethodError` from mismatched versions. Explain that a starter is a POM with no code, and that version management comes from the parent or the imported BOM. Then mention the right way to change a version — a property — and why pinning one dependency by hand is risky.
 
 #### Syntax
 ```xml
@@ -1190,13 +1216,35 @@ Start from the failure it prevents — `NoSuchMethodError` from mismatched versi
 </properties>
 ```
 
+Spot the risk in this dependency — a question below asks for it:
+
+```xml
+<dependency>
+  <groupId>com.fasterxml.jackson.core</groupId>
+  <artifactId>jackson-databind</artifactId>
+  <version>2.13.0</version>   <!-- pinned by hand, older than Boot's managed version -->
+</dependency>
+```
+
 #### Common interview questions
 - "What is a Spring Boot starter?" (A dependency whose POM pulls in a tested set of libraries for one capability — web, JPA, security — with versions managed centrally.)
 - "How are dependency versions managed?" (By `spring-boot-starter-parent` or by importing the `spring-boot-dependencies` BOM; your build omits versions.)
 - "How do you override a managed version?" (Set the version property Boot defines, so the change applies consistently across the tree.)
 - "How do you swap Tomcat for Jetty?" (Exclude `spring-boot-starter-tomcat` from the web starter and add `spring-boot-starter-jetty`.)
+- "What can go wrong with the hand-pinned version in the example?" (`jackson-databind` drops to 2.13 while `jackson-core`, the annotations and the modules stay at Boot's managed version. The build compiles and can then fail at runtime with `NoSuchMethodError` or `NoClassDefFoundError` where the mismatched artifacts call each other. Override the `jackson-bom.version` property instead, so the whole family moves together.)
+- "Why does a starter contain no code?" (Because its only job is to declare which libraries belong together for one capability. The behaviour comes from those libraries and from the auto-configuration that reacts to their presence — so adding the starter is enough to enable the feature.)
+- "After a reporting library is added, the application fails at startup with `NoSuchMethodError` inside a dependency. How do you investigate?" (Find which artifact the missing method belongs to and compare versions with `mvn dependency:tree` or `gradle dependencies`. Usually the library was compiled against a different version of that artifact than the one your build resolves — Boot's dependency management imposes its own version on transitive dependencies it manages. Use a release of the library built for your Boot line, or align the artifact yourself if Boot does not manage it.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is a Spring Boot starter?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where do the versions come from?" (From `spring-boot-dependencies`, a BOM listing one tested version of each library Boot supports. `spring-boot-starter-parent` inherits it; a project that already has a parent imports it into `dependencyManagement`.)
+- "What is the difference between using the parent and importing the BOM?" (Both manage versions. The parent also configures plugins — the Boot plugin's repackage goal, resource filtering, compiler settings — while the imported BOM gives versions only, for projects with a corporate parent of their own.)
+- "How do you change one library's version safely?" (Override the version property Boot defines — `jackson-bom.version`, say — so every artifact of that family moves together. Pinning one artifact by hand splits the family.)
+- "And if two libraries that Boot does not manage conflict?" (Boot cannot help there: find the competing versions in the dependency tree, align them with an exclusion or a version in your own `dependencyManagement`, and check the result in the tree again.)
+
+Other follow-ups:
+
 - "What is in `spring-boot-starter-test`?" (JUnit 5, Mockito, AssertJ, Hamcrest, JSONassert, JSONPath and Spring's test support.)
 - "How do you diagnose a dependency conflict?" (`mvn dependency:tree` or `gradle dependencies`, filtered to the artifact in question.)
 - "Can you write your own starter?" (Yes — an auto-configuration module plus an `AutoConfiguration.imports` entry; common in companies with shared platform libraries.)
@@ -1238,7 +1286,9 @@ Conditional `@Configuration` classes, listed in `AutoConfiguration.imports` and 
 Because the configuration most applications need is predictable from facts Spring can already see — the classpath and the properties — so writing it by hand is repetition. Making each default conditional, and evaluating it after the application's own configuration, guarantees a default never overrides a deliberate choice.
 
 #### Interview explanation
-Start with the observation that makes it possible: given the classpath and the properties, most configuration is predictable. Then describe the mechanism concretely: a list of configuration classes, each guarded by `@Conditional` annotations, evaluated after your own configuration so `@ConditionalOnMissingBean` works. Mention `--debug` for the report — it shows you know how to diagnose it rather than guess.
+**In 30 seconds** — Auto-configuration is a set of ordinary `@Configuration` classes shipped in Boot's jars, each guarded by conditions — is this class on the classpath, is this property set, does a bean of this type already exist? Boot evaluates them after your own configuration, so its defaults apply only where you have not made a choice, and `--debug` prints which ones matched and why.
+
+**If they push deeper** — start with the observation that makes it possible: given the classpath and the properties, most configuration is predictable. Then describe the mechanism concretely: a list of configuration classes, each guarded by `@Conditional` annotations, evaluated after your own configuration so `@ConditionalOnMissingBean` works. Mention `--debug` for the report — it shows you know how to diagnose it rather than guess.
 
 #### Syntax
 ```java
@@ -1262,13 +1312,37 @@ public class CacheAutoConfiguration {
 }
 ```
 
+Predict which `CacheManager` beans exist alongside the library's auto-configuration above — a question below asks for it:
+
+```java
+@Configuration
+class MyCacheConfig {
+    @Bean
+    CacheManager localCache() {
+        return new ConcurrentMapCacheManager("products");
+    }
+}
+```
+
 #### Common interview questions
 - "How does auto-configuration work?" (Boot reads auto-configuration classes declared in each jar's `AutoConfiguration.imports`, evaluates their `@Conditional` annotations against the classpath, existing beans and properties, and applies the ones that match.)
 - "How do you see what was auto-configured?" (Run with `--debug` for the condition evaluation report, or use `/actuator/conditions`.)
 - "How do you disable one?" (`@SpringBootApplication(exclude = ...)` or the `spring.autoconfigure.exclude` property.)
 - "Why does defining your own bean disable Boot's?" (Auto-configuration runs after user configuration and is guarded by `@ConditionalOnMissingBean`.)
+- "With both the library's `CacheAutoConfiguration` and the example's `MyCacheConfig` present, which `CacheManager` beans exist?" (Only yours, `localCache`. Your configuration is processed first; when the auto-configuration is evaluated, `@ConditionalOnMissingBean` finds a `CacheManager` already defined and skips its own method — even though the bean names differ, because the condition matches by type.)
+- "Why are auto-configurations processed after your configuration instead of alongside it?" (Because `@ConditionalOnMissingBean` can only see beans that are already registered. Boot imports auto-configuration through a deferred import selector, which guarantees your definitions exist when the conditions are checked — so a default never overrides a deliberate choice.)
+- "An upgrade adds a dependency, and suddenly every endpoint returns 401. How do you find out why?" (Run with `--debug`, or check `/actuator/conditions`, and look for auto-configurations that newly matched — here security auto-configuration, because the dependency brought Spring Security onto the classpath transitively. Exclude that dependency, or configure a `SecurityFilterChain` deliberately.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does auto-configuration work?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where does Boot find the auto-configuration classes?" (Each jar lists its own in `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`, and `@EnableAutoConfiguration` — part of `@SpringBootApplication` — loads every such list on the classpath.)
+- "What decides whether one applies?" (Its conditions: `@ConditionalOnClass` for a library on the classpath, `@ConditionalOnProperty` for a setting, `@ConditionalOnMissingBean` for the absence of your own bean, and others such as `@ConditionalOnWebApplication`. Conditions can sit on the class and on each `@Bean` method.)
+- "How can a class-level `@ConditionalOnClass` name a class that might not exist?" (Boot reads the condition from the class file's metadata before loading the configuration class, so a missing class simply means no match rather than a `NoClassDefFoundError`.)
+- "How would you write one for a shared company library?" (An `@AutoConfiguration` class with conditions — `@ConditionalOnMissingBean` on every bean, so applications can override it — listed in the library's `AutoConfiguration.imports`, and tested with `ApplicationContextRunner`.)
+
+Other follow-ups:
+
 - "What are the main conditional annotations?" (`@ConditionalOnClass`, `@ConditionalOnMissingBean`, `@ConditionalOnBean`, `@ConditionalOnProperty`, `@ConditionalOnWebApplication`.)
 - "How is ordering controlled?" (`@AutoConfigureBefore`, `@AutoConfigureAfter` and `@AutoConfigureOrder`.)
 - "What replaced `spring.factories` for this?" (From Boot 2.7 onward, the `AutoConfiguration.imports` file; `spring.factories` support for auto-configuration was removed in Boot 3.)
@@ -1313,7 +1387,9 @@ A servlet container — Tomcat by default — started inside the application pro
 Because an externally installed application server made the runtime something operations configured separately, so production rarely matched development and every deployment depended on a shared, hand-tuned environment. Embedding the server makes it an ordinary dependency — versioned, configured and shipped with the application.
 
 #### Interview explanation
-Start from the inversion: the application used to be deployed into a server; now the server is a library inside the application. Mention the default (Tomcat), the alternatives, and most importantly the thread-per-request model with a bounded pool, because that is what determines behaviour under load. Finish with graceful shutdown, which matters for deployments.
+**In 30 seconds** — Spring Boot runs the web server inside the application process — Tomcat by default — so the deployable is a jar started with `java -jar` instead of a WAR dropped into a server, and the server is an ordinary dependency configured through properties. What interviewers care about is its concurrency model: one thread per request from a bounded pool, 200 threads by default, so a slow call holds a thread for its whole duration.
+
+**If they push deeper** — start from the inversion: the application used to be deployed into a server; now the server is a library inside the application. Mention the default (Tomcat), the alternatives, and most importantly the thread-per-request model with a bounded pool, because that is what determines behaviour under load. Finish with graceful shutdown, which matters for deployments.
 
 #### Syntax
 ```yaml
@@ -1336,13 +1412,36 @@ WebServerFactoryCustomizer<TomcatServletWebServerFactory> customizer() {
 }
 ```
 
+Predict what happens under this load — a question below asks for it:
+
+```yaml
+server:
+  tomcat:
+    threads:
+      max: 200
+# Every request calls a downstream service that has started taking 10 seconds.
+# Traffic: 50 requests per second.
+```
+
 #### Common interview questions
 - "What is the embedded server and why does it matter?" (The servlet container runs inside the application process, so the jar is self-contained and the runtime is identical everywhere.)
 - "Which servers can Spring Boot embed?" (Tomcat by default, plus Jetty — and Undertow on Boot 3.x only — for servlet stacks, and Netty for WebFlux.)
 - "What is the concurrency model?" (Thread per request from a bounded pool — 200 threads by default in Tomcat — so each in-flight request holds a thread for its duration.)
 - "What happens when all threads are busy?" (Accepted connections wait for a free thread; past `max-connections` — 8,192 by default — new connections wait in the OS backlog (`accept-count`, 100), and beyond that are refused. Latency rises sharply long before any error appears.)
+- "In the example, how long until the server stops keeping up, and what do callers see?" (About four seconds. Each request now holds a thread for ten seconds, so 50 requests per second need 500 threads, and all 200 are busy after four seconds. After that, new requests wait for a thread and latency climbs on every endpoint — even ones that never call the slow service — long before any error appears. A timeout on the downstream call is the fix; more threads only delay the same outcome.)
+- "Why did embedding the server, rather than deploying into one, become the default?" (Because the server became part of what is built and tested: its version and settings ship with the application, so the artifact you tested is the one that runs, and any machine with a JVM — or a container — can run it without a separately managed application server.)
+- "During every deployment, a few users get errors on requests that were in flight. What is likely missing?" (Graceful shutdown, or a shutdown timeout shorter than the requests: without it, stopping the process cuts requests off mid-flight. It is on by default from Boot 3.4; on older versions set `server.shutdown=graceful`. Also make sure the load balancer stops routing to the instance before it begins shutting down.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the concurrency model?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where exactly is the limit?" (In the thread pool — 200 by default. Each request holds one thread from start to finish, so at most 200 requests are processed at once; the rest wait for a thread.)
+- "What does a slow downstream call do to that?" (It holds its thread for the whole wait. Enough slow calls take every thread, and then all endpoints slow down — even ones that never touch the slow service.)
+- "So should you raise the thread count?" (Rarely. More threads cost memory and context switching, and usually just move the queue to the next limit — the database connection pool, which is often far smaller. Time out slow calls first, then size threads and connections together.)
+- "When does a different model make sense?" (For very high concurrency that is mostly waiting. Virtual threads — `spring.threads.virtual.enabled=true` on Java 21 — keep the blocking programming model while making each thread cheap; WebFlux on Netty uses an event loop instead, at the cost of reactive code throughout.)
+
+Other follow-ups:
+
 - "How do you deploy as a WAR instead?" (Extend `SpringBootServletInitializer` and set the packaging to `war`; still supported but rarely needed.)
 - "How is graceful shutdown configured?" (`server.shutdown=graceful` plus `spring.lifecycle.timeout-per-shutdown-phase`.)
 - "When would WebFlux be a better fit?" (Very high concurrency with mostly I/O-bound work, where thread-per-request becomes the limit — at the cost of a reactive programming model throughout.)
@@ -1387,7 +1486,9 @@ Property values supplied from files, environment variables, command-line argumen
 Because an artifact rebuilt per environment is not the artifact you tested. Keeping environment-specific values outside the jar lets one build run everywhere — and since values can then come from several places, a fixed precedence order is needed so conflicts resolve predictably.
 
 #### Interview explanation
-Start from the goal — one artifact for every environment — which forces values to come from outside, from several sources. Then give the precedence order from highest to lowest — command line, Java system properties, environment variables, external profile file, external base file, packaged files — and mention relaxed binding, since environment-variable naming is what trips people up in containers.
+**In 30 seconds** — Spring Boot reads configuration from many places — command-line arguments, environment variables, system properties, external and packaged property files — and merges them into one `Environment` with a fixed precedence: the command line beats environment variables, which beat external files, which beat the files inside the jar. That lets one artifact run in every environment, each supplying its own values.
+
+**If they push deeper** — start from the goal — one artifact for every environment — which forces values to come from outside, from several sources. Then give the precedence order from highest to lowest — command line, Java system properties, environment variables, external profile file, external base file, packaged files — and mention relaxed binding, since environment-variable naming is what trips people up in containers.
 
 #### Syntax
 ```bash
@@ -1404,13 +1505,33 @@ app:
     max-attempts: ${MAX_ATTEMPTS:3}     # environment variable with a default
 ```
 
+Predict which port the application listens on — a question below asks for it:
+
+```bash
+# application.yml inside the jar sets server.port: 8080
+export SERVER_PORT=9090
+java -jar app.jar --server.port=7070
+```
+
 #### Common interview questions
 - "Where can Spring Boot read configuration from?" (Command-line arguments, environment variables, system properties, external and packaged `application.yml`/`.properties`, profile-specific files, and imported sources such as a config server.)
 - "What is the precedence order?" (Command line beats environment variables, which beat external config files, which beat packaged ones.)
 - "What is relaxed binding?" (`spring.datasource.url`, `SPRING_DATASOURCE_URL` and similar spellings all bind to the same property, which is how container environment variables work.)
 - "How do you find where a value came from?" (`/actuator/env` reports the effective value and its source.)
+- "Which port does the example's application listen on, and how would you confirm it?" (7070: command-line arguments beat environment variables, which beat the packaged file. The startup log names the port, and `/actuator/env/server.port` shows the winning value along with every source that defined it.)
+- "Why does an environment variable named `SPRING_DATASOURCE_URL` set `spring.datasource.url`?" (Because environment variable names cannot portably contain dots or dashes. Boot's relaxed binding maps the upper-case, underscore form onto the property — dots become underscores, dashes are dropped — which is what lets container platforms configure Boot through environment variables.)
+- "A setting works locally, but production ignores the value in `application-prod.yml`. What do you check?" (That the `prod` profile is actually active — the startup log lists the active profiles — and that no higher-priority source overrides the key, such as an environment variable or argument set by the platform. `/actuator/env` shows which source won.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the precedence order?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why does the command line win?" (It is the most specific and deliberate source — someone typed it for this one run — so it overrides everything packaged or set for the environment.)
+- "How do profile-specific files fit into the order?" (Each profile file layers over its base file, and external files layer over packaged ones: within the same location, `application-prod.yml` overrides `application.yml`.)
+- "What happens to a list defined in two sources?" (The higher-priority source replaces the whole list — a list is bound as one value, not merged element by element.)
+- "Where should secrets come from?" (From outside both the artifact and the repository: environment variables injected by the platform, or an imported source such as a vault through `spring.config.import`. Never a committed file.)
+
+Other follow-ups:
+
 - "How do you supply secrets?" (Environment variables injected by the platform, a secrets manager, or `spring.config.import` from a vault — never committed files.)
 - "What does `spring.config.import` add?" (Importing additional configuration — files, config servers, Kubernetes ConfigMaps — with optional prefixes to tolerate absence.)
 - "YAML or properties?" (YAML for nested structures and readability; properties to avoid YAML's indentation and type-coercion surprises. Pick one per project.)
@@ -1453,7 +1574,9 @@ Named sets of configuration and conditionally registered beans, activated per en
 Because environments genuinely differ in infrastructure — endpoints, credentials, stubbed collaborators — and expressing that as conditionals would spread environment checks through the code. Naming each environment and attaching configuration to the name keeps the differences in one place and the code identical everywhere.
 
 #### Interview explanation
-Start from what must differ between environments and why `if` statements are the wrong place for it. Explain layering (profile file overrides only what it sets), activation methods, and `@Profile` on beans. Then state the discipline: profiles should change infrastructure, never business behaviour, or production runs untested paths.
+**In 30 seconds** — A profile is a named set of configuration and beans — `dev`, `test`, `prod` — activated per environment, usually through `SPRING_PROFILES_ACTIVE`. A profile file such as `application-prod.yml` layers over the base configuration, overriding only the keys it sets, and `@Profile` registers a bean only when its profile is active. Profiles should change infrastructure — endpoints, credentials — never business behaviour.
+
+**If they push deeper** — start from what must differ between environments and why `if` statements are the wrong place for it. Explain layering (profile file overrides only what it sets), activation methods, and `@Profile` on beans. Then state the discipline: profiles should change infrastructure, never business behaviour, or production runs untested paths.
 
 #### Syntax
 ```java
@@ -1475,13 +1598,40 @@ spring:
       prod: "prod-db,prod-cache,metrics"   # one name activates several
 ```
 
+Predict the effective values with the `prod` profile active — a question below asks for it:
+
+```yaml
+# application.yml
+app:
+  payments:
+    url: https://sandbox.pay.example
+    timeout: 5s
+
+# application-prod.yml
+app:
+  payments:
+    url: https://pay.example
+```
+
 #### Common interview questions
 - "What are profiles for?" (Environment-specific configuration and beans, activated by name.)
 - "How do you activate one?" (`spring.profiles.active` via property, environment variable or command line; `@ActiveProfiles` in tests.)
 - "Does a profile-specific file replace the main one?" (No — it layers over it, overriding only the keys it defines.)
 - "How do you make a bean environment-specific?" (`@Profile("prod")` on the bean or its configuration class.)
+- "With the `prod` profile active, what are the example's payment `url` and `timeout`?" (`https://pay.example` and `5s`. The profile file overrides only the keys it sets, so `timeout` still comes from the base file — profiles layer, they do not replace.)
+- "Why should profiles change infrastructure but not business behaviour?" (Because whatever differs by profile is tested only where that profile runs. If a discount rule or a validation depends on `prod`, that code path runs for the first time in production.)
+- "A data-seeding bean meant only for the dev profile runs in production. How could that happen?" (The `dev` profile is active there — often because `spring.profiles.active` is set in the packaged `application.yml`, or a profile group includes it — or the bean is registered without the guard, say by a `@Bean` method in an unguarded configuration class. Check the active profiles in the startup log, and activate profiles from the environment, never from the jar.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What are profiles for?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does a profile file combine with the base file?" (It layers: the keys it defines override the base values, and every other key keeps its base value. With several active profiles, they layer in order and the last one wins.)
+- "How do you register a bean for one environment only?" (`@Profile` on the bean or its configuration class, with expressions such as `!prod` or `prod & eu` when one name is not enough.)
+- "What is the risk of a bean that exists only in `prod`?" (Its code path runs nowhere else, so production is its first test. Prefer one implementation configured differently per environment over a different implementation per profile.)
+- "How would you activate several profiles with one setting?" (With a profile group: `spring.profiles.group.prod=prod-db,prod-cache` lets one name activate them all, so a deployment sets a single value.)
+
+Other follow-ups:
+
 - "What are profile groups?" (A single activated name that enables several profiles, keeping activation simple in deployments.)
 - "What is the `default` profile?" (Configuration applied when no profile is explicitly active.)
 - "Can profiles be combined with expressions?" (Yes — `@Profile("prod & eu")` and negation with `!`.)
@@ -1523,7 +1673,9 @@ Profiles as feature flags — different lifetimes and different risks.
 Because configuration is input typed by humans, and `@Value` injects it as scattered strings checked only for presence and type, so a value that converts but is wrong — a zero, a negative timeout — is accepted silently and surfaces wherever it is first used. Binding it once into a validated object moves every such failure to startup, in one place, with the full configuration surface visible in one class.
 
 #### Interview explanation
-Frame configuration as input that deserves parsing and validation, then contrast it with `@Value`: one typed object, validated at startup, with IDE metadata, versus individual values checked only for presence and type. Mention constructor/record binding for immutability and `@Validated` for fail-fast behaviour.
+**In 30 seconds** — `@ConfigurationProperties` binds every property under a prefix onto one typed object — often a record — converting strings into `Duration`, `DataSize`, enums and nested types. With `@Validated` and Bean Validation annotations, a missing or invalid value stops the startup instead of failing on first use. It replaces scattered `@Value` strings with one class that documents the whole configuration surface.
+
+**If they push deeper** — frame configuration as input that deserves parsing and validation, then contrast it with `@Value`: one typed object, validated at startup, with IDE metadata, versus individual values checked only for presence and type. Mention constructor/record binding for immutability and `@Validated` for fail-fast behaviour.
 
 #### Syntax
 ```java
@@ -1543,13 +1695,40 @@ public class PaymentService {
 }
 ```
 
+Predict what this object contains at runtime — a question below asks for it:
+
+```java
+@Validated
+@ConfigurationProperties("app.payment")
+public record PaymentProperties(@NotBlank String url,
+                                @NotNull Duration timeout,
+                                int maxRetries) { }
+
+// application.yml:
+//   app.payment.url: https://pay.example
+//   app.payment.timeout: 3s
+//   app.payment.max-retry: 5
+```
+
 #### Common interview questions
 - "Why use `@ConfigurationProperties` over `@Value`?" (Type safety, grouping, startup validation, IDE metadata and testability — one object rather than scattered strings.)
 - "How do you validate configuration?" (Annotate the class `@Validated` and use Jakarta Bean Validation annotations; binding failures then abort startup.)
 - "How are properties converted?" (Built-in converters handle `Duration`, `DataSize`, enums, collections and nested objects; `5s` binds to a `Duration`.)
 - "How do you register the properties class?" (`@EnableConfigurationProperties`, or annotate it `@ConfigurationProperties` and make it a scanned component, or use `@ConfigurationPropertiesScan`.)
+- "What does the example's `PaymentProperties` contain at runtime?" (`url` is `https://pay.example`, `timeout` is three seconds — and `maxRetries` is `0`. The key is misspelt, `max-retry` instead of `max-retries`, and unknown keys are ignored, so the primitive keeps its default. `@Min(1)` on `maxRetries` would have turned the typo into a startup failure.)
+- "Why validate configuration at startup rather than where it is used?" (Because a bad value — an empty URL, a zero timeout — found at startup stops a deployment before any traffic, while the same value found on use fails a request, perhaps days later and far from the cause. Validation moves the failure to the cheapest moment.)
+- "After a configuration edit, calls to a partner time out after 30 milliseconds instead of 30 seconds. What happened, and how do you prevent it?" (Someone wrote `timeout: 30` without a unit, and a bare number bound to a `Duration` means milliseconds by default — it needed `30s`. Annotate the field `@DurationUnit(ChronoUnit.SECONDS)` if bare numbers should mean seconds, and validate a sensible minimum.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Why use `@ConfigurationProperties` over `@Value`?" — they drill down from your answer. Answer each step before opening it:
+
+- "How are property names matched to fields?" (By relaxed binding under the prefix: `max-retries`, `maxRetries` and `max_retries` all bind to `maxRetries`, and so does the environment variable `APP_PAYMENT_MAXRETRIES` — underscores there separate levels, so dashes are simply dropped. Strings are converted to the field's type: `5s` to a `Duration`, `10MB` to a `DataSize`.)
+- "When does a binding problem surface?" (At startup, if a value cannot be converted — `timeout: soon` — or fails validation. A misspelt or unknown key does not surface at all: it is ignored, and the field keeps its default.)
+- "How do you make the object immutable?" (Use a record, or a class with a single constructor: Boot binds through the constructor, so there are no setters for application code to call later.)
+- "How would you test the binding itself?" (With `ApplicationContextRunner`: register the properties class, supply `withPropertyValues(...)`, and assert both the bound values and that an invalid value makes the context fail to start.)
+
+Other follow-ups:
+
 - "What is constructor binding?" (Binding through the constructor or record components, producing an immutable configuration object — the default for records.)
 - "What generates IDE auto-completion for your own properties?" (`spring-boot-configuration-processor` on the annotation processor path.)
 - "How do you test a properties class?" (Construct it directly, or use `ApplicationContextRunner` with `withPropertyValues` for binding tests.)
@@ -1592,7 +1771,9 @@ The conventional package layout — application class at the root, feature or la
 Because component scanning needs a starting point and takes the application class's package — so the layout decides what Spring can see. Following the convention means scanning, tooling and navigation work with no configuration at all.
 
 #### Interview explanation
-State the scanning constraint first, then compare layer packages with feature packages and say which you prefer and why. Interviewers are checking whether you have an opinion informed by maintenance, not just familiarity.
+**In 30 seconds** — Put the `@SpringBootApplication` class in the root package, because component scanning starts there and covers only its sub-packages. Beneath it, organise code by feature — everything for orders in one package — once the service is non-trivial, or by layer for a small service. The build needs the Spring Boot plugin, which repackages the jar into an executable one.
+
+**If they push deeper** — state the scanning constraint first, then compare layer packages with feature packages and say which you prefer and why. Interviewers are checking whether you have an opinion informed by maintenance, not just familiarity.
 
 #### Syntax
 ```text
@@ -1615,13 +1796,34 @@ com.shop               ← @SpringBootApplication here
 </build>
 ```
 
+Predict which classes Spring finds in this layout — a question below asks for it:
+
+```text
+com.shop.app          ← @SpringBootApplication
+com.shop.app.config
+com.shop.order        ← OrderController, OrderService
+com.shop.payment      ← PaymentService
+```
+
 #### Common interview questions
 - "Where should the main application class live?" (In the root package of your code, because component scanning starts there.)
 - "How do you organise packages?" (By feature for anything non-trivial — all code for one capability together — or by layer for small services.)
 - "What does the Spring Boot Maven plugin do?" (Repackages the jar into an executable fat jar, and can build container images.)
-- "Why does my component say 'no qualifying bean'?" (It is outside the scanned package tree.)
+- "Why does my component say 'no qualifying bean'?" (Most often it is outside the scanned package tree — or it carries no stereotype annotation at all.)
+- "In the example's layout, which of `OrderController`, `OrderService` and `PaymentService` are registered?" (None of them. Scanning covers `com.shop.app` and its sub-packages, and `com.shop.order` and `com.shop.payment` are its siblings, not its children. Move the application class up to `com.shop`.)
+- "Why do many teams prefer packages by feature over packages by layer?" (Because changes arrive per feature: one change touches one package, classes that change together sit together, and package-private visibility can hide a feature's internals from the rest of the application. Layer packages scatter every feature across the tree.)
+- "`java -jar app.jar` fails with 'no main manifest attribute'. What is missing?" (The Spring Boot build plugin, or its repackage step: without it the build produces an ordinary library jar, with no launcher and no nested dependencies. Add `spring-boot-maven-plugin`, or apply the Gradle plugin, and rebuild.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Where should the main application class live?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly breaks if it is not at the root?" (Scanning covers only its own package and sub-packages, so classes in sibling packages are never registered — and JPA entity and repository scanning start from the same package, so they can vanish too.)
+- "Package by layer or by feature?" (By feature once the service is non-trivial — `order`, `payment` — so related classes change together in one place. By layer is fine for a small service that fits in your head.)
+- "How would you stop one feature reaching into another's internals?" (Make internal classes package-private, so only the feature's public API is visible. For stronger guarantees, enforce the rules with an architecture test such as ArchUnit, or split into modules.)
+- "When are build modules worth it?" (When build time, team ownership or enforced boundaries justify them — accepting that refactoring across modules becomes harder.)
+
+Other follow-ups:
+
 - "When would you split into modules?" (When build time, startup time or team boundaries justify it — and accepting that cross-module refactoring becomes harder.)
 - "Where do configuration classes belong?" (A `config` package, or alongside the feature they configure; consistency matters more than the choice.)
 - "How do tests mirror this?" (Same package structure under `src/test/java`, so package-private classes are testable.)
@@ -1663,7 +1865,9 @@ Project structure as style — it is functional, because scanning depends on it.
 Because some startup work needs the finished application — every bean built, the server listening — while constructors and `@PostConstruct` run as the context is still being assembled. Runners give that work a defined place at the very end of startup.
 
 #### Interview explanation
-Give the order and contrast runners with `@PostConstruct`: runners see a finished context and a listening server. Add the operational caveat — runners delay readiness and run on every replica.
+**In 30 seconds** — `SpringApplication.run()` prepares the environment, refreshes the context — building every singleton — and starts the web server; it then calls each `ApplicationRunner` and `CommandLineRunner` bean, and finally publishes `ApplicationReadyEvent`. Runners are the place for startup work that needs the finished application. They delay readiness while they run, they run on every replica, and a runner that throws stops the application.
+
+**If they push deeper** — give the order and contrast runners with `@PostConstruct`: runners see a finished context and a listening server. Add the operational caveat — runners delay readiness and run on every replica.
 
 #### Syntax
 ```java
@@ -1692,13 +1896,50 @@ class VerifyConnectivity implements ApplicationRunner {
 }
 ```
 
+Predict the order of the log lines — a question below asks for it:
+
+```java
+@Component
+class CacheLoader {
+    @PostConstruct void load() { log.info("@PostConstruct"); }
+}
+
+@Component @Order(2)
+class Reporter implements CommandLineRunner {
+    public void run(String... args) { log.info("runner 2"); }
+}
+
+@Component @Order(1)
+class Verifier implements ApplicationRunner {
+    public void run(ApplicationArguments args) { log.info("runner 1"); }
+}
+
+@Component
+class Ready {
+    @EventListener(ApplicationReadyEvent.class)
+    void ready() { log.info("ready"); }
+}
+```
+
 #### Common interview questions
 - "What is the difference between `ApplicationRunner` and `CommandLineRunner`?" (Only the argument type: `ApplicationArguments` with parsed options, versus the raw `String...`.)
 - "When do runners execute?" (After the context is refreshed and the web server has started, before `ApplicationReadyEvent`.)
 - "How do runners differ from `@PostConstruct`?" (`@PostConstruct` runs during that bean's creation, when other beans may not exist; a runner runs when everything is ready.)
 - "What happens if a runner throws?" (The exception propagates and the application stops — which is usually the desired fail-fast behaviour.)
+- "In what order does the example log its lines, and where does the web server start?" (`@PostConstruct`, then the web server starts, then `runner 1`, `runner 2`, then `ready`. `@PostConstruct` runs while the context builds its singletons; the server starts at the end of the refresh; runners follow in `@Order` order, whichever of the two interfaces they implement; `ApplicationReadyEvent` comes last.)
+- "Why do runners exist when `@PostConstruct` already runs at startup?" (Because `@PostConstruct` runs while the context is still being assembled: beans it does not depend on may not exist yet, and its own bean is not yet proxied. Runners run once everything is built and the server is listening, so they can use any bean through its proxy — `@Transactional` included.)
+- "A runner seeds reference data, and after scaling to three replicas the table has duplicate rows. Why, and what should you use instead?" (Runners run on every instance, so each replica inserted the data. Use a migration tool — Flyway or Liquibase — which records what it has applied and takes a lock, so only one instance runs each migration.)
 
 #### Follow-up questions
+Interviewers rarely stop at "When do runners execute?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly comes before them?" (The environment is prepared, the context is refreshed — every singleton created and initialised — and the web server is started as the refresh's last step.)
+- "What comes after them?" (`ApplicationReadyEvent` — and only then does Spring Boot report readiness as `ACCEPTING_TRAFFIC`, so a slow runner keeps the instance out of the load balancer.)
+- "What if a runner throws?" (Startup fails: the exception propagates out of `SpringApplication.run()`, the context is closed and the process exits. A fail-fast check, such as verifying database connectivity, relies on exactly that.)
+- "Would you run a long migration in a runner?" (No — it delays readiness, runs on every replica and needs its own locking. Schema changes belong to Flyway or Liquibase, which Boot runs during startup, before the beans that use the database.)
+
+Other follow-ups:
+
 - "How do you order several runners?" (`@Order` or the `Ordered` interface.)
 - "Is a runner a good place for data seeding?" (For local development yes; for schema and reference data in production, use Flyway or Liquibase, which handle locking and versioning.)
 - "What events can you listen to instead?" (`ApplicationReadyEvent`, `ContextRefreshedEvent`, `ApplicationFailedEvent`.)
@@ -1740,7 +1981,9 @@ The Boot plugin repackages the application into an executable jar with a nested-
 Because once the server is embedded, the application needs only a JVM — but Java cannot load classes from jars nested inside a jar. Boot's launcher solves exactly that, so one file becomes the whole deployable unit.
 
 #### Interview explanation
-Start from the obstacle — the JDK cannot load nested jars — then explain the fat-jar layout and `JarLauncher` as the fix, then layered jars as the container-friendly form — dependencies and application code in separate layers so rebuilds push only what changed. Mention `MaxRAMPercentage` as the container memory point.
+**In 30 seconds** — The Spring Boot plugin repackages the application into an executable jar: your classes under `BOOT-INF/classes`, every dependency as a nested jar under `BOOT-INF/lib`, and a launcher — `JarLauncher` — that can load them, since the JDK cannot read nested jars. For containers, layered jars separate dependencies from application code so image rebuilds stay small, and the heap is sized as a percentage of the container's memory.
+
+**If they push deeper** — start from the obstacle — the JDK cannot load nested jars — then explain the fat-jar layout and `JarLauncher` as the fix, then layered jars as the container-friendly form — dependencies and application code in separate layers so rebuilds push only what changed. Mention `MaxRAMPercentage` as the container memory point.
 
 #### Syntax
 ```bash
@@ -1758,13 +2001,34 @@ java -XX:MaxRAMPercentage=75 \
      -jar app.jar
 ```
 
+Spot the two problems in this image — a question below asks for it:
+
+```dockerfile
+FROM eclipse-temurin:21-jre
+COPY target/app.jar /app/app.jar
+ENTRYPOINT ["java", "-Xmx4g", "-jar", "/app/app.jar"]
+# deployed with a container memory limit of 2 GiB
+```
+
 #### Common interview questions
 - "What is a fat jar?" (An executable jar containing your classes plus all dependencies as nested jars, launched by Boot's `JarLauncher`.)
 - "Why use layered jars?" (They separate slow-changing dependencies from fast-changing application code, so container image layers cache well and rebuilds are small.)
 - "How do you build a container image?" (A Dockerfile using the `tools` jar mode — formerly `layertools` — to extract the layers, or `bootBuildImage` / `spring-boot:build-image` with Cloud Native Buildpacks.)
 - "How should the JVM heap be sized in a container?" (With `-XX:MaxRAMPercentage` so the heap derives from the container limit, rather than a fixed `-Xmx` that may exceed it.)
+- "What two problems does the example's Dockerfile have?" (The heap may grow to 4 GB inside a 2 GiB limit, so under load the kernel kills the container — an OOM kill with no Java error; size it with `-XX:MaxRAMPercentage=75` instead. And the whole fat jar is a single layer, so every code change re-ships every dependency; extract the layers with the `tools` jar mode, or build with buildpacks.)
+- "Why does a native image start in milliseconds?" (Because work a JVM does at startup moves to build time: Spring's ahead-of-time processing generates the bean definitions as code, and GraalVM compiles everything to machine code. At runtime there is no class loading to speak of, no JIT warm-up and no classpath scanning. The price is a long build and a closed world — reflection and proxies must be known in advance.)
+- "CI takes six minutes to build the container image and pushes 180 MB for a one-line change. What would you change?" (Layer the image: dependencies, Spring Boot's loader and the application classes in separate layers, ordered from least to most often changed. A one-line change then rebuilds and pushes only the small application layer; buildpacks do this automatically.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is a fat jar?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why does it need a special launcher?" (Because the JDK's class loader cannot load classes from a jar nested inside another jar. `JarLauncher`, declared as the jar's `Main-Class`, sets up a class loader that can, then calls your main class.)
+- "What does that layout cost in a container?" (Everything is one file, so copied as one image layer, any change re-ships every dependency.)
+- "How do layered jars fix it?" (The jar records its layers — dependencies, the Spring Boot loader, snapshot dependencies, application classes — and the `tools` jar mode extracts them, so a Dockerfile copies each into its own image layer and unchanged layers come from cache.)
+- "And how should the JVM be configured in the container?" (Size the heap from the container limit with `-XX:MaxRAMPercentage` rather than a fixed `-Xmx`, leaving room for metaspace, thread stacks and direct buffers — and add `-XX:+ExitOnOutOfMemoryError`, so a broken JVM is restarted instead of limping on.)
+
+Other follow-ups:
+
 - "Can you still produce a WAR?" (Yes — `war` packaging plus `SpringBootServletInitializer`, for deployment to an external container.)
 - "What do native images change?" (Startup drops to milliseconds and memory falls, at the cost of build time and extra configuration for reflection and proxies.)
 - "Why does `java -cp app.jar com.example.App` fail?" (Your classes sit under `BOOT-INF/classes` and the libraries are nested jars that only Boot's launcher can read. Unzipped, the same files run with an ordinary classpath of `BOOT-INF/classes` plus `BOOT-INF/lib/*`.)
