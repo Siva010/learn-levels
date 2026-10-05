@@ -181,13 +181,72 @@ class StartupLogger {
 **How it works:** So every bean goes through the same fixed sequence, and each stage exists because something needs that exact moment: instantiate; populate dependencies; aware-interface callbacks; `BeanPostProcessor.postProcessBeforeInitialization`; initialisation callbacks (`@PostConstruct`, then `afterPropertiesSet`, then a custom `initMethod`) — the first moment every dependency is guaranteed present; `postProcessAfterInitialization` — where proxies are normally created, because it is the last stop before the bean is handed out, so whatever it returns is what everyone receives; and finally hand the bean out.
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 300
+---
 flowchart TD
-    A["instantiate"] --> B["inject dependencies"]
-    B --> C["BeanPostProcessor — before init"]
-    C --> D["@PostConstruct → afterPropertiesSet → initMethod"]
-    D --> E["BeanPostProcessor — after init (proxy usually created here)"]
-    E --> F["bean in use"]
-    F --> G["@PreDestroy → destroyMethod on shutdown"]
+    A["`🟦 CREATE
+    **Spring creates the object**
+    Instantiate Bean`"]
+
+    B["`🟨 INJECT
+    **Spring gives it what it needs**
+    Populate Properties / Dependency Injection`"]
+
+    subgraph INIT["🟪 INITIALIZE — Make the bean ready"]
+        direction TB
+        AW["`Aware callbacks
+        *BeanNameAware, BeanFactoryAware*`"]
+        C["`BeanPostProcessor
+        **postProcessBeforeInitialization()**`"]
+        D["`@PostConstruct
+        *custom setup*`"]
+        E["`afterPropertiesSet()
+        *InitializingBean*`"]
+        F["Custom init-method"]
+        G["`BeanPostProcessor
+        **postProcessAfterInitialization()**
+        *Proxy may be created here*`"]
+
+        AW --> C --> D --> E --> F --> G
+    end
+
+    H["`🟩 READY
+    **Bean is fully initialized**
+    Container exposes the resulting bean`"]
+
+    I["`🔵 USE
+    **Application uses the bean**`"]
+
+    subgraph DESTROY["🟥 DESTROY — Shut the bean down"]
+        direction TB
+        J["`@PreDestroy
+        *custom cleanup*`"]
+        K["`destroy()
+        *DisposableBean*`"]
+        L["Custom destroy-method"]
+
+        J --> K --> L
+    end
+
+    A --> B --> INIT
+    INIT --> H --> I --> DESTROY
+
+    classDef create fill:#2563eb1f,stroke:#2563eb,stroke-width:2px
+    classDef inject fill:#d977061f,stroke:#d97706,stroke-width:2px
+    classDef init fill:#7c3aed1f,stroke:#7c3aed,stroke-width:2px
+    classDef ready fill:#16a34a1f,stroke:#16a34a,stroke-width:3px
+    classDef use fill:#0284c71f,stroke:#0284c7,stroke-width:2px
+    classDef destroy fill:#dc26261f,stroke:#dc2626,stroke-width:2px
+
+    class A create
+    class B inject
+    class AW,C,D,E,F,G init
+    class H ready
+    class I use
+    class J,K,L destroy
 ```
 
 **Example:**
