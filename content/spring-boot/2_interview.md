@@ -257,7 +257,9 @@ A bean is an object instantiated, assembled and managed by the Spring container,
 Because some work is only possible at a specific moment: initialisation needs injected dependencies, a proxy must be in place before anyone receives the bean, and cleanup must happen before the JVM exits. A fixed sequence of stages gives each of those jobs its moment, in a predictable order.
 
 #### Interview explanation
-List the order — instantiate, inject, aware callbacks, post-process before init, init callbacks, post-process after init, use, destroy — and justify it: init callbacks come after injection because they need the dependencies, and the proxy normally appears in the "after initialisation" step because that is the last stop before the bean is handed out. The real requirement is that the proxy exists before anyone receives the bean, which is why a circular reference forces it earlier. Add that prototype beans are never destroyed by the container.
+**In 30 seconds** — Spring creates the bean, injects its dependencies, runs its init callbacks, lets post-processors wrap it — normally in a proxy — and hands it out. On a clean shutdown it runs the destroy callbacks of its singletons. Each step sits where it does because of what it needs: init after injection, the proxy before anyone receives the bean.
+
+**If they push deeper** — list the order — instantiate, inject, aware callbacks, post-process before init, init callbacks, post-process after init, use, destroy — and justify it: init callbacks come after injection because they need the dependencies, and the proxy normally appears in the "after initialisation" step because that is the last stop before the bean is handed out. The real requirement is that every bean ends up holding the same, final object, so a proxy must be in place before the first reference leaves the container. That is why a circular reference forces it earlier, through `getEarlyBeanReference` — which the auto-proxy creator behind `@Transactional`, `@Cacheable` and aspects implements, and `@Async`'s post-processor does not. Add that prototype beans are never destroyed by the container.
 
 #### Syntax
 ```java
@@ -280,16 +282,44 @@ public class CacheWarmer {
 }
 ```
 
+Predict the log of this class from startup to a clean shutdown — the questions below ask for it:
+
+```java
+@Component
+class LifecycleAudit implements InitializingBean, DisposableBean {
+    @Override public void destroy()            { log.info("destroy"); }
+    @Override public void afterPropertiesSet() { log.info("afterPropertiesSet"); }
+    @PreDestroy void stop()                    { log.info("@PreDestroy"); }
+    @PostConstruct void start()                { log.info("@PostConstruct"); }
+    LifecycleAudit()                           { log.info("constructor"); }
+}
+```
+
 #### Common interview questions
 - "What is a Spring bean?" (Any object the container creates, configures and manages.)
 - "Describe the bean lifecycle." (Instantiate, inject dependencies, aware callbacks, `postProcessBeforeInitialization`, `@PostConstruct`/`afterPropertiesSet`/`initMethod`, `postProcessAfterInitialization`, in use, then `@PreDestroy`/`destroyMethod` on shutdown.)
-- "Where does the proxy get created?" (Normally in `postProcessAfterInitialization` — the container swaps your instance for a proxy wrapping it. In a circular reference it is created earlier, through `getEarlyBeanReference`, because the other bean needs a reference before this one is finished.)
+- "Where does the proxy get created?" (Normally in `postProcessAfterInitialization` — the container swaps your instance for a proxy wrapping it. In a circular reference it is created earlier, through `getEarlyBeanReference`, because the other bean needs a reference before this one is finished — but only by post-processors that implement it, such as the auto-proxy creator behind `@Transactional`.)
 - "Are prototype beans destroyed by Spring?" (No — the container does not track them after handing them out, so cleanup is the caller's responsibility.)
+- "What does `LifecycleAudit` in the example log, from startup to a clean shutdown?" (constructor, @PostConstruct, afterPropertiesSet — then, on shutdown, @PreDestroy, destroy. The order in which the methods are declared is irrelevant: the lifecycle fixes it.)
+- "Why is the proxy created after initialisation, rather than straight after instantiation?" (Because what matters is that it exists before anyone receives the bean, and after initialisation is the last stop before that. The target is complete by the time the proxy starts forwarding calls to it, and the init callbacks run on the plain object, outside any advice. Spring builds the proxy earlier when another bean needs a reference sooner — a circular reference.)
+- "Your service pre-loads a cache in `@PostConstruct`, and new pods now take minutes to become ready during a deploy. Why — and does moving the work into an `ApplicationReadyEvent` listener fix it?" (The context is not refreshed, and the web server not started, until every singleton's init callbacks have returned, so the whole application waits for the cache. A listener runs after the server starts, so the process is live sooner — but Spring Boot reports readiness (`ACCEPTING_TRAFFIC`) only after the `ApplicationReadyEvent` listeners return, so a synchronous listener still delays readiness. Run the warm-up asynchronously, or load lazily, if traffic can be served before it finishes.)
+- "A prototype-scoped bean opens a file in `@PostConstruct` and closes it in `@PreDestroy`. After a day, the process runs out of file handles. Why?" (The container runs no destroy callbacks for prototypes — it forgets each one once handed out — so `@PreDestroy` never runs and every instance leaks its file. The code that requests the prototype must close it, or the file should be owned by a singleton.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Describe the bean lifecycle" — they drill down from your answer. Answer each step before opening it:
+
+- "When exactly does `@PostConstruct` run?" (After instantiation, injection and the aware callbacks, during the before-initialisation pass: a `BeanPostProcessor` invokes it from `postProcessBeforeInitialization`. So it runs before `afterPropertiesSet` and any `initMethod`.)
+- "Is the bean proxied at that point?" (Normally not — the proxy is created afterwards, in `postProcessAfterInitialization`. Even when one already exists, created early for a circular reference, `@PostConstruct` is called on the raw object, never through the proxy.)
+- "So what happens if `@PostConstruct` calls the bean's own `@Transactional` method?" (It runs without a transaction: the call goes through `this`, the raw object, so no proxy intercepts it. Call it through the proxy once startup is done — from an `ApplicationReadyEvent` listener in another bean — or use `TransactionTemplate` directly.)
+- "What changes if the bean is part of a circular dependency?" (With field or setter injection — a cycle made only of constructor injection cannot be resolved at all — the other bean needs a reference before this one is finished, so Spring exposes an early reference through `getEarlyBeanReference`, and the auto-proxy creator builds the proxy then, before this bean's injection and init callbacks are done. The other bean can now call it before its `@PostConstruct` has run. Spring Boot rejects circular references by default since 2.6, so this happens only once they are re-enabled.)
+- "And if that bean also has an `@Async` method?" (Startup fails. `@Async`'s post-processor cannot build its proxy early, so it wraps the bean later — after the other bean has already received the raw object — and Spring refuses to let two beans hold different objects: the bean "has been injected into other beans [...] in its raw version as part of a circular reference, but has eventually been wrapped".)
+
+Other follow-ups:
+
 - "What are the aware interfaces?" (`BeanNameAware`, `ApplicationContextAware` and similar — callbacks giving a bean access to container infrastructure; usually a sign of unnecessary coupling.)
 - "Is `@PreDestroy` guaranteed to run?" (Only on an orderly shutdown; `kill -9` or a crash skips it.)
 - "How do you order initialisation between beans?" (Through dependencies — a bean is created after what it depends on — or `@DependsOn` when the relationship is not expressed by injection.)
+- "Why does `@PostConstruct` run before `afterPropertiesSet()`?" (Because the container does not call it directly: a `BeanPostProcessor` invokes it during the before-initialisation pass, and the container's own `afterPropertiesSet` and `initMethod` calls come after that pass. Shutdown mirrors it — the same processor runs `@PreDestroy` before the container calls `destroy()`.)
 
 #### Edge cases
 - `@PostConstruct` runs before the context is fully refreshed, so other beans may not be ready; use `ApplicationReadyEvent` if they must be.
@@ -297,6 +327,7 @@ public class CacheWarmer {
 - When circular references are allowed, a post-processor that can only wrap after initialisation breaks them: the other bean already holds the raw object, so Spring fails startup, reporting that the bean "has been injected into other beans [...] in its raw version as part of a circular reference, but has eventually been wrapped". `@Async` is the usual cause, because its post-processor does not take part in early references.
 - Long work in `@PostConstruct` delays startup and the readiness probe, because the context is not ready until every singleton has finished initialising.
 - A bean implementing `DisposableBean` *and* declaring `@PreDestroy` runs both, annotation first.
+- A bean that a `BeanPostProcessor` depends on is created before the remaining processors are registered, so they never see it — its `@Transactional` or `@Cacheable` silently does nothing. Spring logs that it "is not eligible for getting processed by all BeanPostProcessors".
 
 #### Common mistakes
 - Relying on `@PreDestroy` for data integrity.
@@ -315,7 +346,7 @@ public class CacheWarmer {
 Bean lifecycle versus application lifecycle events — one is per bean, the other per context.
 
 #### Important facts to remember
-- A proxy must exist before anyone receives the bean — normally that means after initialisation, the last stop, but a circular reference forces it earlier.
+- Every bean must end up holding the same, final object, so a proxy has to be in place before the first reference leaves the container — normally after initialisation, the last stop; for a circular reference, earlier through `getEarlyBeanReference`, or startup fails.
 - Prototypes get no destroy callback — the container stops tracking them once handed out.
 - `@PreDestroy` needs an orderly shutdown — a killed JVM runs no code at all.
 
