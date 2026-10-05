@@ -10178,7 +10178,9 @@ Packaging a Spring Boot application and its Java runtime into an OCI container i
 Because an application's behaviour depends on its runtime as well as its code, and differing machines make the same build behave differently. An image ships both together as one immutable artifact that behaves identically across environments — and that container platforms can schedule, scale and replace.
 
 #### Interview explanation
-Cover three things: how the image is built (layered Dockerfile or buildpacks, multi-stage, small JRE base, non-root), how the JVM behaves in a container (memory percentage, CPU limits), and how the process stops (exec-form entrypoint so `SIGTERM` reaches Java, graceful shutdown bounded by a timeout shorter than the platform's grace period).
+**In 30 seconds** — Containerising a Boot application means building an image — a layered jar on a small JRE base, or buildpacks — that runs as a non-root user, and configuring the JVM for the container: by default it sizes its heap to a quarter of the container's memory, so `-XX:MaxRAMPercentage` sizes it properly. The entrypoint must be in exec form, so `SIGTERM` reaches Java and graceful shutdown can finish within the platform's grace period.
+
+**If they push deeper** — cover three things: how the image is built (layered Dockerfile or buildpacks, multi-stage, small JRE base, non-root), how the JVM behaves in a container (memory percentage, CPU limits), and how the process stops (exec-form entrypoint so `SIGTERM` reaches Java, graceful shutdown bounded by a timeout shorter than the platform's grace period).
 
 #### Syntax
 ```dockerfile
@@ -10204,13 +10206,34 @@ Default JVM max heap: 256 MiB (25%)   → most of the paid memory unused
 -Xmx1g: heap alone may reach the limit → kernel OOM kill, exit code 137
 ```
 
+Spot what goes wrong in Kubernetes — a question below asks for it:
+
+```dockerfile
+FROM eclipse-temurin:21-jdk
+COPY target/orders.jar /app/orders.jar
+ENTRYPOINT java -Xmx1g -jar /app/orders.jar
+# Kubernetes: memory limit 1Gi, terminationGracePeriodSeconds 30
+```
+
 #### Common interview questions
 - "How do you write a good Dockerfile for Spring Boot?" (Multi-stage, a JRE base, the jar extracted into layers ordered by change frequency, a non-root user, and an exec-form entrypoint with memory flags.)
 - "Why split the jar into layers?" (Dependencies rarely change, so their layer is cached and reused; a code change rebuilds and pushes only the small application layer.)
 - "How does the JVM size its heap in a container?" (It reads the cgroup memory limit and defaults the maximum heap to 25% of it; `MaxRAMPercentage` adjusts that.)
 - "What happens when Kubernetes stops a pod?" (It sends `SIGTERM`, waits the grace period — 30 seconds by default — then sends `SIGKILL`; graceful shutdown must finish within that window.)
+- "What goes wrong with the example's image in Kubernetes?" (Three things. `-Xmx1g` lets the heap alone reach the 1 GiB limit, with metaspace, threads and buffers on top, so the kernel kills the pod — exit code 137. The shell-form entrypoint makes `sh` PID 1, which may not forward `SIGTERM`, so the JVM never shuts down gracefully and is killed after 30 seconds. And a full JDK image, running as root, is larger and more exposed than it needs to be.)
+- "Why does the JVM default to only a quarter of the container's memory for its heap?" (Because the heap is only part of the process: metaspace, thread stacks, the code cache, direct buffers and the garbage collector's own structures need memory too, and the JVM cannot know how much your application will use. A cautious default avoids OOM kills; `MaxRAMPercentage` lets you claim more once you know the rest fits.)
+- "Pods are killed with exit code 137 under load, but the JVM logs no `OutOfMemoryError`. What is happening?" (The kernel's OOM killer ends the process because total memory — heap plus everything outside it — exceeded the container limit; the JVM never reached its own heap limit, so it had nothing to report. Lower `MaxRAMPercentage` to leave more room outside the heap, or raise the limit, and inspect native memory with Native Memory Tracking.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you write a good Dockerfile for Spring Boot?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why extract the jar into layers?" (Because dependencies change rarely and application code often: as separate image layers, ordered from least to most frequently changed, a code change rebuilds and pushes only the small application layer.)
+- "How should the heap be sized?" (As a percentage of the container limit — `-XX:MaxRAMPercentage=75` is common — leaving room for memory outside the heap. A fixed `-Xmx` near the limit invites OOM kills.)
+- "What must the entrypoint look like, and why?" (Exec form — `["java", ...]` — so Java runs as PID 1 and receives the platform's `SIGTERM` directly, starting a graceful shutdown.)
+- "How do graceful shutdown and the grace period fit together?" (On `SIGTERM`, Boot stops taking new requests and lets in-flight ones finish, bounded by `spring.lifecycle.timeout-per-shutdown-phase`. That timeout must be shorter than the platform's grace period — 30 seconds in Kubernetes — or the pod is killed mid-drain.)
+
+Other follow-ups:
+
 - "What is exit code 137?" (128 plus signal 9: the process was killed with `SIGKILL`, typically by the kernel's OOM killer or after the grace period expired.)
 - "Why does the shell form of `ENTRYPOINT` cause problems?" (`sh` becomes PID 1 and may not forward `SIGTERM`, so the JVM is killed abruptly when the grace period ends.)
 - "Buildpacks or Dockerfile?" (Buildpacks give a well-configured layered image with no Dockerfile to maintain; a Dockerfile gives full control for unusual requirements.)
@@ -10252,7 +10275,9 @@ Spring Boot's Docker Compose support (Boot 3.1+) starts the services in `compose
 Because every developer otherwise installs and wires the database, cache and broker by hand, slightly differently. One checked-in file and one command give everyone the same local infrastructure, without hand-written connection properties.
 
 #### Interview explanation
-Explain the flow — find the compose file, `docker compose up`, recognise known images, create `ConnectionDetails` beans that override connection properties — then contrast it with Testcontainers at development time and stress that the module is a development-only dependency.
+**In 30 seconds** — Since Spring Boot 3.1, adding `spring-boot-docker-compose` lets the application start the services in `compose.yaml` when it starts, recognise well-known images such as PostgreSQL or Redis, and create `ConnectionDetails` beans pointing at them — so local development needs no hand-written connection properties. It is a development-only dependency, never packaged for production; Testcontainers through a test-scoped `main` method is the alternative.
+
+**If they push deeper** — explain the flow — find the compose file, `docker compose up`, recognise known images, create `ConnectionDetails` beans that override connection properties — then contrast it with Testcontainers at development time and stress that the module is a development-only dependency.
 
 #### Syntax
 ```yaml
@@ -10287,13 +10312,38 @@ public class TestOrdersApplication {
 }
 ```
 
+Predict which database the application connects to — a question below asks for it:
+
+```yaml
+# compose.yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports: ["5432"]            # container port only; Docker picks a random host port
+
+# application.yml also sets:
+#   spring.datasource.url: jdbc:postgresql://localhost:5432/orders
+```
+
 #### Common interview questions
 - "How do you run a Spring Boot app locally with its dependencies?" (Docker Compose support with a `compose.yaml`, or Testcontainers through a test-scoped `main` method — both create service connections automatically.)
 - "How does Boot know how to connect to the containers?" (It recognises well-known images and creates `ConnectionDetails` beans with the mapped host and port, which take precedence over connection properties.)
 - "Should Compose support be in the production jar?" (No — declare it optional or `developmentOnly` so it is not packaged; the Maven plugin also excludes it by default.)
 - "Why pin image versions?" (So every developer and CI run the same versions, matching production as closely as possible.)
+- "With Docker Compose support active, which database does the example's application connect to?" (The Compose container, on its random host port: Boot creates a `ConnectionDetails` bean from the running service, and connection details take precedence over the `spring.datasource.url` property. The hand-written URL is ignored — and misleading, so remove it from the development configuration.)
+- "Why must Compose support stay out of the production artifact?" (Because at startup it looks for a compose file and runs `docker compose up` — in production that either fails, delaying or breaking startup, or starts containers nobody intended. The Maven plugin leaves it out by default; Gradle's `developmentOnly` configuration does the same.)
+- "Two projects on one laptop both run PostgreSQL on port 5432, and the second will not start. How does Compose support help?" (Declare only the container port — `ports: ["5432"]` — so Docker assigns a random host port, which Boot discovers when it creates the connection details. The projects no longer compete for 5432.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does Boot know how to connect to the containers?" — they drill down from your answer. Answer each step before opening it:
+
+- "What happens at startup, step by step?" (Boot finds `compose.yaml`, runs `docker compose up` if the services are not already running, waits for them to be ready, then creates `ConnectionDetails` beans for the images it recognises.)
+- "What if an image is a custom one?" (Label the service with `org.springframework.boot.service-connection`, naming the type it is compatible with — `postgres`, for instance — so Boot treats it like the standard image.)
+- "What happens to the containers when the application stops?" (By default Boot stops them; `lifecycle-management: start-only` leaves them running, so the next restart is faster.)
+- "Compose support or Testcontainers for local development?" (Either works. Testcontainers reuses the container definitions your integration tests already have, so there is one description of the environment instead of two.)
+
+Other follow-ups:
+
 - "What about a custom image Boot does not recognise?" (Label it with `org.springframework.boot.service-connection` naming the service type it is compatible with.)
 - "Does it run during tests?" (Skipped by default; tests use Testcontainers or slices instead.)
 - "Compose or Testcontainers for local development?" (Either; Testcontainers shares container definitions with integration tests, which avoids maintaining two descriptions.)
@@ -10335,7 +10385,9 @@ OpenAPI is a language-neutral specification for describing HTTP APIs; springdoc-
 Because hand-written API documentation drifts from the code it describes. Generating a machine-readable description from the code keeps it accurate — and the same source enables interactive exploration, generated clients and contract tests.
 
 #### Interview explanation
-Say what springdoc does — reads mappings, types and validation annotations to produce `/v3/api-docs` — then discuss code-first versus contract-first, the role of annotations for what code cannot express, and how the document is used beyond documentation: client generation and breaking-change detection in CI.
+**In 30 seconds** — OpenAPI is a machine-readable description of an HTTP API — endpoints, parameters, schemas, responses and security. springdoc-openapi generates it from Spring MVC controllers at `/v3/api-docs`, reading mappings, types and validation annotations, and serves Swagger UI; annotations such as `@Operation` and `@ApiResponse` add what code cannot express. Because it is generated from the code, it stays accurate — and the same document drives client generation and breaking-change checks in CI.
+
+**If they push deeper** — say what springdoc does — reads mappings, types and validation annotations to produce `/v3/api-docs` — then discuss code-first versus contract-first, the role of annotations for what code cannot express, and how the document is used beyond documentation: client generation and breaking-change detection in CI.
 
 #### Syntax
 ```java
@@ -10365,13 +10417,34 @@ OpenAPI ordersApi() {
 }
 ```
 
+Predict what the documentation shows for this endpoint — a question below asks for it:
+
+```java
+@GetMapping("/orders/{id}")
+ResponseEntity<Map<String, Object>> get(@PathVariable Long id) {
+    return ResponseEntity.ok(service.asMap(id));
+}
+```
+
 #### Common interview questions
 - "How do you document a Spring Boot REST API?" (springdoc-openapi generates an OpenAPI 3 document from the controllers, enriched with `@Operation`, `@ApiResponse` and `@Schema` where needed, and serves Swagger UI.)
 - "What is the difference between OpenAPI and Swagger?" (OpenAPI is the specification; Swagger is the tooling family — Swagger UI, Swagger Editor — originally behind it.)
 - "Code-first or contract-first?" (Code-first is quicker for internal APIs; contract-first suits public or cross-team APIs where the contract must be designed and reviewed before implementation.)
 - "How do you document JWT authentication?" (Declare a bearer security scheme in an `OpenAPI` bean and apply it globally or per operation.)
+- "What does the generated documentation show for the example's endpoint?" (A response that is an object with arbitrary properties — no field names, types or examples — because `Map<String, Object>` carries no schema for springdoc to read. Return a typed DTO, and the document describes every field.)
+- "Why generate the API document from code rather than write it by hand?" (Because hand-written documentation drifts as soon as the code changes, and nobody notices until a client breaks. Generated from the mappings and types, it changes when the code does — and can be checked in CI.)
+- "A field is renamed in a response DTO and a mobile client breaks in production. How could the build have caught it?" (By comparing the generated OpenAPI document with the previous release's in CI, using an OpenAPI diff tool that fails the build on breaking changes — a removed or renamed field is exactly what it reports.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you document a Spring Boot REST API?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does springdoc read from your code?" (Request mappings, parameter and return types, Jackson annotations and Bean Validation constraints — `@NotNull` becomes a required field, `@Size` a length limit.)
+- "What do you have to add by hand?" (What the code cannot express: summaries and descriptions, the error responses an endpoint can return, examples, and the security scheme.)
+- "Code-first or contract-first?" (Code-first is quicker for internal APIs; contract-first suits public or cross-team APIs, where the contract is designed and reviewed before anyone implements it.)
+- "What else is the document good for?" (Generating typed clients, mock servers and contract tests, and detecting breaking changes between releases.)
+
+Other follow-ups:
+
 - "How do you detect breaking API changes?" (Generate the document in CI and compare it with the previous release using an OpenAPI diff tool, failing the build on breaking changes.)
 - "Does springdoc understand Bean Validation?" (Yes — constraints such as `@NotNull` and `@Size` are reflected as required fields and length limits in the schema.)
 - "Should Swagger UI be enabled in production?" (For public APIs a published portal is better; for internal APIs it is commonly disabled or secured.)
@@ -10413,7 +10486,9 @@ A scheme for running multiple incompatible versions of an API contract side by s
 Because breaking changes are sometimes unavoidable, and clients — mobile apps especially — cannot all upgrade at the moment the server does. So incompatible contracts must coexist for a while, and retiring one must be a deliberate, announced step.
 
 #### Interview explanation
-Start by distinguishing breaking from non-breaking changes, because most changes should not need a new version. Then compare strategies — path, header, media type — and say how Spring supports them: by hand through path prefixes and mapping conditions in Boot 3.x, natively through the `version` mapping attribute from Spring Framework 7. Finish with the deprecation lifecycle: announce, signal with headers, monitor usage, remove.
+**In 30 seconds** — Version an API only for breaking changes — removed or renamed fields, changed types or meanings, new required inputs — because additive changes are safe when clients ignore unknown fields. When a new version is needed, it usually goes in the URL path, or in a header or media type; Boot 3.x does this with path prefixes or mapping conditions, and Spring Framework 7 adds native versioning. Old versions are retired deliberately: announced, signalled with `Deprecation` and `Sunset` headers, measured, then removed.
+
+**If they push deeper** — start by distinguishing breaking from non-breaking changes, because most changes should not need a new version. Then compare strategies — path, header, media type — and say how Spring supports them: by hand through path prefixes and mapping conditions in Boot 3.x, natively through the `version` mapping attribute from Spring Framework 7. Finish with the deprecation lifecycle: announce, signal with headers, monitor usage, remove.
 
 #### Syntax
 ```java
@@ -10434,13 +10509,35 @@ Sunset: Fri, 01 Jan 2027 00:00:00 GMT
 Link: </api/v2/orders>; rel="successor-version"
 ```
 
+Predict which changes need a new version — a question below asks for it:
+
+```text
+Changes planned for the next release of /api/v1/orders:
+  1. Add a new optional field "giftMessage" to the response
+  2. Rename "total" to "grandTotal"
+  3. Accept a new optional query parameter "currency"
+  4. Return 422 instead of 400 for validation errors
+```
+
 #### Common interview questions
 - "How do you version a REST API?" (Usually in the URL path for simplicity and visibility, or via a header or media type; version only for breaking changes and keep the versioning at the controller and DTO layer.)
 - "What counts as a breaking change?" (Removing or renaming fields, changing types or semantics, new required inputs, and changed status codes or error formats.)
 - "How do you retire an old version?" (Announce a date, send deprecation and sunset headers, track traffic per version, contact remaining clients, then remove it.)
 - "Does Spring support API versioning?" (Natively from Spring Framework 7 and Boot 4; on Boot 3.x it is done with path prefixes or `headers`/`produces` mapping conditions.)
+- "Which of the example's changes require a new API version?" (2 and 4. Renaming a field removes the old one, which clients read, and changing a status code breaks clients that handle errors by status. Adding an optional response field or an optional parameter is additive — clients that ignore unknown fields and omit the parameter are unaffected.)
+- "Why version at the controller and DTO layer rather than duplicating the service?" (Because the business rules do not change between versions — only the contract does. Separate controllers and DTOs per version, mapping onto one service and domain model, keep a single place where behaviour lives.)
+- "You plan to remove API v1 next month. How do you know whether anyone still depends on it?" (Measure it: tag request metrics or logs by API version and by client, contact the clients that still call it, and keep sending `Deprecation` and `Sunset` headers. Remove the version when real usage — not the calendar — says it is safe.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you version a REST API?" — they drill down from your answer. Answer each step before opening it:
+
+- "What counts as a breaking change?" (Removing or renaming fields, changing a type or meaning, adding a required input, and changing status codes or error formats — anything an existing, correct client could trip over.)
+- "Path, header or media type?" (The path is visible in URLs and logs and easy to test with curl; headers and media types keep URLs stable but are harder to debug and need `Vary` for caches. Most teams choose the path.)
+- "How does Spring support it?" (In Boot 3.x by hand — path prefixes, or `headers` and `produces` mapping conditions; from Spring Framework 7, natively through the `version` attribute on mappings.)
+- "How do you retire the old version?" (Announce a date, send `Deprecation` and `Sunset` headers, track who still calls it, contact them, then remove it.)
+
+Other follow-ups:
+
 - "How do you avoid duplicating logic across versions?" (Separate controllers and DTOs per version mapping onto one service and domain model.)
 - "Why should clients ignore unknown fields?" (So additive changes are non-breaking — the tolerant reader principle; Boot's Jackson setup does not fail on unknown properties by default.)
 - "How long do you keep old versions?" (As long as the published policy promises — often six to twelve months for external clients — informed by real usage metrics.)
@@ -10482,7 +10579,9 @@ Techniques for returning bounded, ordered and narrowed subsets of a collection, 
 Because an endpoint returning every row is fine with a hundred rows and an outage with a million, while its code never changes. Paging, sorting and filtering in the database keep response size, memory and query cost bounded regardless of how large the data grows.
 
 #### Interview explanation
-Explain `Pageable` binding and what `Page` costs (the count query), contrast offset with keyset pagination and explain why offset degrades with depth, mention stable ordering with a unique tie-breaker, and describe how dynamic filters are built safely with `Specification`s.
+**In 30 seconds** — Every collection endpoint returns a bounded slice of data: Spring Data binds `page`, `size` and `sort` into a `Pageable` and returns a `Page` — whose total needs an extra count query — or a cheaper `Slice` that only knows whether more exists. Offset pages get slower with depth, because the database still reads every skipped row, so deep or large data sets use keyset pagination. Every sort needs a unique tie-breaker, and the page size needs a cap.
+
+**If they push deeper** — explain `Pageable` binding and what `Page` costs (the count query), contrast offset with keyset pagination and explain why offset degrades with depth, mention stable ordering with a unique tie-breaker, and describe how dynamic filters are built safely with `Specification`s.
 
 #### Syntax
 ```java
@@ -10508,13 +10607,33 @@ Window<Order> next = repository.findFirst20ByStatusOrderByCreatedAtDescIdDesc(
         OrderStatus.PLACED, first.positionAt(first.size() - 1));
 ```
 
+Predict what can go wrong between these two pages — a question below asks for it:
+
+```text
+GET /api/orders?page=0&size=20&sort=createdAt,desc
+GET /api/orders?page=1&size=20&sort=createdAt,desc
+Many orders share the same createdAt value (imported in one batch).
+```
+
 #### Common interview questions
 - "How do you paginate in Spring Data?" (Accept a `Pageable` in the controller and repository method; return `Page` when a total is needed or `Slice` when only "has next" matters.)
 - "Why is offset pagination slow for deep pages?" (The database must read and discard every row before the offset, so cost grows with page depth.)
 - "What is keyset pagination?" (Paging by the last seen sort key — `WHERE (created_at, id) < (?, ?)` — so the database seeks via an index regardless of depth.)
 - "How do you implement dynamic filters?" (Compose JPA `Specification`s or Querydsl predicates, adding only the conditions that are present.)
+- "What can go wrong between the example's two pages?" (Orders with the same `createdAt` have no defined order among themselves, so the database may return them differently for each query: some appear on both pages and others on neither. Add a unique tie-breaker — `sort=createdAt,desc&sort=id,desc` — so the order is total.)
+- "Why does a `Page` cost more than a `Slice`?" (Because a `Page` reports the total number of elements, which needs a separate `COUNT` query — often as expensive as the page itself on large tables. A `Slice` fetches one extra row to know whether a next page exists, and runs no count.)
+- "A client requests `?size=1000000` and the service runs out of memory. What was missing?" (A maximum page size: set `spring.data.web.pageable.max-page-size`, so oversized requests are capped — and never expose an unbounded `findAll()` on a collection endpoint.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Why is offset pagination slow for deep pages?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does keyset pagination do instead?" (It remembers the last row's sort key and asks for rows after it — `WHERE (created_at, id) < (?, ?)` — so an index seeks straight to the position, however deep.)
+- "What do you give up?" (Jumping to an arbitrary page number: keyset moves only forwards or backwards from a known row — fine for infinite scroll and exports, not for numbered page links.)
+- "How does Spring Data support it?" (Since Spring Data 3.1, through scrolling: a repository method that takes a `ScrollPosition` returns a `Window`, which hands you the position of its last element for the next request.)
+- "How do you add optional filters safely?" (With `Specification`s or Querydsl predicates — composed only for the filters that are present, with every value bound as a parameter — and a whitelist of the fields clients may sort by.)
+
+Other follow-ups:
+
 - "Why add `id` to the sort?" (A non-unique sort key gives an unstable order, so rows can repeat or disappear across pages.)
 - "How do you avoid the `COUNT` query?" (Return `Slice` or a keyset `Window`, or cache or approximate the total.)
 - "Can `Pageable` be combined with fetch joins?" (Collection fetch joins with pagination make Hibernate paginate in memory and warn; fetch ids first or use entity graphs carefully.)
@@ -10559,7 +10678,9 @@ Recording application events through the SLF4J facade, implemented by Logback by
 Because nobody can attach a debugger to production: what the application wrote down while running is the only record of what it did. Logging makes behaviour observable after the fact — for debugging, auditing and incident investigation.
 
 #### Interview explanation
-Explain the facade and backend split, level inheritance by package, parameterised messages, and logging exceptions with the throwable as the last argument. Then cover production concerns: structured JSON output (built in from Boot 3.4), correlation through the MDC and trace ids, runtime level changes through actuator, and never logging secrets or unnecessary personal data.
+**In 30 seconds** — Application code logs through SLF4J, a facade, and Spring Boot routes it to Logback by default, with levels set per package in configuration. Good practice: parameterised messages, so a message is formatted only when its level is enabled; the exception as the last argument, so the stack trace is kept; structured JSON output — built in since Boot 3.4 — with trace ids in every line; and never secrets or unnecessary personal data.
+
+**If they push deeper** — explain the facade and backend split, level inheritance by package, parameterised messages, and logging exceptions with the throwable as the last argument. Then cover production concerns: structured JSON output (built in from Boot 3.4), correlation through the MDC and trace ids, runtime level changes through actuator, and never logging secrets or unnecessary personal data.
 
 #### Syntax
 ```java
@@ -10582,13 +10703,36 @@ logging:
 {"@timestamp":"2026-03-01T10:15:30.120Z","log.level":"INFO","message":"order placed orderId=42","log.logger":"com.example.orders.OrderService","traceId":"4bf92f3577b34da6a3ce929d0e0e4736","spanId":"00f067aa0ba902b7","service.name":"orders"}
 ```
 
+Spot what is wrong with this logging — a question below asks for it:
+
+```java
+try {
+    payments.refund(orderId);
+} catch (PaymentException e) {
+    log.error("refund failed for order " + orderId + ": " + e.getMessage());
+    throw e;
+}
+```
+
 #### Common interview questions
 - "What is SLF4J and why use it?" (A logging facade: code depends on its API while the backend — Logback, Log4j2 — is chosen at deployment, and Boot routes every common logging API into that one backend.)
 - "Why use `{}` placeholders instead of concatenation?" (The message is only formatted if the level is enabled, avoiding wasted work, and it keeps message templates consistent.)
 - "How do you correlate logs across a request?" (Put request identifiers in the MDC; with Micrometer Tracing, Boot adds trace and span ids automatically.)
 - "How do you change log levels in production without a restart?" (POST to the actuator `loggers` endpoint, if exposed and secured.)
+- "What is wrong with the example's logging?" (The stack trace is lost — only the message is logged, not the exception — so the cause is gone when you need it. The concatenation builds the string even when the level is disabled. And logging then rethrowing means the same failure is logged again by whoever catches it. Log once, where the exception is handled: `log.error("refund failed orderId={}", orderId, e)`.)
+- "Why log through a facade rather than directly through Logback?" (So application and library code depend only on the SLF4J API, while the backend is chosen once, at deployment. Boot also routes other logging APIs — Commons Logging, `java.util.logging` — into the same backend, so every library's logs end up in one configured place.)
+- "During an incident you need `DEBUG` logs from one package in production, without a restart. How?" (Through the actuator `loggers` endpoint — a `POST` setting that package's level — provided it is exposed and secured. Set it back afterwards, since `DEBUG` output can be heavy and may contain sensitive detail.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you correlate logs across a request?" — they drill down from your answer. Answer each step before opening it:
+
+- "What is the MDC?" (The Mapped Diagnostic Context: thread-local key-value pairs that the logging layout adds to every line logged on that thread — request ids, tenant ids.)
+- "Where do trace ids come from in Spring Boot 3?" (From Micrometer Tracing: with a tracer on the classpath, Boot puts the current trace and span ids into the MDC, and the default log pattern prints them.)
+- "What happens to the MDC on a thread pool?" (Nothing carries over automatically: the context must be copied to the worker thread — a `TaskDecorator` can do it — and cleared afterwards, or it leaks into the next task on that thread.)
+- "Why structured logs rather than plain text?" (Because fields such as `orderId` and `traceId` become searchable and aggregatable in the log system, instead of being parsed out of free text with fragile patterns.)
+
+Other follow-ups:
+
 - "Why structured logging?" (Fields such as order id and trace id become searchable and aggregatable instead of being parsed out of free text.)
 - "How does the MDC behave with thread pools?" (It is thread-local, so values must be copied to worker threads — for example with a `TaskDecorator` — and cleared afterwards to avoid leaking into the next task.)
 - "How do you keep logging from slowing the application?" (Sensible levels, async appenders for heavy output, and avoiding expensive argument computation on hot paths.)
@@ -10630,7 +10774,9 @@ A Spring Boot module that adds production-ready endpoints for health, metrics, c
 Because every production service needs the same operational answers — health, metrics, configuration, log levels — and building them by hand in each service is wasted and inconsistent. Actuator gives every Boot service a consistent, built-in operational interface for monitoring systems and operators.
 
 #### Interview explanation
-Describe the enable-versus-expose model — only `health` is exposed over HTTP by default — then name the important endpoints, flag the sensitive ones (`env`, `configprops`, `heapdump`, `loggers`), and explain hardening: a separate management port, minimal exposure, and a dedicated `SecurityFilterChain` using `EndpointRequest`.
+**In 30 seconds** — Actuator adds operational endpoints to a Boot application: health, info, metrics, Prometheus output, logger levels, environment and configuration, thread and heap dumps. Endpoints are enabled and exposed separately — over HTTP, only `health` is exposed by default — and several are sensitive: `env`, `configprops`, `loggers`, which accepts writes, and above all `heapdump`. In production, expose the minimum, ideally on a separate internal port behind a dedicated security chain.
+
+**If they push deeper** — describe the enable-versus-expose model — only `health` is exposed over HTTP by default — then name the important endpoints, flag the sensitive ones (`env`, `configprops`, `heapdump`, `loggers`), and explain hardening: a separate management port, minimal exposure, and a dedicated `SecurityFilterChain` using `EndpointRequest`.
 
 #### Syntax
 ```yaml
@@ -10664,13 +10810,36 @@ class FeatureFlagsEndpoint {
 }
 ```
 
+Predict what an anonymous user can do — a question below asks for it:
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+# Actuator shares the public port, and the application has no Spring Security.
+```
+
 #### Common interview questions
 - "What is Spring Boot Actuator?" (A module providing operational endpoints — health, metrics, info, loggers, env and more — for monitoring and managing a running application.)
 - "Which endpoints are exposed by default?" (Over HTTP, only `health`; others must be listed in `management.endpoints.web.exposure.include`.)
 - "How do you secure actuator?" (Expose the minimum, run it on a separate internal port, and protect it with a `SecurityFilterChain` matched by `EndpointRequest.toAnyEndpoint()`.)
 - "Why is `heapdump` dangerous?" (A heap dump contains everything in memory — credentials, tokens, personal data.)
+- "What can an anonymous internet user do with the example's configuration?" (Almost anything: download a heap dump containing every credential and token in memory, read configuration and environment details, change log levels, and list every bean and mapping. Expose only what monitoring needs — `health`, `prometheus` — on an internal management port, behind a `SecurityFilterChain` matched with `EndpointRequest`.)
+- "Why are enabling and exposing separate settings?" (Because an endpoint can be useful internally — over JMX, or to other code — without being reachable over HTTP. Separating them lets every endpoint exist by default while only the harmless one, `health`, is reachable from outside until you decide otherwise.)
+- "A security scan finds `/actuator/env` reachable on the public port. What do you change, and what had Boot already protected?" (Remove `env` from the exposure list, or move actuator to an internal management port, and secure it with a `SecurityFilterChain` using `EndpointRequest`. Boot 3 already masks the values in `env` by default — but key names, property sources and the endpoint itself still tell an attacker a lot.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you secure actuator?" — they drill down from your answer. Answer each step before opening it:
+
+- "What should be exposed in production?" (Only what monitoring and the platform need — usually `health` and `prometheus`, perhaps `info` — listed explicitly, never `*`.)
+- "Why run it on a separate port?" (So it can be reachable only inside the cluster or network, while the public load balancer routes only the application port.)
+- "How do you write the security rules for it?" (A `SecurityFilterChain` matched by `EndpointRequest.toAnyEndpoint()`, permitting health and metrics to the monitoring system and requiring an admin role for everything else.)
+- "Which endpoint is most dangerous, and why?" (`heapdump`: a dump of the JVM's memory contains whatever the application holds — credentials, tokens, personal data — readable by anyone who downloads it.)
+
+Other follow-ups:
+
 - "How does Boot protect values in `env`?" (Since Boot 3.0 all values are masked by default; `show-values` can reveal them always or only to authorised users.)
 - "How do you add build and Git info?" (Generate `build-info` with the Boot build plugin and `git.properties` with a Git plugin; the `info` endpoint picks them up.)
 - "Can you write a custom endpoint?" (Yes — `@Endpoint` with `@ReadOperation`, `@WriteOperation` and `@DeleteOperation` methods, exposed through the same configuration.)
@@ -10712,7 +10881,9 @@ Health indicators report component status through `/actuator/health`; liveness a
 Because a platform running many instances must keep deciding which should receive traffic and which should be restarted, and it cannot see inside the process. Health endpoints answer those two questions, so traffic reaches only instances able to serve it and broken ones are replaced automatically.
 
 #### Interview explanation
-Separate the three probes by the action the platform takes on failure — restart, remove from load balancing, keep waiting — and argue from that what each should check. Liveness checks only the process itself; readiness reflects whether this instance can serve; external dependencies belong in neither by default, because a shared dependency failing would take every instance out at once.
+**In 30 seconds** — Boot's health endpoint aggregates health indicators, and its liveness and readiness groups map onto the platform's probes, which differ by what the platform does on failure. A failed liveness probe restarts the container, so it should check only that the process itself works; a failed readiness probe removes the instance from load balancing, so it reflects whether this instance can serve now; a startup probe holds liveness off while a slow application boots. Shared dependencies, such as the database, belong in neither by default.
+
+**If they push deeper** — separate the three probes by the action the platform takes on failure — restart, remove from load balancing, keep waiting — and argue from that what each should check. Liveness checks only the process itself; readiness reflects whether this instance can serve; external dependencies belong in neither by default, because a shared dependency failing would take every instance out at once.
 
 #### Syntax
 ```yaml
@@ -10745,13 +10916,37 @@ Database outage, liveness internal only:
   pods stay up, return errors or degraded responses, recover the moment the database returns
 ```
 
+Predict what happens during the database outage — a question below asks for it:
+
+```yaml
+management:
+  endpoint:
+    health:
+      group:
+        liveness:
+          include: livenessState, db, redis
+# The shared database becomes unreachable for two minutes.
+```
+
 #### Common interview questions
 - "What is the difference between liveness and readiness?" (Liveness failure restarts the container; readiness failure only stops traffic to it. Liveness asks whether the process is broken, readiness whether it can serve now.)
 - "Should a liveness probe check the database?" (No — a restart cannot fix the database, and every instance would restart at once.)
 - "What does a startup probe add?" (It suspends liveness checks until start-up completes, so slow-starting applications are not killed during boot.)
 - "How does Boot expose probes?" (As `/actuator/health/liveness` and `/actuator/health/readiness` health groups, enabled automatically on Kubernetes.)
+- "What happens to the example's pods during the database outage?" (Every pod fails liveness at the same time, so Kubernetes restarts all of them — a restart storm that piles slow startups on top of the outage and fixes nothing, because a restart cannot bring the database back. Keep liveness to the process itself; let requests fail or degrade while the database is down, and recover when it returns.)
+- "Why shouldn't readiness include a dependency every instance shares?" (Because when that dependency fails, every instance becomes unready at once and the platform removes them all — the service goes from degraded to completely unavailable, unable even to return a useful error.)
+- "A service takes 90 seconds to start, and Kubernetes keeps killing it before it is ready. What do you add?" (A startup probe — or a longer initial delay — so liveness checks do not begin until startup has finished. Without it, liveness fails during boot, and the platform restarts a container that was simply still starting.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between liveness and readiness?" — they drill down from your answer. Answer each step before opening it:
+
+- "So what should liveness check?" (Only that the process itself works — Boot's `LivenessState`, which becomes `BROKEN` if the application decides it cannot recover. Anything a restart cannot fix does not belong there.)
+- "And readiness?" (Whether this instance can take traffic now: startup finished, not shutting down, and perhaps a resource only this instance depends on.)
+- "What happens to readiness during graceful shutdown?" (Boot switches it to `REFUSING_TRAFFIC`, so the platform stops routing new requests while in-flight ones finish.)
+- "Where do custom health indicators fit?" (In the main health endpoint, for dashboards and alerting, and only deliberately in a probe group — and they must be fast, because a slow indicator makes the probe time out and fail.)
+
+Other follow-ups:
+
 - "When does readiness change during shutdown?" (Graceful shutdown sets `REFUSING_TRAFFIC` so the platform stops sending new requests while in-flight ones finish.)
 - "How do you write a custom health indicator?" (Implement `HealthIndicator` or `AbstractHealthIndicator`; the bean name minus the `HealthIndicator` suffix becomes the component name.)
 - "Should health details be public?" (No — show details only when authorised; they reveal infrastructure.)
@@ -10793,7 +10988,9 @@ Micrometer is a vendor-neutral metrics facade; Spring Boot auto-configures a `Me
 Because most operational questions are about trends — rates, latencies, saturation — which logs answer slowly and expensively. Metrics measure them cheaply and consistently, and a vendor-neutral facade exports them to any monitoring system without lock-in.
 
 #### Interview explanation
-Name the meter types and when each fits, explain tags and the cardinality rule, describe what Boot instruments automatically (`http.server.requests`, JVM, HikariCP), and explain why percentiles should come from histograms aggregated server-side. Mention the Observation API as the shared foundation of metrics and tracing since Boot 3.
+**In 30 seconds** — Micrometer is a vendor-neutral metrics facade — SLF4J for metrics. Spring Boot auto-configures a `MeterRegistry`, instruments HTTP requests, the JVM, connection pools and more, and exports to Prometheus, OTLP or other systems, while applications add their own counters, gauges and timers. Two rules matter most: tags must have bounded values, because every combination is a separate time series; and latency is judged by percentiles computed from histograms, not averages.
+
+**If they push deeper** — name the meter types and when each fits, explain tags and the cardinality rule, describe what Boot instruments automatically (`http.server.requests`, JVM, HikariCP), and explain why percentiles should come from histograms aggregated server-side. Mention the Observation API as the shared foundation of metrics and tracing since Boot 3.
 
 #### Syntax
 ```java
@@ -10812,13 +11009,32 @@ histogram_quantile(0.99, sum by (le, uri) (rate(http_server_requests_seconds_buc
 public Quote price(Order order) { ... }   // timer + span, given an ObservedAspect bean
 ```
 
+Predict what this counter does to the monitoring system — a question below asks for it:
+
+```java
+registry.counter("orders.placed", "customerId", order.customerId().toString()).increment();
+// 2 million customers
+```
+
 #### Common interview questions
 - "What is Micrometer?" (A metrics facade — like SLF4J for metrics — with registries for Prometheus, OTLP, Datadog and others; Spring Boot's metrics are built on it.)
 - "Counter versus gauge versus timer?" (A counter only increases, a gauge samples a current value, a timer records count, total and distribution of durations.)
 - "What is cardinality and why does it matter?" (The number of distinct tag-value combinations; each is a separate time series, so unbounded values such as user ids explode storage and cost.)
 - "Why not average latency?" (Averages hide the tail; percentiles from histograms show what slow users experience and aggregate correctly across instances.)
+- "What does the example's counter do to the monitoring system?" (It creates a separate time series per customer — up to two million — which inflates memory in the application and storage and query cost in the backend, and can take the monitoring system down. Tags need a small, bounded set of values — channel, region, status; per-customer detail belongs in logs or traces.)
+- "Why can't you average the p99 latencies reported by each instance?" (Because percentiles do not combine: the average of the instances' p99s is not the p99 of all requests. Histogram buckets do combine — sum them across instances, then compute the percentile — which is why server-side percentiles from histograms are the right approach.)
+- "Average latency looks fine at 80 ms, but users say the service is slow. What would you look at?" (The tail — p95 and p99 from histograms. An average can hide a few percent of requests taking seconds, which are exactly the ones users notice; break it down by endpoint with the `uri` tag.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Counter versus gauge versus timer?" — they drill down from your answer. Answer each step before opening it:
+
+- "When would you use a gauge?" (For a current value you sample rather than count — queue length, pending outbox rows, cache size — which can go up as well as down.)
+- "What does a timer record?" (The count, total time and maximum of an operation's durations — and, with histograms enabled, the distribution from which percentiles are computed.)
+- "What does Boot measure without any code?" (HTTP server and client requests, JVM memory, garbage collection and threads, connection-pool usage, executors, caches and more — tagged with low-cardinality values such as the URI template.)
+- "How does `@Observed` relate to metrics and tracing?" (It creates an observation — the shared abstraction since Boot 3 — which produces both a timer and a span. It needs an `ObservedAspect` bean, and as an aspect it works only on proxied calls.)
+
+Other follow-ups:
+
 - "Why use the URI template as a tag?" (Boot tags `http.server.requests` with `/orders/{id}`, not `/orders/42`, precisely to keep cardinality bounded.)
 - "Client-side percentiles or histograms?" (Client-side percentiles cannot be combined across instances; histogram buckets can, at the cost of more series.)
 - "What is the RED method?" (Rate, Errors, Duration — the three metrics to watch for every request-driven service.)
@@ -10860,7 +11076,9 @@ Recording the path and timing of a request across services as a trace of spans l
 Because in a distributed system no single service's logs show the whole request, so latency and failures cannot be located from any one of them. A trace id carried across every hop stitches the pieces into one timeline.
 
 #### Interview explanation
-Define trace, span and context propagation (W3C `traceparent` by default), explain how Boot instruments HTTP servers and clients and messaging through the Observation API, then cover the practical issues — sampling and its cost, instrumentation gaps from hand-built clients, context lost across threads — and link traces to logs through the MDC.
+**In 30 seconds** — Distributed tracing follows one request across services: each hop records a span with its timing, and all spans share a trace id carried in request headers — W3C `traceparent` by default. In Spring Boot 3, Micrometer Tracing, replacing Spring Cloud Sleuth, instruments HTTP servers, clients built from Boot's builders and messaging, and puts the trace id into the logs. Traces are sampled — 10% by default — to control cost.
+
+**If they push deeper** — define trace, span and context propagation (W3C `traceparent` by default), explain how Boot instruments HTTP servers and clients and messaging through the Observation API, then cover the practical issues — sampling and its cost, instrumentation gaps from hand-built clients, context lost across threads — and link traces to logs through the MDC.
 
 #### Syntax
 ```yaml
@@ -10896,13 +11114,40 @@ ThreadPoolTaskExecutor workExecutor() {
 }
 ```
 
+Predict why this call is missing from the trace — a question below asks for it:
+
+```java
+@Service
+class QuoteService {
+    private final RestTemplate rest = new RestTemplate();               // built by hand
+    private final ExecutorService pool = Executors.newFixedThreadPool(4);
+
+    Quote quote(Order order) {
+        var price = pool.submit(() -> rest.getForObject(PRICING_URL, Price.class));
+        // ...
+    }
+}
+```
+
 #### Common interview questions
 - "What is distributed tracing?" (Following one request across services as a tree of timed spans sharing a trace id, propagated in request headers.)
 - "What replaced Spring Cloud Sleuth?" (Micrometer Tracing, with OpenTelemetry or Brave bridges, from Spring Boot 3.)
 - "Why might a trace be broken?" (A client not built from Boot's instrumented builder, work moved to a thread without context propagation, or a messaging hop without observation enabled.)
 - "What is sampling?" (Recording only a fraction of traces — Boot defaults to 10% — to control cost; tail sampling in a collector can keep all errors and slow requests.)
+- "Why does the example's call to pricing not appear in the request's trace?" (Twice over. `new RestTemplate()` is not built from Boot's instrumented builder, so it creates no span and sends no `traceparent` header; and the call runs on a plain thread pool, which does not carry the trace context to the worker thread. Build the client from the injected `RestTemplateBuilder`, and run the work on an executor with context propagation.)
+- "Why are traces sampled instead of recorded for every request?" (Because a trace records every span of every hop, which at high traffic costs real CPU, network and storage. Sampling keeps a representative fraction; tail sampling in a collector can still keep every error and every slow request.)
+- "Users report occasional 10-second checkouts, but no slow traces show up. Why might they be missing, and what do you change?" (With head-based sampling at 10%, the decision is made when the request starts, before anyone knows it will be slow — so nine in ten slow checkouts are never recorded. Use tail sampling in a collector to keep slow and failed traces, and confirm the frequency with latency histograms.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is distributed tracing?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does the trace id get from one service to the next?" (In request headers — W3C `traceparent` by default — written by the instrumented client and read by the next service's instrumented server, which continues the same trace.)
+- "Why might a hop be missing from a trace?" (A client not built from Boot's instrumented builder, work moved to a thread without context propagation, or a messaging hop without observation enabled on the template and listener.)
+- "How do traces connect to logs?" (The current trace and span ids go into the MDC and are printed in every log line, so the trace id of a slow trace finds every log line of that request in every service.)
+- "What is baggage, and what is the risk?" (Key-value context propagated with the trace — a tenant id, say — to every downstream service. It travels on every call, so it costs bandwidth and must never carry sensitive data.)
+
+Other follow-ups:
+
 - "How do traces connect to logs?" (The trace and span ids are placed in the MDC and printed in log lines, so a trace id finds every log line of the request.)
 - "What is the `traceparent` format?" (Version, 16-byte trace id, 8-byte parent span id and flags, hex-encoded and dash-separated, per W3C Trace Context.)
 - "What is baggage?" (Key-value context propagated with the trace across services, such as a tenant id, configured explicitly because it travels on every call.)
@@ -10944,7 +11189,9 @@ Supplying environment-specific settings and sensitive credentials to an applicat
 Because one artifact must run in every environment, so environment-specific values cannot be built in — and secrets that reach code, images or logs are effectively public. External configuration and dedicated secret delivery keep credentials controlled, audited and rotatable.
 
 #### Interview explanation
-Separate ordinary configuration from secrets. Describe the delivery mechanisms — environment variables with relaxed binding, config trees from mounted files, `spring.config.import` from Vault or cloud secret managers — and the hygiene around them: validated `@ConfigurationProperties`, masking in actuator, no secrets in logs or images, and rotation designed in.
+**In 30 seconds** — One artifact runs everywhere, so environment-specific values come from outside it — environment variables, mounted files read as config trees, or a secret manager such as Vault through `spring.config.import`. Secrets need more than configuration: they must stay out of the repository, the image and the logs, be access-controlled and audited, and be rotatable without a rebuild. Binding them to validated `@ConfigurationProperties` makes a missing or malformed value fail the startup.
+
+**If they push deeper** — separate ordinary configuration from secrets. Describe the delivery mechanisms — environment variables with relaxed binding, config trees from mounted files, `spring.config.import` from Vault or cloud secret managers — and the hygiene around them: validated `@ConfigurationProperties`, masking in actuator, no secrets in logs or images, and rotation designed in.
 
 #### Syntax
 ```yaml
@@ -10968,13 +11215,35 @@ public record PaymentsProperties(
         @NotNull Duration timeout) { }
 ```
 
+Predict whether the password is safe — a question below asks for it:
+
+```dockerfile
+FROM eclipse-temurin:21-jre
+COPY application-prod.yml /app/config/      # contains the database password
+COPY target/orders.jar /app/orders.jar
+RUN rm /app/config/application-prod.yml     # "removed again"
+ENTRYPOINT ["java", "-jar", "/app/orders.jar"]
+```
+
 #### Common interview questions
 - "How do you manage secrets in Spring Boot?" (Keep them out of the repository and image; inject them at runtime from mounted secret files via config trees, environment variables, or a secret manager such as Vault through `spring.config.import`.)
-- "How does an environment variable map to a property?" (Relaxed binding: uppercase, dots and dashes become underscores — `SPRING_DATASOURCE_URL` sets `spring.datasource.url`.)
+- "How does an environment variable map to a property?" (Relaxed binding: upper-case the name, replace dots with underscores and drop dashes — `SPRING_DATASOURCE_URL` sets `spring.datasource.url`, and `SPRING_MAIN_LOGSTARTUPINFO` sets `spring.main.log-startup-info`.)
 - "Are Kubernetes Secrets secure?" (They are base64-encoded, not encrypted, by default; security depends on etcd encryption at rest and RBAC.)
 - "How do you fail fast on bad configuration?" (Bind to `@ConfigurationProperties` with `@Validated` constraints so start-up fails with a clear error.)
+- "Is the database password in the example's image safe after the `rm`?" (No. Each instruction creates a layer, and the layer from the `COPY` still contains the file — anyone who pulls the image can extract it. Never put secrets in an image: mount them at runtime and read them with `configtree:`, or fetch them from a secret manager.)
+- "Why are mounted files often preferred to environment variables for secrets?" (Because environment variables are inherited by every child process and turn up in process listings, crash reports and diagnostic dumps, while files can be permission-restricted and replaced without changing the process's environment.)
+- "A database password is committed to a public repository, and the commit is reverted an hour later. What do you do?" (Treat the secret as leaked and rotate it immediately. Reverting does not remove it from the history, clones or caches — and public repositories are scanned for secrets within minutes.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you manage secrets in Spring Boot?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does a mounted secret become a property?" (With `spring.config.import=configtree:/etc/secrets/`, each file becomes a property named after its path — `/etc/secrets/db/password` becomes `db.password` — with the file's content as the value.)
+- "How do you load secrets from Vault?" (Import it as a configuration source — `spring.config.import=vault://` with Spring Cloud Vault — so secrets arrive as properties at startup, with dynamic, short-lived database credentials possible.)
+- "How do you rotate a database password without downtime?" (Let both the old and new passwords work during the switch — or use dynamic credentials — then have the application pick up the new one and recycle its connection pool, and only then revoke the old password.)
+- "What stops a secret leaking through actuator or logs?" (Actuator masks `env` and `configprops` values by default since Boot 3; beyond that, never log the configuration or request bodies wholesale, and keep secrets in typed properties classes rather than scattered strings.)
+
+Other follow-ups:
+
 - "Files or environment variables for secrets?" (Files are generally preferred: environment variables are inherited by child processes and easily exposed in diagnostics.)
 - "How do you rotate a database password without downtime?" (Support two valid credentials during the switch, or use dynamic short-lived credentials from Vault, and refresh the connection pool.)
 - "What happens if a secret is committed to Git?" (Treat it as leaked: rotate it immediately; deleting the commit does not remove it from clones and history.)
