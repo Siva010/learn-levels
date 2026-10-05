@@ -28,6 +28,12 @@ export function MermaidDiagram({ code }: { code: string }) {
           securityLevel: "strict",
           theme: resolvedTheme === "light" ? "neutral" : "dark",
           fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif",
+          // SVG text labels, not HTML ones. Mermaid wraps an HTML label only when its measured
+          // width exactly equals the wrapping limit, and at a non-100% browser zoom or display
+          // scale that measurement comes back fractional — so long labels stay on one line and
+          // are clipped. SVG text is measured in the diagram's own units, which zoom cannot skew.
+          htmlLabels: false,
+          flowchart: { htmlLabels: false },
         });
         const { svg: rendered } = await mermaid.render(`mermaid-${id}`, code);
         if (active) setSvg(rendered);

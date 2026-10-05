@@ -2677,8 +2677,8 @@ private Long id;
 
 ```mermaid
 flowchart LR
-    A["Order (inverse side)\n@OneToMany(mappedBy = \"order\")"] -.read-only.-> C["orders.id"]
-    B["OrderLine (owning side)\n@ManyToOne @JoinColumn(order_id)"] --writes--> D["order_lines.order_id"]
+    A["Order (inverse side)<br/>@OneToMany(mappedBy = #quot;order#quot;)"] -.read-only.-> C["orders.id"]
+    B["OrderLine (owning side)<br/>@ManyToOne @JoinColumn(order_id)"] --writes--> D["order_lines.order_id"]
 ```
 
 **Example:**

@@ -2349,7 +2349,7 @@ flowchart TD
     A["gen = countdown(3)"] --> B["frame created, body not run"]
     B --> C["next() → runs to first yield"]
     C --> D["value returned, frame suspended"]
-    D -->|next()| E["resumes after the yield"]
+    D -->|"next()"| E["resumes after the yield"]
     E --> F["function returns → StopIteration"]
 ```
 
