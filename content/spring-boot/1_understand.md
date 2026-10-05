@@ -2054,7 +2054,7 @@ UserResponse create(@RequestBody @Valid CreateUserRequest request) { ... }
 
 **The problem:** Exceptions arise everywhere, and if each controller converts them into responses itself, the API's error behaviour drifts — different status codes, different shapes, the occasional stack trace.
 
-**How it works:** So translation from exception to response moves to one place. A `@RestControllerAdvice` class collects `@ExceptionHandler` methods. When a handler throws, Spring's exception resolvers find the most specific handler for that exception type and use its return value as the response.
+**How it works:** So translation from exception to response moves to one place. A `@RestControllerAdvice` class collects `@ExceptionHandler` methods. When a handler throws, Spring's exception resolvers find the handler for the closest matching exception type and use its return value as the response. With several advice classes, they are asked in `@Order` and the first one with any matching handler wins — which is why one advice, as below, is the simplest arrangement.
 
 **Example:**
 ```java

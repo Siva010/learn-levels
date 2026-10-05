@@ -4060,7 +4060,9 @@ Data organised as tables of rows and columns, with primary keys identifying rows
 Because data stored in one program's shape answers only that program's questions. Storing plain facts in tables, with relationships as values, separates logical structure from physical storage — so any query can describe the result it wants and the engine decides how to produce it.
 
 #### Interview explanation
-Define keys and cardinality, then make the point that SQL is declarative: the same query may execute differently as data grows, which is why reading plans matters more than memorising syntax.
+**In 30 seconds** — The relational model stores data as tables of rows and columns: a primary key identifies each row, and a foreign key points at a row in another table, with the database enforcing that the row exists. One-to-many puts the foreign key on the many side; many-to-many needs a join table. SQL is declarative — you describe the result and the engine decides how to produce it — which is why reading query plans matters more than memorising syntax.
+
+**If they push deeper** — define keys and cardinality, then make the point that SQL is declarative: the same query may execute differently as data grows, which is why reading plans matters more than memorising syntax.
 
 #### Syntax
 ```sql
@@ -4082,13 +4084,38 @@ CREATE TABLE product_tags (
 );
 ```
 
+Predict what the database does with the last two statements — a question below asks for it:
+
+```sql
+CREATE TABLE customers (id BIGINT PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE orders (
+  id          BIGINT PRIMARY KEY,
+  customer_id BIGINT NOT NULL REFERENCES customers(id)
+);
+
+INSERT INTO orders (id, customer_id) VALUES (1, 99);   -- no customer 99 exists
+DELETE FROM customers WHERE id = 7;                     -- customer 7 has orders
+```
+
 #### Common interview questions
 - "What is a primary key and a foreign key?" (A primary key uniquely identifies a row; a foreign key references a primary key in another table and is enforced by the database.)
 - "How do you model a many-to-many relationship?" (A join table holding both foreign keys, usually with a composite primary key.)
 - "Where does the foreign key go in one-to-many?" (On the many side — each order stores its customer id.)
 - "What is referential integrity?" (The guarantee that a foreign key always points at an existing row, enforced on every write.)
+- "What does the database do with the example's `INSERT` and `DELETE`?" (It rejects both. The insert fails because no customer 99 exists for the foreign key to point at; the delete fails because orders still reference customer 7, and the default referential action does not allow that. Referential integrity holds no matter which program writes.)
+- "Why store the foreign key on the many side rather than a list of ids on the one side?" (Because a column holds one value per row. Each order has exactly one customer, so the order row can hold it; a customer has many orders, which cannot fit in one column — and a list stuffed into a column cannot be indexed, joined or enforced by the database.)
+- "A team drops foreign keys to speed up inserts, and months later reports reference customers that no longer exist. What happened?" (Without the constraint, nothing stopped deletes and buggy writers from leaving orphaned rows, and nothing catches them afterwards. A foreign key's per-insert cost — one index lookup on the parent — is small next to cleaning up corrupt data; keep it, and index the referencing column so deletes stay fast.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you model a many-to-many relationship?" — they drill down from your answer. Answer each step before opening it:
+
+- "What goes in the join table?" (A foreign key to each side, and a composite primary key over the two — so the same pair cannot be stored twice.)
+- "What if the relationship has data of its own, such as a quantity or a date?" (Then it is an entity in its own right: give the join table those columns, often its own id, and model it as one — like `order_lines` between orders and products.)
+- "Surrogate or natural primary keys?" (Usually surrogate: generated ids stay stable when business values change, and keep foreign keys narrow. Keep the natural key as a unique constraint, so it is still enforced.)
+- "When would you not normalise this way?" (When a measured read pattern justifies duplicating data — accepting that code must then keep the copies consistent — or when the data is a self-contained document that is always read as a whole.)
+
+Other follow-ups:
+
 - "Surrogate or natural keys?" (Surrogate keys — generated ids — are stable when business values change; natural keys avoid a join but become painful when the business redefines them.)
 - "What is denormalisation?" (Deliberately duplicating data for read performance, accepting the consistency cost.)
 - "When would a document store fit better?" (Hierarchical data read as a whole, variable schemas, or when joins are genuinely absent from the access pattern.)
@@ -4130,7 +4157,9 @@ Primary key versus unique constraint — a table has one primary key and may hav
 Because tables are large and results small: moving rows to the application only to discard them wastes network, memory and time. Filtering, sorting and limiting therefore happen where the data and the indexes are, rather than in application memory.
 
 #### Interview explanation
-Give the logical evaluation order, explain null semantics, and define sargability — a predicate that can use an index. The `WHERE lower(email) = ?` example shows why a function around a column disables the index.
+**In 30 seconds** — `SELECT` retrieves rows, `WHERE` filters them, `ORDER BY` sorts and `LIMIT` cuts the result, evaluated in a logical order: `FROM`, `WHERE`, `GROUP BY`, `HAVING`, `SELECT`, `ORDER BY`, `LIMIT`. Two things trip people up. `NULL` means unknown, so `= NULL` is never true and `IS NULL` must be used. And a predicate can use an index only if it is sargable — a bare column compared with a value, not wrapped in a function.
+
+**If they push deeper** — give the logical evaluation order, explain null semantics, and define sargability — a predicate that can use an index. The `WHERE lower(email) = ?` example shows why a function around a column disables the index.
 
 #### Syntax
 ```sql
@@ -4148,13 +4177,35 @@ WHERE lower(email) = 'a@b.com'
 CREATE INDEX idx_users_email_lower ON users (lower(email));
 ```
 
+Predict what these queries return, and how fast — a question below asks for it:
+
+```sql
+-- users: 1 million rows, index on email, emails stored in mixed case
+SELECT * FROM users WHERE email = NULL;
+SELECT * FROM users WHERE lower(email) = 'ana@example.com';
+SELECT id, email FROM users WHERE id NOT IN (SELECT manager_id FROM teams);
+-- teams.manager_id is nullable, and one team has no manager
+```
+
 #### Common interview questions
 - "What is the logical order of SQL clauses?" (`FROM`, `WHERE`, `GROUP BY`, `HAVING`, `SELECT`, `ORDER BY`, `LIMIT` — which is why a `SELECT` alias cannot be used in `WHERE`.)
 - "Why does `WHERE column = NULL` return nothing?" (`NULL` means unknown, so the comparison is unknown rather than true; use `IS NULL`.)
 - "What is a sargable predicate?" (One the engine can satisfy using an index — typically a bare column compared to a value, not wrapped in a function.)
 - "Why avoid `SELECT *`?" (It fetches unnecessary columns, prevents index-only scans and breaks consumers when columns are added.)
+- "What do the example's three queries return, and how fast?" (The first returns nothing — `= NULL` is never true. The second returns the right row but scans all million, because the index stores `email`, not `lower(email)`. The third returns nothing at all: one `NULL` among the managers makes `NOT IN` unknown for every row — use `NOT EXISTS`.)
+- "Why can a `SELECT` alias be used in `ORDER BY` but not in `WHERE`?" (Because of the logical order: `WHERE` is evaluated before `SELECT` computes the aliases, and `ORDER BY` after. When `WHERE` runs, the alias does not exist yet.)
+- "An endpoint paginated with `OFFSET` is fast on page 1 and takes seconds by page 5,000. Why, and what do you do?" (`OFFSET 100000` still reads and discards every skipped row, so the cost grows with the page number. Switch to keyset pagination — `WHERE id > :lastSeenId ORDER BY id LIMIT 20` — which seeks straight to the position through the index.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is a sargable predicate?" — they drill down from your answer. Answer each step before opening it:
+
+- "Give an example that is not sargable, and fix it." (`WHERE lower(email) = ?`: the index stores `email`, not its lower-case form, so the engine must compute the function for every row. Store the email normalised, or create an expression index on `lower(email)`.)
+- "What else silently disables an index?" (Implicit type conversion — comparing a text column with a number — a leading wildcard such as `LIKE '%son'`, and arithmetic on the column, as in `WHERE price * 1.2 > 100`.)
+- "Does `LIMIT 10` make any query cheap?" (Only if the engine can stop early. With an index matching the `ORDER BY`, it reads ten rows; without one, it must sort every matching row first, then return ten.)
+- "Why does `ORDER BY` need a tiebreaker for pagination?" (Rows that compare equal have no defined order, so they can swap between pages — one row appears twice, another never. Add a unique column, such as the id, as the last sort key.)
+
+Other follow-ups:
+
 - "What goes wrong with `NOT IN` and nulls?" (If the subquery returns any `NULL`, `NOT IN` yields no rows; `NOT EXISTS` behaves as expected.)
 - "How do you paginate efficiently?" (Keyset pagination — `WHERE id > :lastId ORDER BY id LIMIT n` — rather than large `OFFSET` values.)
 - "Does `LIMIT` make a query cheap?" (Only if the engine can stop early — with a matching index it can; with a sort over the whole table it cannot.)
@@ -4199,7 +4250,9 @@ Operations combining rows from two inputs on a condition, with inner, left, righ
 Because normalisation stores each fact once, in its own table, so almost every useful question needs facts from several tables. Joins reassemble them on demand inside the engine — splitting and joining are two halves of one design.
 
 #### Interview explanation
-Define each join type by what it keeps, then raise the `LEFT JOIN` plus `WHERE` trap — a condition on the optional side in `WHERE` silently makes it an inner join. That example is the one interviewers use to separate textbook from practical knowledge.
+**In 30 seconds** — A join combines rows from two tables on a condition. An inner join keeps only matching pairs; a left join keeps every row of the left table, filling the right side with nulls where nothing matches; a cross join pairs everything with everything. The trap interviewers use: a condition on the right table placed in `WHERE` instead of `ON` throws away the null-extended rows, silently turning a left join into an inner join.
+
+**If they push deeper** — define each join type by what it keeps, then raise the `LEFT JOIN` plus `WHERE` trap — a condition on the optional side in `WHERE` silently makes it an inner join. That example is the one interviewers use to separate textbook from practical knowledge.
 
 #### Syntax
 ```sql
@@ -4217,13 +4270,35 @@ LEFT JOIN orders o ON o.customer_id = c.id
 WHERE o.id IS NULL;
 ```
 
+Predict which customers this query returns — a question below asks for it:
+
+```sql
+-- Ana has 2 orders (one PAID), Ben has 1 order (PENDING), Cy has no orders
+SELECT c.name, o.id
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id
+WHERE o.status = 'PAID';
+```
+
 #### Common interview questions
 - "What is the difference between inner and left join?" (Inner keeps only matching pairs; left keeps every left row, filling nulls where there is no match.)
 - "Why did my left join behave like an inner join?" (A condition on the right table in `WHERE` filters out the null-extended rows; it belongs in `ON`.)
 - "What join algorithms exist?" (Nested loop, hash join and merge join; the optimiser picks based on sizes, indexes and sort order.)
 - "How do you find rows with no match?" (Left join plus `WHERE right.id IS NULL`, or `NOT EXISTS`.)
+- "Which customers does the example's query return — and which did its author probably want?" (Only Ana, with her paid order. The `WHERE` condition is false for Ben's pending order and unknown for Cy's null-extended row, so the left join behaves like an inner join. To list every customer with their paid orders, if any, move the condition into `ON` — `LEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'PAID'` — which returns Ana with her order, and Ben and Cy with nulls.)
+- "Why does the optimiser sometimes prefer a nested loop to a hash join?" (Because a nested loop is cheapest when one input is small and the other has an index on the join column: each outer row costs one index lookup. A hash join must first read and hash one whole input, which pays off only for large inputs without a useful index.)
+- "A report's totals double after someone adds a join to the shipments table. What happened?" (Each order has several shipments, so the join produced one row per order–shipment pair, and summing order totals over those rows counted each order once per shipment. Aggregate shipments separately first — or use `EXISTS` if you only need to know one exists — then join the one-row-per-order result.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between inner and left join?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where does a condition on the right table belong in a left join?" (In `ON`, which decides what counts as a match. In `WHERE` it runs after the join and discards the rows that had no match — turning the left join into an inner one.)
+- "How do you find customers with no orders?" (Left join the orders and keep rows where the order side is null — `WHERE o.id IS NULL` — or use `NOT EXISTS`, which states the intent directly.)
+- "Why does a join on a nullable column miss some rows?" (Because `NULL = NULL` is unknown, not true, so rows with null keys never match — not even each other.)
+- "How does the engine execute the join?" (As a nested loop, a hash join or a merge join, chosen by the optimiser from table sizes, available indexes and sort order — which `EXPLAIN` shows.)
+
+Other follow-ups:
+
 - "When is a nested loop the right choice?" (When one input is small and the other has an index on the join column.)
 - "What causes a Cartesian product?" (A missing or incomplete join condition — rows multiply instead of matching.)
 - "How many tables can you join before it degrades?" (There is no fixed limit, but the optimiser's search space grows quickly; beyond roughly a dozen, plans become unstable.)
@@ -4265,7 +4340,9 @@ Functions reducing many rows to one value, grouped by `GROUP BY` and filtered af
 Because many questions want totals rather than rows, and computing them in the application means transferring every row just to produce a few numbers. Aggregating at the data sends only the answer.
 
 #### Interview explanation
-Separate `WHERE` from `HAVING` clearly, then introduce window functions as the answer to "aggregate and keep the detail rows", which is the question behind most reporting requirements.
+**In 30 seconds** — Aggregate functions — `count`, `sum`, `avg`, `min`, `max` — reduce many rows to one value; `GROUP BY` produces one result per group; `WHERE` filters rows before grouping and `HAVING` filters groups after. Window functions answer the question behind most reports — an aggregate together with the detail rows, such as running totals, rankings or a per-group sum beside each row — because they compute the aggregate without collapsing the result.
+
+**If they push deeper** — separate `WHERE` from `HAVING` clearly, then introduce window functions as the answer to "aggregate and keep the detail rows", which is the question behind most reporting requirements.
 
 #### Syntax
 ```sql
@@ -4290,13 +4367,36 @@ SELECT * FROM (
 WHERE rn <= 3;
 ```
 
+Predict what these queries return — a question below asks for it:
+
+```sql
+-- orders (customer_id, total_cents): (1, 50), (1, NULL), (2, 30)
+SELECT customer_id, count(*), count(total_cents), sum(total_cents)
+FROM orders
+GROUP BY customer_id;
+
+SELECT sum(total_cents) FROM orders WHERE customer_id = 3;
+```
+
 #### Common interview questions
 - "What is the difference between `WHERE` and `HAVING`?" (`WHERE` filters rows before grouping; `HAVING` filters groups after aggregation.)
 - "What is the difference between `count(*)` and `count(column)`?" (`count(*)` counts rows; `count(column)` counts non-null values of that column.)
 - "What are window functions for?" (Computing an aggregate alongside each row — running totals, rankings, per-group sums — without collapsing the result.)
 - "Which columns can appear in a `SELECT` with `GROUP BY`?" (Grouped columns, aggregates, and — in SQL:1999 and PostgreSQL — columns functionally dependent on a grouped key such as the primary key; anything else is an error.)
+- "What do the example's two queries return?" (The first returns two rows: customer 1 with `count(*)` 2, `count(total_cents)` 1 and a sum of 50 — both skip the null — and customer 2 with 1, 1 and 30. The second returns one row holding `NULL`, not 0: with no values, the sum is unknown. Wrap it in `coalesce(sum(total_cents), 0)` when zero is meant.)
+- "Why can't `WHERE` filter on `count(*)`?" (Because `WHERE` runs before grouping, when no groups — and so no counts — exist yet. Conditions on aggregates go in `HAVING`, which runs after.)
+- "A dashboard needs each order's total beside its customer's lifetime total, and a colleague runs one query per customer. What would you write instead?" (A window function — `sum(total_cents) OVER (PARTITION BY customer_id)` beside each order row: one query, the detail rows kept, and the per-customer total computed by the engine.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between `WHERE` and `HAVING`?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which is cheaper for a condition that could go in either?" (`WHERE`, because it discards rows before the work of grouping — though planners such as PostgreSQL's move a non-aggregate `HAVING` condition into `WHERE` themselves.)
+- "Which columns may appear in the `SELECT` of a grouped query?" (The grouped columns, aggregates, and columns functionally dependent on a grouped key — the other columns of a grouped primary key, in engines that support it. Anything else is ambiguous, so it is an error.)
+- "How would you get the top three orders per customer?" (With a window function: number each customer's orders using `row_number() OVER (PARTITION BY customer_id ORDER BY total_cents DESC)`, then keep the rows numbered three or less.)
+- "Why is `count(DISTINCT x)` slower than `count(*)`?" (Because it must remember every value it has seen to discard duplicates — a sort or hash over all of them — instead of simply counting rows.)
+
+Other follow-ups:
+
 - "Why is `COUNT(DISTINCT x)` slow?" (It must deduplicate, usually via a sort or hash of all values, rather than counting rows.)
 - "What does `sum` return for no rows?" (`NULL`, not zero — wrap in `coalesce` when zero is meant.)
 - "Can an index help aggregation?" (Yes — an index on the grouping columns can let the engine stream groups without a sort, and a covering index can avoid the table.)
@@ -4341,7 +4441,9 @@ Queries nested inside other queries — in `WHERE`, in `FROM` as a derived table
 Because real questions are often layered — one answer is the input to the next — and a single flat query for them becomes unreadable. Subqueries and CTEs compute intermediate results the outer query consumes, as named, readable steps.
 
 #### Interview explanation
-Distinguish correlated from uncorrelated subqueries and say why it matters for cost, then give the `NOT IN` null trap and `EXISTS` as the safe alternative. Mention recursive CTEs for hierarchies.
+**In 30 seconds** — A subquery is a query nested inside another — in `WHERE`, or in `FROM` as a derived table — and a CTE, written with `WITH`, gives such a step a name so a layered question reads top to bottom. A correlated subquery refers to the outer row, so it is logically evaluated once per row. Two things to know: `NOT IN` returns nothing if its subquery contains a null, so prefer `NOT EXISTS`; and recursive CTEs walk hierarchies.
+
+**If they push deeper** — distinguish correlated from uncorrelated subqueries and say why it matters for cost, then give the `NOT IN` null trap and `EXISTS` as the safe alternative. Mention recursive CTEs for hierarchies.
 
 #### Syntax
 ```sql
@@ -4363,13 +4465,33 @@ WITH RECURSIVE tree AS (
 SELECT * FROM tree;
 ```
 
+Predict how this query runs — a question below asks for it:
+
+```sql
+SELECT c.name,
+       (SELECT count(*) FROM orders o WHERE o.customer_id = c.id) AS order_count
+FROM customers c;
+```
+
 #### Common interview questions
 - "What is a correlated subquery?" (One that references the outer query's row, so it is logically evaluated per row — often rewritten as a join by the optimiser, but not always.)
 - "`IN` or `EXISTS`?" (`EXISTS` stops at the first match and handles nulls predictably; `NOT IN` with a null in the subquery returns no rows.)
 - "What is a CTE and is it a temporary table?" (A named subquery; whether it is materialised depends on the engine and version — since 12, PostgreSQL inlines a side-effect-free CTE referenced once.)
 - "What is a recursive CTE for?" (Hierarchies and graph traversal — category trees, org charts, bill of materials.)
+- "How does the example's query run, and how would you rewrite it?" (The subquery is correlated — it refers to `c.id` — and sits in `SELECT`, so it is evaluated once per customer: with a hundred thousand customers, a hundred thousand counts unless the optimiser rewrites it. A left join to orders grouped by customer, or to a pre-aggregated count, computes every count in one pass.)
+- "Why does `NOT EXISTS` behave correctly with nulls when `NOT IN` does not?" (`NOT IN` compares the value with every subquery result, and a comparison with `NULL` is unknown — so if any result is null, no row can be proven absent and none is returned. `NOT EXISTS` only asks whether a matching row exists, which a null cannot confuse.)
+- "A recursive CTE over a category tree never finishes after someone makes a category its own grandparent. What do you add?" (Cycle protection: track the path and stop when an id repeats — PostgreSQL 14+ has a `CYCLE` clause for this — or a depth limit. Then add a check that prevents cycles from being written in the first place.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is a correlated subquery?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why does that matter for cost?" (Because it is logically evaluated once per outer row; unless the optimiser rewrites it as a join, the cost multiplies with the size of the outer table.)
+- "When would you use a CTE instead?" (For readability: a chain of named steps reads top to bottom, where nested subqueries read inside out. The results are the same; the plan may not be.)
+- "Is a CTE computed once, like a temporary table?" (That depends on the engine and version. PostgreSQL before 12 always materialised CTEs, which stopped filters being pushed into them; since 12 it inlines a side-effect-free CTE referenced once, unless you write `MATERIALIZED`.)
+- "How do you walk a hierarchy of unknown depth?" (With a recursive CTE: an anchor query selects the roots, and a recursive part joins children to the rows found so far, repeating until no new rows appear — with a guard against cycles.)
+
+Other follow-ups:
+
 - "When does a CTE hurt performance?" (When materialisation prevents predicate push-down, so filters are applied after the whole intermediate result is built.)
 - "How do you debug a slow CTE chain?" (`EXPLAIN ANALYZE` and look for the step where actual rows explode relative to estimates.)
 - "Can a derived table be indexed?" (No — it is computed at runtime; if you need an index, consider a temporary or materialised view.)
@@ -4411,7 +4533,9 @@ Auxiliary sorted structures — usually B-trees — that let the engine locate r
 Because a full scan costs time proportional to table size, which stops being acceptable long before most tables stop growing. A sorted copy of the searched columns lets a lookup jump to the answer in logarithmic time — paid for on every write.
 
 #### Interview explanation
-Explain B-tree lookup cost, then the leftmost-prefix rule for composite indexes with a concrete example, and finish with the write cost — that trade is what makes "index everything" wrong.
+**In 30 seconds** — An index is a sorted structure — usually a B-tree — over one or more columns, letting the engine find rows in logarithmic time instead of scanning the table, and serving range scans and ordering too. A composite index follows the leftmost-prefix rule: it is sorted by its first column, then the second, so a query on the second column alone cannot use it efficiently. Every index is paid for on every write, which is why indexing everything is wrong.
+
+**If they push deeper** — explain B-tree lookup cost, then the leftmost-prefix rule for composite indexes with a concrete example, and finish with the write cost — that trade is what makes "index everything" wrong.
 
 #### Syntax
 ```sql
@@ -4429,13 +4553,35 @@ WHERE customer_id = 1 AND status = 'OPEN'     -- yes, both columns
 WHERE status = 'OPEN'                         -- not efficiently: status is not leftmost
 ```
 
+Predict which queries can use this index well — a question below asks for it:
+
+```sql
+CREATE INDEX idx_orders_cust_created ON orders (customer_id, created_at);
+
+-- 1. WHERE customer_id = 7 ORDER BY created_at DESC LIMIT 10
+-- 2. WHERE created_at > now() - interval '1 day'
+-- 3. WHERE customer_id = 7 AND status = 'OPEN'
+```
+
 #### Common interview questions
 - "How does an index speed up a query?" (It is a sorted structure allowing O(log n) lookup instead of an O(n) scan, and it supports range scans and ordering.)
 - "Why does column order matter in a composite index?" (Leftmost-prefix: the index is sorted by the first column, then the second, so a predicate on a later column alone cannot use it efficiently — some engines can skip-scan when the first column has few distinct values.)
 - "What does an index cost?" (Storage, plus maintenance on every insert, update and delete touching the indexed columns.)
 - "What is a covering index?" (One containing every column the query needs, allowing an index-only scan with no table access.)
+- "Which of the example's three queries can use the index well?" (1 is ideal: it seeks to customer 7 and reads that customer's rows already ordered by `created_at`, stopping after ten — no sort at all. 2 cannot use it efficiently, because `created_at` is not the leftmost column. 3 uses it for `customer_id`, then checks `status` on each of that customer's rows.)
+- "Why does an index make writes slower?" (Because every index is a separate sorted structure that must be updated on each insert, on each delete, and on updates that touch its columns — each one a B-tree change plus more write-ahead log. Five indexes mean roughly five extra writes per row.)
+- "Adding an index during a deployment froze checkout for ten minutes. What happened, and how should it have been done?" (A plain `CREATE INDEX` on PostgreSQL blocks writes to the table for the whole build, so every insert into it waited. Build it with `CREATE INDEX CONCURRENTLY`, in a migration of its own because it cannot run inside a transaction — slower, but writes continue.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does an index speed up a query?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why does the column order in a composite index matter?" (It is sorted by the first column, then by the second within each first value. A predicate on the first column — or on both — can seek; a predicate on the second alone has no sorted run to seek into.)
+- "Why might the optimiser ignore an index that exists?" (The predicate matches too much of the table, so a scan is cheaper; the statistics are stale; or the predicate is not sargable — a function or a type conversion wraps the column.)
+- "What is an index-only scan?" (When the index contains every column the query needs — a covering index — the engine answers from the index without visiting the table.)
+- "How do you decide which indexes to add?" (From real queries and their plans: index the predicates and sort orders of the frequent, slow queries, with composites shaped like them — and drop indexes nothing uses.)
+
+Other follow-ups:
+
 - "What is selectivity?" (The fraction of rows a predicate matches; a highly selective predicate benefits most, and a low-selectivity one may be ignored in favour of a scan.)
 - "What is a partial index?" (An index over a subset of rows defined by a `WHERE` clause — small and effective for queries that always include that condition.)
 - "Why would the optimiser ignore an index?" (Low selectivity, stale statistics, a type mismatch, or a function wrapping the column.)
@@ -4480,7 +4626,9 @@ The execution strategy chosen by the optimiser, revealed by `EXPLAIN` and measur
 Because SQL is declarative: the text says what you want, not how, so when a query is slow the plan is the only way to see what the engine actually decided to do.
 
 #### Interview explanation
-Describe estimate-versus-actual as the key signal, name the red flags — sequential scans on large selective queries, row estimates off by orders of magnitude — and stress using production-sized data.
+**In 30 seconds** — Because SQL says what you want, not how, a query plan is the only way to see what the engine decided to do. `EXPLAIN` shows the chosen plan and its estimates; `EXPLAIN ANALYZE` runs the query and adds the actual rows and timings. The key signal is the gap between estimated and actual rows — a large gap means the planner was misinformed — and plans must be read against production-sized data.
+
+**If they push deeper** — describe estimate-versus-actual as the key signal, name the red flags — sequential scans on large selective queries, row estimates off by orders of magnitude — and stress using production-sized data.
 
 #### Syntax
 ```sql
@@ -4499,13 +4647,34 @@ Seq Scan on orders  (cost=0.00..21000.00 rows=1 width=64)
 → a selective predicate doing a full scan: an index on reference is missing
 ```
 
+Read this plan — a question below asks what it tells you:
+
+```text
+Nested Loop  (cost=0.85..16.90 rows=1) (actual time=0.03..4210.50 rows=480000 loops=1)
+  ->  Index Scan using idx_orders_status on orders  (rows=1) (actual rows=480000 loops=1)
+        Index Cond: (status = 'PENDING')
+  ->  Index Scan using customers_pkey on customers  (rows=1) (actual rows=1 loops=480000)
+```
+
 #### Common interview questions
 - "How do you diagnose a slow query?" (Run `EXPLAIN ANALYZE` on representative data, compare estimated and actual rows, and look for scans where an index should apply.)
 - "What does a sequential scan indicate?" (Either no usable index, a predicate the optimiser cannot use, or a query selective enough that scanning is genuinely cheaper.)
 - "Why do estimates matter?" (Plans are chosen from estimates; a large gap means stale or insufficient statistics and usually a bad plan.)
 - "Why did a query get slower without a code change?" (Data growth changed the optimal plan, or statistics drifted after bulk changes.)
+- "What does the example's plan tell you?" (The planner expected one pending order and found 480,000, so it chose a nested loop that performs 480,000 index lookups into `customers`. The estimate is wrong — probably stale statistics after a bulk status change — so run `ANALYZE orders`; with accurate numbers the planner would likely choose a hash join.)
+- "Why can a query get slower without any code change?" (Because the plan is chosen from data statistics, not from the SQL text alone. As a table grows or its distribution shifts, the cheapest plan changes — or the planner keeps choosing from stale statistics after a bulk load. The same SQL becomes a different execution.)
+- "You run `EXPLAIN ANALYZE` on a `DELETE` to see why it is slow, and the rows are gone. What should you have done?" (Wrapped it in a transaction and rolled back, because `EXPLAIN ANALYZE` really executes the statement, writes included: `BEGIN; EXPLAIN ANALYZE DELETE ...; ROLLBACK;` measures it without keeping the effect.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you diagnose a slow query?" — they drill down from your answer. Answer each step before opening it:
+
+- "What do you look for first in the plan?" (Where the time goes, and whether the estimated rows match the actual rows at that step. A big mismatch means the planner chose from wrong numbers, and every decision above it may be wrong too.)
+- "What usually causes a bad estimate?" (Stale statistics after bulk changes — fixed with `ANALYZE` — or correlated columns that the planner assumes are independent, which extended statistics can describe.)
+- "What does `BUFFERS` add?" (How many pages came from cache and how many from disk — separating a query that does too much work from one that waits on slow storage.)
+- "Can you force the plan you want?" (Core PostgreSQL deliberately has no hints. You change the inputs instead — an index, fresh statistics, a rewritten query — or use an extension such as `pg_hint_plan`.)
+
+Other follow-ups:
+
 - "How are statistics maintained?" (Autovacuum and `ANALYZE` sample the data; bulk loads should be followed by an explicit analyse.)
 - "What does `BUFFERS` add?" (Pages read from cache versus disk — the difference between a slow query and a slow disk.)
 - "Can you force a plan?" (Core PostgreSQL deliberately offers no hints — the `pg_hint_plan` extension exists — so you influence plans through indexes, statistics and query shape.)
@@ -4550,7 +4719,9 @@ Choosing tables, columns, types and relationships, applying normalisation to sto
 Because a fact stored twice eventually contradicts itself, and because the schema constrains everything built on it and outlives most of the application code. Storing each fact once makes inconsistency structurally impossible.
 
 #### Interview explanation
-Define 1NF through 3NF briefly, then be pragmatic: aim for 3NF, denormalise with evidence, and treat historical values (price at purchase) as different facts rather than duplication.
+**In 30 seconds** — Schema design chooses the tables, columns, types and relationships. Normalise to third normal form so each fact is stored once — a fact stored twice eventually contradicts itself — and denormalise only where a measured read pattern justifies it. Types matter: money in integer minor units or `NUMERIC`, never floating point; instants as `TIMESTAMPTZ`. And a value that was true at the time, such as the price at purchase, is a separate fact, not duplication.
+
+**If they push deeper** — define 1NF through 3NF briefly, then be pragmatic: aim for 3NF, denormalise with evidence, and treat historical values (price at purchase) as different facts rather than duplication.
 
 #### Syntax
 ```sql
@@ -4571,13 +4742,37 @@ amount_cents BIGINT NOT NULL         -- not FLOAT: money is exact
 status TEXT NOT NULL CHECK (status IN ('NEW','PAID','SHIPPED'))   -- not an ordinal int
 ```
 
+Spot the trap in each column — a question below asks for it:
+
+```sql
+CREATE TABLE orders (
+  id            BIGSERIAL PRIMARY KEY,
+  customer_name TEXT,                -- copied from customers
+  total         DOUBLE PRECISION,
+  status        INT,                 -- ordinal of a Java enum
+  created_at    TIMESTAMP            -- no time zone
+);
+```
+
 #### Common interview questions
 - "What is normalisation and why?" (Organising data so each fact is stored once, removing update anomalies and inconsistency.)
 - "What is 3NF?" (Non-key columns depend on the key, the whole key, and nothing but the key.)
 - "When would you denormalise?" (When a measured read pattern justifies it and you accept the consistency cost — typically precomputed aggregates or cached display values.)
 - "How do you store money and timestamps?" (Integer minor units or `NUMERIC` for money; `TIMESTAMPTZ` in UTC for instants.)
+- "What will go wrong with the example's `orders` table?" (Every column after the id has a trap. `customer_name` goes stale when the customer is renamed. `total` is binary floating point, so amounts such as 0.1 + 0.2 do not add up exactly. `status` stores an enum ordinal, so reordering the Java enum silently changes every row's meaning. And `created_at` without a time zone is ambiguous once servers or users span zones.)
+- "Why is the price on an order line not a violation of normalisation?" (Because it is a different fact: the price the customer paid at that moment, which must never change — not the product's current price. Normalisation removes duplicated facts, and a historical value is not a duplicate.)
+- "A price change altered the totals of last year's invoices. What is wrong with the schema?" (Invoices compute their totals from the current `products.price` instead of storing the price at purchase. Record the unit price on each order line when the order is placed, so history no longer depends on today's catalogue.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is normalisation and why?" — they drill down from your answer. Answer each step before opening it:
+
+- "What anomalies does it prevent?" (Update anomalies — a fact changed in one copy but not another; insert anomalies — being unable to record one fact without inventing another; and delete anomalies — losing one fact by deleting another.)
+- "What does third normal form require?" (Every non-key column depends on the key, the whole key and nothing but the key — so no column depends on another non-key column, as a city would on a postcode stored beside it.)
+- "When do you denormalise?" (When a measured read pattern justifies it — a precomputed total, a cached display name — accepting that code or triggers must keep the copy consistent.)
+- "How do you store an enum?" (As constrained text, or as a lookup table with a foreign key — never the Java ordinal, which changes meaning when someone reorders the enum.)
+
+Other follow-ups:
+
 - "Why store price on the order line?" (It records the price at purchase — a historical fact — not a copy of the product's current price.)
 - "How do you model soft deletes?" (A `deleted_at` column plus partial indexes, accepting that every query must filter it — or an archive table, which keeps the main table clean.)
 - "How do you handle enums?" (Constrained text or a lookup table; ordinals break when someone reorders the Java enum.)
@@ -4619,7 +4814,9 @@ Database-enforced rules — `NOT NULL`, `UNIQUE`, `PRIMARY KEY`, `FOREIGN KEY`, 
 Because the application is not the only writer, and invariants enforced only in code are eventually violated by something else — a script, a migration, another service, or two concurrent requests racing past the same check.
 
 #### Interview explanation
-Give the concurrency argument: a check-then-insert in application code races, and only a unique constraint actually prevents the duplicate. Then mention translating the resulting exception into a 409.
+**In 30 seconds** — Constraints are rules the database enforces on every write — `NOT NULL`, `UNIQUE`, `PRIMARY KEY`, `FOREIGN KEY`, `CHECK` — whichever program the write comes from. The argument interviewers want is concurrency: an application's check-then-insert races, because two requests can both check and both insert, while a unique constraint makes the check and the write one atomic step. The violation is then translated into a 409, not left as a 500.
+
+**If they push deeper** — give the concurrency argument: a check-then-insert in application code races, and only a unique constraint actually prevents the duplicate. Then mention translating the resulting exception into a 409.
 
 #### Syntax
 ```sql
@@ -4638,13 +4835,37 @@ ProblemDetail duplicate(DataIntegrityViolationException ex) {
 }
 ```
 
+Predict what happens when two requests arrive together — a question below asks for it:
+
+```java
+@Transactional
+public User register(String email) {
+    if (users.existsByEmail(email)) throw new EmailTakenException(email);
+    return users.save(new User(email));
+}
+// Two requests for the same new email arrive within a millisecond.
+// The users table has no unique constraint on email.
+```
+
 #### Common interview questions
 - "Why enforce constraints in the database rather than the application?" (Migrations, scripts, other services and manual fixes all write too; only the database sees every write.)
 - "Why can't application-level uniqueness checks work?" (Two concurrent requests both check, both find nothing, both insert — only a unique constraint prevents it.)
 - "What do referential actions do?" (`CASCADE` deletes children, `RESTRICT` blocks the delete, `SET NULL` orphans them.)
 - "How should a constraint violation surface in an API?" (Translated to a 409 with a clear message, not a 500.)
+- "What happens in the example when the two requests arrive together?" (Both run `existsByEmail` before either has inserted, both see nothing, and both insert — two accounts with one email. `@Transactional` does not prevent it: at the default isolation level, neither transaction sees the other's uncommitted row. Only a unique constraint on `email` stops the second insert; then translate its violation into a 409.)
+- "Why must the database enforce rules the application already checks?" (Because the application is not the only writer — migrations, scripts, other services and manual fixes all write too — and because concurrent requests race past application checks. Only the database sees every write, and only it can make a check and its write atomic.)
+- "Deleting one old customer removed 40,000 rows across six tables. Why?" (`ON DELETE CASCADE` chained through the relationships — customer to orders to lines to shipments — so each delete triggered the next. Use `RESTRICT` where children should block the delete, and cascade only into rows that truly cannot exist without their parent.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Why can't application-level uniqueness checks work?" — they drill down from your answer. Answer each step before opening it:
+
+- "Does wrapping the check in a transaction fix it?" (Not at the default isolation level: each transaction reads before the other commits, so both see no row. Serializable isolation would detect the conflict, at a cost — the unique constraint is simpler and always on.)
+- "So what happens to the second insert with a unique constraint?" (It fails with a constraint violation — in Spring, a `DataIntegrityViolationException` wrapping the driver's error — and its transaction rolls back.)
+- "How should that surface in the API?" (As a 409 Conflict with a clear message, translated in the exception handler — not a 500, since nothing is broken on the server.)
+- "Is the application check useless, then?" (No — it gives a friendly error in the common, non-concurrent case without relying on an exception. Keep it, but treat the constraint as the guarantee.)
+
+Other follow-ups:
+
 - "What is a deferrable constraint?" (One checked at commit rather than per statement, which allows temporarily inconsistent intermediate states within a transaction.)
 - "Do constraints help the optimiser?" (Yes — a unique constraint tells the planner at most one row matches, which can change the plan.)
 - "What is the cost of adding one to a large table?" (Validation scans the whole table and may lock it; PostgreSQL supports adding `NOT VALID` then validating separately.)
@@ -4686,7 +4907,9 @@ Versioned, ordered schema changes applied and recorded by a tool such as Flyway 
 Because the schema must change alongside the code, identically in every environment, and changes applied by hand drift. Versioned, recorded scripts make every environment converge on the same schema through a reviewed, repeatable process.
 
 #### Interview explanation
-Describe the version table and locking, then explain expand-and-contract for zero-downtime changes, and finish on locking behaviour — an `ALTER TABLE` on a large table during a deploy is an outage in waiting.
+**In 30 seconds** — Schema changes are versioned scripts — `V1__create_orders.sql`, `V2__add_reference.sql` — applied in order by Flyway or Liquibase, which records each one in a history table and takes a lock so only one instance migrates. Every environment converges on the same schema through reviewed changes, with Hibernate set to `ddl-auto=validate`. For zero downtime, changes follow expand and contract, because old and new code run side by side during a deploy.
+
+**If they push deeper** — describe the version table and locking, then explain expand-and-contract for zero-downtime changes, and finish on locking behaviour — an `ALTER TABLE` on a large table during a deploy is an outage in waiting.
 
 #### Syntax
 ```text
@@ -4712,13 +4935,32 @@ ALTER TABLE orders ADD COLUMN reference TEXT;
 CREATE UNIQUE INDEX CONCURRENTLY idx_orders_reference ON orders (reference);
 ```
 
+Predict what happens during a rolling deployment — a question below asks for it:
+
+```sql
+-- V7__rename_customer_name.sql, shipped with the new code in a rolling update
+ALTER TABLE customers RENAME COLUMN name TO full_name;
+```
+
 #### Common interview questions
 - "Why not use `ddl-auto=update`?" (It cannot express data changes or safe renames, is not reviewable, behaves differently across versions, and will eventually damage production data. Use `validate` with migrations.)
 - "How do you rename a column with zero downtime?" (Expand and contract: add the new column and write to both, backfill, switch reads, stop writing the old column, and drop it in a release after that — each step must work alongside the release before it.)
 - "How do migration tools prevent concurrent application?" (A lock on the schema-history table, so only one instance applies a given migration.)
 - "What is the risk of an `ALTER TABLE` in a deployment?" (Most forms take an `ACCESS EXCLUSIVE` lock that blocks reads and writes for the duration — and while it waits behind a long transaction, every other query queues behind it. On a large or busy table, that is an outage.)
+- "What happens during the rolling deployment of the example's migration?" (The first new instance runs the migration, and from that moment every old instance still serving traffic queries a `name` column that no longer exists — errors until the rollout finishes. Expand and contract instead: add `full_name`, write both columns, backfill, switch reads, then drop `name` in a later release.)
+- "Why roll forward with a new migration instead of running a down-script?" (Because down-scripts are rarely tested against real data, and many changes cannot be undone without losing information — a dropped column's values are gone. A new, reviewed migration that repairs the state is the safer path.)
+- "A teammate fixes a typo in an already-applied migration file, and every environment now fails to start. Why?" (Flyway stores a checksum of each applied migration and validates it at startup, and the edited file no longer matches the history. Revert the edit and put the fix in a new migration — or, if the change is truly cosmetic, run `flyway repair` to realign the checksums.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you rename a column with zero downtime?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why can't you simply rename it?" (Because during a rolling deploy, old and new code run at the same time against one database: whichever name the schema has, one of them breaks.)
+- "What are the steps?" (Add the new column; deploy code that writes both; backfill existing rows; switch reads to the new column; stop writing the old one; drop it in a later release — each step compatible with the release before it.)
+- "How do you backfill a large table safely?" (In batches, outside the deployment's migration — a background job updating a few thousand rows per transaction — so no long lock or giant transaction holds the table.)
+- "What else can make a migration take the site down?" (Locks: most `ALTER TABLE` forms take an exclusive lock, and while one waits behind a long transaction every other query queues behind it. Set a `lock_timeout`, and build indexes `CONCURRENTLY`.)
+
+Other follow-ups:
+
 - "How do you handle rollbacks?" (In practice, roll forward: write a new migration. Down-scripts are rarely tested and often unsafe against real data.)
 - "Where do backfills belong?" (In batched background jobs for large tables, not inline in a migration that blocks the deployment.)
 - "Flyway or Liquibase?" (Flyway for plain SQL and simplicity; Liquibase for database-agnostic changelogs and richer rollback support.)
