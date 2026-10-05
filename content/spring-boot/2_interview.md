@@ -48,7 +48,9 @@ Spring is a modular Java framework whose core is a dependency-injection containe
 Because building and wiring an application's objects — and wrapping them in transactions or security — had to be hand-written plumbing tied to every class. A container that owns construction removes that plumbing, and since it builds every object it can also wrap them: one mechanism, both problems solved.
 
 #### Interview explanation
-Start from the problem — every application must assemble a graph of objects and apply cross-cutting concerns to them — and present Spring as the container that does both. Say "container first, modules second": that framing explains why the same programming model appears across web, data and messaging. Then mention Spring Boot as the opinionated layer that configures those modules, and note that Spring 6 / Boot 3 requires Java 17+ and the `jakarta.*` namespace.
+**In 30 seconds** — Spring is a framework built around one idea: a container creates your objects and wires them together. Because it builds every object, it can also wrap them — adding transactions, security or caching without changing your code. Web, data, messaging and testing support are modules on top of that container, and Spring Boot configures them for you.
+
+**If they push deeper** — start from the problem — every application must assemble a graph of objects and apply cross-cutting concerns to them — and present Spring as the container that does both. Say "container first, modules second": that framing explains why the same programming model appears across web, data and messaging. Then mention Spring Boot as the opinionated layer that configures those modules, and note that Spring 6 / Boot 3 requires Java 17+ and the `jakarta.*` namespace.
 
 #### Syntax
 ```java
@@ -70,13 +72,39 @@ public class OrderService {                 // a plain class…
 // …that the container instantiates, wires and can wrap with transactions or caching
 ```
 
+Predict which call below runs in a transaction — a question below asks for it:
+
+```java
+@Service
+public class OrderService {
+    @Transactional
+    public void place(Order order) { /* ... */ }
+}
+
+new OrderService().place(order);     // (1) an object you built yourself
+orderService.place(order);           // (2) the bean the container injected
+```
+
 #### Common interview questions
 - "What is the Spring Framework?" (A modular framework built around a dependency-injection container, with modules for web, data, security and messaging layered on it.)
 - "What is the difference between Spring and Spring Boot?" (Spring is the framework; Spring Boot adds auto-configuration, starter dependencies, an embedded server and sensible defaults so an application runs with almost no configuration.)
 - "Why did Spring succeed over EJB?" (Plain Java objects instead of components implementing framework interfaces, no application server required, and testability without a container.)
 - "What changed in Spring 6 / Boot 3?" (Java 17 baseline, `javax.*` to `jakarta.*` namespace migration, and ahead-of-time processing for native images.)
+- "In the example, which call to `place` runs in a transaction?" (Only (2). `@Transactional` is not code inside the method — it is a promise the container keeps by injecting a proxy that begins a transaction before delegating to your object. An object built with `new` is just the plain class, so the annotation does nothing.)
+- "Why does a dependency-injection container make features like `@Transactional` possible?" (Because the container is the one calling `new`, it decides what callers receive — it can hand out a proxy that runs code around your method. Code that builds its own objects has no such point for a framework to step in.)
+- "After an upgrade to Spring Boot 3, an older library fails at startup with a `NoClassDefFoundError` for `javax/servlet/Filter`. What happened?" (Boot 3 moved to Jakarta EE, whose packages are `jakarta.*`; the library still imports `javax.*`, which no longer exists on the classpath. Upgrade to a Jakarta-compatible version of the library — renaming imports in your own code does not fix compiled third-party classes.)
+- "Your batch job has no HTTP endpoints. Should it use Spring?" (It can — the container has nothing to do with HTTP. Without a web starter, Boot starts no server and the application runs and exits like any program, while still getting injection, configuration and transactions.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the Spring Framework?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does the container actually do for you?" (It creates your objects, works out the order from their dependencies, injects each one into the objects that need it, and manages their lifecycle — the wiring you would otherwise write by hand in `main()`.)
+- "Why does that also make transactions and security possible?" (Because the container calls `new`, it controls what callers receive: it can hand out a proxy that runs code before and after your method — begin and commit a transaction, check a permission — without your class knowing.)
+- "What is the catch?" (The behaviour is invisible in the source and applies only to calls that go through the proxy: a method calling another method on `this` skips it, so `@Transactional` on the inner method does nothing.)
+- "Then where does Spring Boot fit in?" (Boot does not replace the container — it configures it. Starters pull in compatible dependencies, auto-configuration registers beans based on the classpath and properties, and an embedded server lets the application run as a plain `java -jar`.)
+
+Other follow-ups:
+
 - "Is Spring only for web applications?" (No — the core container has nothing to do with HTTP; batch jobs, CLI tools and message consumers all use it.)
 - "What is a POJO and why does it matter here?" (A plain old Java object with no framework inheritance requirements; it is what makes Spring components testable with `new`.)
 - "What are the costs of using Spring?" (Startup time, a large API surface, and behaviour applied through proxies that is not visible in the source.)
@@ -118,7 +146,9 @@ A design principle in which the framework, not your class, controls construction
 Because a class that builds its own collaborators is welded to one implementation and its configuration: changing the database or substituting a test double means editing the class. Moving construction outside the class breaks that weld, so the same class works with whatever it is handed.
 
 #### Interview explanation
-Open with the problem — `new JdbcOrderRepository(...)` inside a service hard-codes both the implementation and its configuration. Then define IoC as the general principle and DI as the technique. Then make the practical point: with DI you can unit-test a service by calling its constructor with fakes, no container involved — which is the reason the principle pays off.
+**In 30 seconds** — Inversion of control means your class stops building its own collaborators: it declares what it needs, and something outside — usually the Spring container — constructs and supplies them. Dependency injection is its most common form. The payoff is that the class is no longer welded to one implementation, so swapping a database or using a test double needs no change to the class.
+
+**If they push deeper** — open with the problem — `new JdbcOrderRepository(...)` inside a service hard-codes both the implementation and its configuration. Then define IoC as the general principle and DI as the technique. Then make the practical point: with DI you can unit-test a service by calling its constructor with fakes, no container involved — which is the reason the principle pays off.
 
 #### Syntax
 ```java
@@ -136,13 +166,38 @@ var service = new OrderService(new InMemoryOrderRepository());
 assertThat(service.place(order)).isNotNull();
 ```
 
+Spot the problem in this class — a question below asks for it:
+
+```java
+public class ReportService {
+    private final Clock clock = Clock.systemUTC();
+    private final ReportRepository repository = new JdbcReportRepository(dataSource());
+
+    public Report daily() {
+        return repository.forDay(LocalDate.now(clock));
+    }
+}
+```
+
 #### Common interview questions
 - "What is inversion of control?" (The framework controls object creation and flow instead of your code; your class declares what it needs rather than building it.)
 - "How is dependency injection related to IoC?" (DI is one implementation of IoC — supplying collaborators from outside.)
 - "What problem does it solve?" (Tight coupling to concrete implementations, which makes code hard to change and hard to test.)
 - "What are the types of dependency injection?" (Constructor, setter and field injection.)
+- "Why is the example's `ReportService` hard to unit-test, and what single change fixes it?" (It builds its own collaborators, so a test cannot replace the JDBC repository with a fake or freeze the clock: every test needs a database and depends on today's date. Take both through the constructor — `ReportService(ReportRepository repository, Clock clock)` — and a test can pass an in-memory repository and `Clock.fixed(...)`.)
+- "Why does inversion of control make code easier to change, not just easier to test?" (Because the choice of implementation moves to one place — the wiring — instead of being repeated inside every class that uses it. Switching from JDBC to JPA, or adding a caching decorator, changes the configuration, not the callers.)
+- "A teammate replaces constructor injection with `context.getBean(PaymentGateway.class)` inside a method, arguing that it is still Spring. What do you say?" (It still uses the container but undoes the inversion: the class fetches its own dependency again — service location. The dependency disappears from the constructor, tests must start a container or mock the context, and a missing bean fails on that call instead of at startup.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is inversion of control?" — they drill down from your answer. Answer each step before opening it:
+
+- "Inverted from what, exactly?" (From the class to the outside. Normally a class decides what it uses by calling `new`; under IoC it only declares what it needs, and whoever constructs it — the container, or a test — makes that decision.)
+- "Is dependency injection the only form of it?" (No — DI inverts *construction*. Callbacks, template methods and event listeners invert *flow*: the framework calls your code at the right moment instead of your code calling the framework.)
+- "Can you do dependency injection without Spring?" (Yes — passing collaborators into constructors and wiring them by hand in `main` is DI. The container automates the wiring and adds lifecycle management and proxies; it is not what makes it DI.)
+- "So why use a container at all?" (Hand wiring grows with the graph: every constructor change means reordering `main`. The container works out the order from the dependencies, reports a missing one at startup, and is the single point where features like transactions can be added to every object.)
+
+Other follow-ups:
+
 - "Can you use dependency injection without a framework?" (Yes — manual wiring in `main` is dependency injection; the container only automates it.)
 - "Does IoC always mean DI?" (No — template methods, event listeners and callbacks are also inversions of control.)
 - "What is the downside?" (Indirection: tracing which implementation is actually injected requires knowing the container's rules.)
@@ -184,7 +239,9 @@ Spring's container: it reads configuration metadata, registers bean definitions,
 Because once classes stop building their own dependencies, something must know the whole graph — what exists, what needs what, and in which order to build it. Without a container, that is a hand-written `main()` full of `new` calls, reordered by hand every time a constructor changes. Holding that knowledge in one place also gives framework features a single point through which every object passes.
 
 #### Interview explanation
-Open with what it replaces — the wiring code you would otherwise write in `main()`, every `new` in the right order. Then explain the problem it solves — objects must be built in dependency order, and wiring errors should appear before traffic does. Then describe the two phases that follow from it — definitions registered first, because ordering needs the whole graph, then instances created — and name the two post-processor types, one per phase, because `BeanPostProcessor` is where proxies are created. Mention that singletons are eager by default so failures surface at startup.
+**In 30 seconds** — The ApplicationContext is Spring's container: it holds a recipe for every bean, builds the beans in dependency order, wires them together and manages their lifecycle. It works in two phases — first it registers bean definitions, so it can see and order the whole graph, then it creates the singletons, eagerly, so a wiring mistake fails the startup rather than a request.
+
+**If they push deeper** — open with what it replaces — the wiring code you would otherwise write in `main()`, every `new` in the right order. Then explain the problem it solves — objects must be built in dependency order, and wiring errors should appear before traffic does. Then describe the two phases that follow from it — definitions registered first, because ordering needs the whole graph, then instances created — and name the two post-processor types, one per phase, because `BeanPostProcessor` is where proxies are created. Mention that singletons are eager by default so failures surface at startup.
 
 #### Syntax
 ```java
@@ -203,13 +260,39 @@ class Warmup implements ApplicationListener<ApplicationReadyEvent> {
 }
 ```
 
+Predict when each mistake below is discovered — a question below asks for it:
+
+```java
+@Component
+class PriceFeed {
+    PriceFeed(@Value("${feed.url}") String url) { }        // feed.url is not configured
+}
+
+@Lazy @Component
+class ReportGenerator {
+    ReportGenerator(ArchiveClient client) { }             // no ArchiveClient bean exists
+}
+```
+
 #### Common interview questions
 - "What is the ApplicationContext?" (Spring's container — it builds, wires and manages beans, and provides events, resource loading and internationalisation.)
 - "What is the difference between BeanFactory and ApplicationContext?" (`BeanFactory` is the basic container with lazy instantiation; `ApplicationContext` extends it with eager singletons, events, AOP integration and more.)
 - "When are singleton beans created?" (Eagerly, at startup, unless marked `@Lazy` — so configuration errors fail fast.)
 - "What is a BeanPostProcessor?" (A hook invoked around each bean's initialisation; it can replace the bean with a proxy, which is how `@Transactional` and `@Cacheable` are applied.)
+- "In the example, when does each mistake surface?" (`PriceFeed` fails the startup: singletons are created eagerly, and the unresolvable placeholder `${feed.url}` throws while the context refreshes. `ReportGenerator` is `@Lazy`, so it is not built until something first asks for it — the missing `ArchiveClient` surfaces then, possibly days later in production.)
+- "Why does the context register every bean definition before creating any bean?" (Because it cannot order what it has not finished reading: to build each bean after its dependencies, it needs the whole graph first. Having definitions as data also lets `BeanFactoryPostProcessor`s edit them — resolving placeholders, for instance — before any object exists.)
+- "Startup fails with a 60-line stack trace whose first line names `OrderController`. Where do you look?" (At the bottom. Each bean wraps the failure of the dependency it was creating, so the first lines name the outermost bean, and the real cause — a missing property, an unreachable database — is in the last `Caused by`. Spring Boot's failure-analysis block, when present, states it directly.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the ApplicationContext?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does it know what to build?" (It reads sources — scanned `@Component` classes, `@Bean` methods, auto-configuration — and registers a bean definition for each: a recipe saying which class, which dependencies, which scope. No object exists yet.)
+- "In what order does it create the beans?" (Dependencies first: before creating a bean it resolves and creates whatever that bean needs, so a repository exists before the service that injects it. Singletons are created eagerly at the end of startup unless marked `@Lazy`.)
+- "Where can you hook into that process?" (At both phases: a `BeanFactoryPostProcessor` edits definitions before any bean exists, and a `BeanPostProcessor` sees each bean as it is created and may replace it — usually with a proxy, which is how `@Transactional` is applied.)
+- "How do you know when it has finished?" (It publishes `ContextRefreshedEvent` once every singleton is built. Spring Boot then calls the `ApplicationRunner` and `CommandLineRunner` beans and publishes `ApplicationReadyEvent` — the signal that the application is up.)
+
+Other follow-ups:
+
 - "What is a BeanFactoryPostProcessor?" (It modifies bean *definitions* before any instance exists — property placeholder resolution uses it.)
 - "What does the context publish?" (Lifecycle events such as `ContextRefreshedEvent` and `ApplicationReadyEvent`, plus your own events via `ApplicationEventPublisher`.)
 - "What is the difference between `ContextRefreshedEvent` and `ApplicationReadyEvent`?" (The first means the container has finished building; Spring Boot publishes the second later, after `ApplicationRunner` and `CommandLineRunner` beans have run — the right signal for "the application is up".)
@@ -244,7 +327,7 @@ Startup cost grows with the number of bean definitions and the breadth of compon
 - It is the wiring code you would write in `main()`, automated — nothing it builds is beyond a hand-written `new`.
 - Definitions first, instances second — recipes can be ordered and edited before anything exists.
 - Singletons are eager by default — so wiring errors fail the startup, not a request.
-- `BeanPostProcessor` creates proxies — it is the hook that sees every finished bean.
+- `BeanPostProcessor`s create the proxies — they are the hook each bean passes through as it is built.
 
 ---
 
@@ -361,7 +444,9 @@ Automatic discovery and registration of annotated classes as beans, starting fro
 Because listing every class in configuration does not scale, while the classes already exist in your packages. Letting the framework search for marked classes turns registration into one annotation — and bounding the search to your own packages keeps it fast and avoids registering other libraries' code.
 
 #### Interview explanation
-State that `@SpringBootApplication` includes `@ComponentScan` rooted at its own package, which is why package layout matters. Then distinguish the stereotypes: all register beans, `@Repository` adds exception translation, `@Controller` is picked up by handler mapping.
+**In 30 seconds** — Component scanning lets Spring find your beans itself: starting from the package of the class annotated `@SpringBootApplication`, it registers every class marked `@Component` or a stereotype built on it — `@Service`, `@Repository`, `@Controller`. All of them register a bean; `@Repository` also translates persistence exceptions, and `@Controller` marks a class whose methods handle web requests.
+
+**If they push deeper** — state that `@SpringBootApplication` includes `@ComponentScan` rooted at its own package, which is why package layout matters. Then distinguish the stereotypes: all register beans, `@Repository` adds exception translation, `@Controller` is picked up by handler mapping.
 
 #### Syntax
 ```java
@@ -374,18 +459,51 @@ public class ShopApplication { }
 #### Example
 ```java
 @Repository
-public class JdbcOrderRepository implements OrderRepository {
-    // SQLExceptions are translated into Spring's DataAccessException hierarchy
+public class JpaOrderRepository implements OrderRepository {
+    // exceptions thrown by JPA or Hibernate here reach callers as Spring's
+    // DataAccessException types (JdbcTemplate translates SQLExceptions itself)
 }
+```
+
+Predict which of these classes become beans — a question below asks for it:
+
+```java
+// com/shop/ShopApplication.java
+package com.shop;
+@SpringBootApplication public class ShopApplication { }
+
+// com/shop/orders/OrderService.java
+package com.shop.orders;
+@Service public class OrderService { }
+
+// com/shop/orders/OrderValidator.java
+package com.shop.orders;
+public class OrderValidator { }
+
+// com/payments/PaymentService.java
+package com.payments;
+@Service public class PaymentService { }
 ```
 
 #### Common interview questions
 - "What does `@SpringBootApplication` do?" (It combines `@Configuration`, `@EnableAutoConfiguration` and `@ComponentScan`.)
 - "What is the difference between `@Component`, `@Service` and `@Repository`?" (All register a bean; `@Service` and `@Controller` express intent, and `@Repository` additionally enables persistence exception translation.)
-- "Why does my bean say 'no qualifying bean' when the class clearly exists?" (It is outside the scanned package tree — scanning starts at the main application class's package.)
+- "Why does my bean say 'no qualifying bean' when the class clearly exists?" (Most often it is outside the scanned package tree — scanning starts at the main application class's package — or it carries no stereotype annotation at all.)
 - "Can you narrow a component scan?" (Yes — `basePackages`, plus include and exclude filters by annotation, type or regex.)
+- "Which classes in the example become beans?" (Only `OrderService`. `OrderValidator` is inside the scanned tree but carries no stereotype, so scanning skips it; `PaymentService` is annotated but lives in `com.payments`, outside `com.shop`, where scanning starts. Annotate the first; move the second under `com.shop` or add its package to the scan.)
+- "Why does `@Repository` add behaviour when `@Service` adds none?" (Because data access is where provider-specific exceptions appear. A post-processor wraps `@Repository` beans in a proxy that translates the persistence provider's runtime exceptions — JPA's or Hibernate's — into Spring's `DataAccessException` hierarchy, such as `DataIntegrityViolationException`, so callers do not depend on one provider. `@Service` marks a role that needs no such behaviour.)
+- "After a refactor moves `ShopApplication` into `com.shop.app`, half the endpoints return 404. Why?" (Scanning starts at the main class's package, so it now covers only `com.shop.app` and below; controllers in `com.shop.orders` and its siblings are no longer registered — no bean, no mapping, 404. Entity and repository scanning start from the same package, so JPA repositories can disappear too. Move the main class back to the root package.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What does `@SpringBootApplication` do?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where does the scan start?" (At the package of the class carrying `@SpringBootApplication`, covering every sub-package — which is why the main class belongs in the application's root package.)
+- "What does it register?" (Every class annotated `@Component`, or with an annotation meta-annotated by it — `@Service`, `@Repository`, `@Controller`, `@Configuration`, or your own. Each becomes a bean definition named after the class, with a lowercase first letter.)
+- "So are `@Service` and `@Component` interchangeable?" (For registration, yes — `@Service` only states the role. `@Repository` and `@Controller` are not: one gets exception translation, the other is picked up by the web layer's handler mapping.)
+- "How would you register a library class that you cannot annotate?" (With a `@Bean` method in a `@Configuration` class, so that constructing it becomes code you own — or with `@Import`, if the class is itself a configuration or component class.)
+
+Other follow-ups:
+
 - "What is a meta-annotation?" (An annotation annotated with another, such as `@Service` being meta-annotated `@Component` — Spring treats it as one.)
 - "Is scanning expensive?" (It costs startup time proportional to the classes scanned; very broad base packages are measurably slower.)
 - "How do you register a class you cannot annotate?" (A `@Bean` method in a `@Configuration` class.)
@@ -412,7 +530,7 @@ Stereotypes as functionally distinct — three of the four differ only in meanin
 
 #### Important facts to remember
 - Scanning starts at the main class's package — anything outside that tree is invisible.
-- `@Repository` translates persistence exceptions — so callers never depend on one driver's `SQLException` codes.
+- `@Repository` translates persistence exceptions — callers handle Spring's `DataAccessException` types, not one provider's exceptions.
 - `@SpringBootApplication` bundles three annotations — configuration, auto-configuration and scanning.
 
 ---
@@ -426,7 +544,9 @@ The three ways Spring supplies collaborators — constructor, setter and field i
 Because *when* a dependency arrives decides whether an object can ever be seen half-built. Mandatory dependencies belong in the constructor, where they exist before the object does; genuinely optional ones can arrive later through setters.
 
 #### Interview explanation
-Argue for constructor injection on three grounds: immutability, a fully initialised object, and testability without reflection. Then mention that a single constructor needs no `@Autowired`, and that cycles fail fast — constructor cycles always, because neither object can be built first, and since Boot 2.6 field and setter cycles too.
+**In 30 seconds** — Spring can inject through the constructor, a setter or a field. Use the constructor by default: the object cannot exist without its dependencies, the fields can be `final`, and a test can build it with `new`. Setters suit genuinely optional dependencies; field injection hides dependencies and needs reflection to test.
+
+**If they push deeper** — argue for constructor injection on three grounds: immutability, a fully initialised object, and testability without reflection. Then mention that a single constructor needs no `@Autowired`, and that cycles fail fast — constructor cycles always, because neither object can be built first, and since Boot 2.6 field and setter cycles too.
 
 #### Syntax
 ```java
@@ -452,13 +572,39 @@ public class CheckoutService {
 }
 ```
 
+Predict what happens when Spring creates this bean — a question below asks for it:
+
+```java
+@Service
+public class InvoiceService {
+    @Autowired private TaxCalculator taxes;
+    private final BigDecimal defaultRate;
+
+    public InvoiceService() {
+        this.defaultRate = taxes.rateFor("GB");
+    }
+}
+```
+
 #### Common interview questions
 - "Which injection type should you use and why?" (Constructor: the object is always fully built, fields can be `final`, dependencies are explicit, and tests can construct it directly.)
 - "Is `@Autowired` required on a constructor?" (Not since Spring 4.3 when the class has exactly one constructor.)
 - "What is wrong with field injection?" (It hides dependencies, prevents `final` fields, and makes the class impossible to instantiate in a plain unit test without reflection.)
 - "What happens with a circular dependency?" (With constructor injection the context always fails to start — neither object can be built first. With field or setter injection plain Spring can resolve the cycle, but Spring Boot 2.6+ rejects every cycle by default.)
+- "What happens when Spring creates the example's `InvoiceService`?" (The constructor throws `NullPointerException` and the context fails to start. Field injection happens after construction, so `taxes` is still `null` inside the constructor. With constructor injection the dependency arrives as a parameter, before the body runs.)
+- "Why is a long constructor parameter list a design signal rather than a reason to switch to field injection?" (Because the list is the class's real dependency count — field injection would hide it, not reduce it. Seven collaborators usually means several responsibilities; splitting the class fixes the cause.)
+- "Startup fails with 'The dependencies of some of the beans in the application context form a cycle' after a teammate makes `OrderService` call `CustomerService`, which already calls `OrderService`. What do you do?" (Fix the design rather than the flag: extract the logic both need into a third bean that each depends on, or have one side publish an event the other listens to. A `@Lazy` injection point — or, for field and setter injection, re-enabling circular references — makes it start, but leaves two classes that cannot be understood or tested apart.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Which injection type should you use and why?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly goes wrong with field injection?" (Fields are set by reflection after the constructor runs, so they cannot be `final`, are `null` during construction, and a plain unit test cannot set them without reflection or a container. The class's dependencies are also invisible in its signature.)
+- "When is setter injection the right choice?" (For a genuinely optional dependency, or one that may change after construction. The object is valid without it, so it must still work if the setter is never called.)
+- "How do you take an optional dependency with constructor injection?" (Inject `ObjectProvider<T>` and call `getIfAvailable()`, or `Optional<T>` — the constructor still runs whether or not a matching bean exists.)
+- "And if the class has two constructors?" (Spring cannot choose between them, so mark the one to use with `@Autowired`. Without that it falls back to a no-argument constructor if there is one, and fails if there is not.)
+
+Other follow-ups:
+
 - "How do you fix a circular dependency properly?" (Extract the shared logic into a third bean, or invert one direction with an event — not by enabling the cycle workaround.)
 - "How do you inject an optional dependency?" (`ObjectProvider<T>`, `Optional<T>`, or `@Autowired(required = false)` on a setter.)
 - "Can you inject a collection of beans?" (Yes — `List<T>` or `Map<String, T>` receives every matching bean.)
@@ -501,7 +647,9 @@ public class CheckoutService {
 Because scanning only reaches classes you can annotate, and an annotation cannot hold the code that builds an object. Third-party classes, objects needing builder-style construction, and implementations chosen at startup all need construction written as code — and that code must still yield one managed instance, which is why the class is proxied.
 
 #### Interview explanation
-Start from the tension: `@Bean` methods are plain Java, and plain Java calling a method twice builds two objects. Then contrast full mode (`@Configuration`, proxied, inter-method calls return singletons) with lite mode (`@Component` or `@Configuration(proxyBeanMethods = false)`, plain calls, new objects each time). That distinction is the question behind "why do I have two connection pools?".
+**In 30 seconds** — A `@Configuration` class declares beans in code: each `@Bean` method builds one object, and the container manages what it returns. Spring subclasses the configuration class with CGLIB, so when one `@Bean` method calls another it gets the existing singleton rather than a new object. You use it for classes you cannot annotate, objects that need a builder, and beans chosen by condition.
+
+**If they push deeper** — start from the tension: `@Bean` methods are plain Java, and plain Java calling a method twice builds two objects. Then contrast full mode (`@Configuration`, proxied, inter-method calls return singletons) with lite mode (`@Component` or `@Configuration(proxyBeanMethods = false)`, plain calls, new objects each time). That distinction is the question behind "why do I have two connection pools?".
 
 #### Syntax
 ```java
@@ -530,20 +678,45 @@ public class CacheConfig {
 }
 ```
 
+Predict how many connection pools this creates — a question below asks for it:
+
+```java
+@Component                                     // lite mode — not @Configuration
+public class DataConfig {
+    @Bean DataSource dataSource()            { return new HikariDataSource(poolConfig()); }
+    @Bean JdbcTemplate jdbc()                { return new JdbcTemplate(dataSource()); }
+    @Bean NamedParameterJdbcTemplate named() { return new NamedParameterJdbcTemplate(dataSource()); }
+
+    private HikariConfig poolConfig() { /* url, credentials, pool size */ }
+}
+```
+
 #### Common interview questions
 - "When do you use `@Bean` instead of `@Component`?" (For classes you do not own, when construction needs arguments or a builder, or when the implementation is chosen conditionally.)
 - "What is the difference between `@Configuration` and `@Component` for bean methods?" (Full mode proxies the class so calls between `@Bean` methods return the singleton; lite mode does not, so each call creates a new object.)
 - "How is a bean named by default?" (After the method name — or the class name with a lowercase first letter for scanned components.)
 - "What are conditional beans?" (`@ConditionalOnMissingBean`, `@ConditionalOnProperty` and similar, which let a configuration apply only when appropriate — the mechanism behind auto-configuration.)
+- "How many connection pools does the example's `DataConfig` create — and how many with `@Configuration`?" (Three in lite mode: the `dataSource` bean, plus one each time `jdbc()` and `named()` call `dataSource()` as plain Java — and the two extra pools are not beans, so nothing ever closes them. With `@Configuration`, the CGLIB subclass intercepts those calls and returns the one `dataSource` bean. Taking `DataSource` as a method parameter avoids the question in both modes.)
+- "Why is a `@Configuration` class subclassed with CGLIB?" (Because `@Bean` methods are plain Java, and a plain call runs the method again and builds a second object. The subclass overrides each `@Bean` method to return the container's existing bean, so calling `dataSource()` from another `@Bean` method keeps the singleton the container promises.)
+- "You declare your own `DataSource` bean, and the `spring.datasource.hikari.*` settings in your properties stop having any effect. Why?" (Boot's auto-configured pool is `@ConditionalOnMissingBean`, so declaring any `DataSource` makes it back off — and the property binding goes with it; your bean gets only what your method sets. Bind the properties onto yours with `@ConfigurationProperties` on the `@Bean` method, or drop the custom bean if the properties were enough.)
 
 #### Follow-up questions
+Interviewers rarely stop at "When do you use `@Bean` instead of `@Component`?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does the container do with a `@Bean` method?" (Treats it as a factory: the return value becomes a bean named after the method, and the method's parameters are resolved as dependencies — just like a constructor's.)
+- "What happens if one `@Bean` method calls another?" (In a `@Configuration` class you get the existing bean, because the CGLIB subclass intercepts the call. In lite mode — `@Component`, or `proxyBeanMethods = false` — it is a plain Java call and builds a new object every time.)
+- "Why would anyone choose lite mode, then?" (It skips the CGLIB subclass, which starts slightly faster and suits native images; Spring Boot's own auto-configurations use it. The price is that `@Bean` methods must take dependencies as parameters instead of calling each other.)
+- "How does a `@Bean` method become conditional?" (With `@ConditionalOnMissingBean`, `@ConditionalOnProperty`, `@ConditionalOnClass` and similar, evaluated before the bean is registered. That is how auto-configuration backs off when you declare your own bean.)
+
+Other follow-ups:
+
 - "How do you inject configuration values into a `@Bean` method?" (Take a `@ConfigurationProperties` object as a parameter, which is type-safe and testable.)
-- "Can `@Bean` methods be `static`?" (Yes — needed for `BeanFactoryPostProcessor` beans, which must be created before the configuration class itself.)
+- "Can `@Bean` methods be `static`?" (Yes — and they should be for `BeanFactoryPostProcessor` beans. A non-static one forces its configuration class to be created before annotation processing is ready, and Spring warns that the class's `@Autowired` and `@PostConstruct` will then not be processed.)
 - "Does order of `@Bean` methods matter?" (No — dependencies determine order, not declaration position.)
 
 #### Edge cases
 - `final` `@Configuration` classes cannot be CGLIB-proxied and fail in full mode, because the proxy is a subclass.
-- `@Bean` methods must not be `private` or `final`, because the subclass must override them to intercept the call.
+- In full mode, `@Bean` methods must not be `private` or `final`, because the subclass must override them to intercept the call.
 - A `@Bean` returning an interface type can hide the implementation from injection by the concrete class, because until the bean is created the container knows only the declared return type.
 
 #### Common mistakes
@@ -578,7 +751,9 @@ A scope defines how many instances of a bean the container creates and how long 
 Because one shared instance is cheapest and perfectly safe for stateless services — but an object holding one request's or one user's data would leak it to everyone if shared. The scope matches an instance's lifetime to the lifetime of the data it holds.
 
 #### Interview explanation
-State the default clearly: one instance per container, shared across all threads — therefore singletons must be stateless. Then explain the classic trap of injecting a narrower scope into a singleton and the scoped-proxy fix.
+**In 30 seconds** — A scope decides how many instances of a bean exist and how long each lives. The default, singleton, means one instance per container, shared by every thread — so a singleton must not hold per-request state. Prototype gives a new instance per lookup; request and session scopes give one per HTTP request or user session, and a singleton reaches those through a proxy or an `ObjectProvider`.
+
+**If they push deeper** — state the default clearly: one instance per container, shared across all threads — therefore singletons must be stateless. Then explain the classic trap of injecting a narrower scope into a singleton and the scoped-proxy fix.
 
 #### Syntax
 ```java
@@ -601,13 +776,43 @@ public class ReportService {
 }
 ```
 
+Predict what two simultaneous requests can receive — a question below asks for it:
+
+```java
+@Service
+public class GreetingService {
+    private final AuditLog auditLog;
+    private String currentUser;                  // one field, shared by every request
+
+    GreetingService(AuditLog auditLog) { this.auditLog = auditLog; }
+
+    public String greet(String user) {
+        currentUser = user;
+        auditLog.record(user);                   // takes a few milliseconds
+        return "Hello, " + currentUser;
+    }
+}
+```
+
 #### Common interview questions
 - "What is the default bean scope?" (Singleton — one instance per container, shared by every thread.)
 - "Are singleton beans thread-safe?" (Not automatically. One instance serves all concurrent requests, so mutable state must be avoided or synchronised.)
 - "What happens if you inject a prototype into a singleton?" (The singleton receives one instance at startup and reuses it forever; use a scoped proxy or `ObjectProvider` to get a fresh one per call.)
 - "What are the web scopes?" (`request`, `session` and `application`, available in web-aware contexts.)
+- "Two requests call the example's `greet` at the same moment, one for ana and one for ben. What can each receive?" (Either greeting — possibly both "Hello, ben". There is one `GreetingService` for every thread, so the second call can overwrite `currentUser` while the first is still recording. Keep the value in a local variable: a singleton must hold no per-request state.)
+- "Why is singleton the default scope?" (Because most beans — services, repositories, controllers — are stateless: they hold only their dependencies, so one shared instance is safe and costs nothing per request. A narrower scope is needed only for an object that holds data belonging to one request, user or operation.)
+- "A scheduled job calls a service that uses a request-scoped bean, and fails with `ScopeNotActiveException`. Why?" (The job runs outside any HTTP request, so the scoped proxy has no current request to resolve against. Pass the data the job needs as arguments, or move the request-specific logic out of the code the job shares.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Are singleton beans thread-safe?" — they drill down from your answer. Answer each step before opening it:
+
+- "So what may a singleton hold?" (Its dependencies and immutable configuration — things set once at construction and never changed. Anything per call belongs in local variables and parameters, which live on each thread's own stack.)
+- "What if a bean genuinely needs per-request state?" (Give it request scope — one instance per HTTP request — and let singletons reach it through a scoped proxy, which resolves the current request's instance on every method call.)
+- "Why is the proxy needed?" (Because injection happens once, when the singleton is created. Without a proxy the singleton would need a request-scoped instance at startup, when no request is active, so creating it fails.)
+- "Does the same problem apply to prototypes?" (Yes — a prototype injected into a singleton is created once and reused forever. Inject `ObjectProvider<T>` and call `getObject()` whenever you need a fresh instance.)
+
+Other follow-ups:
+
 - "How does a scoped proxy work?" (The singleton holds a proxy; each method call resolves the real instance for the current request or session.)
 - "Is Spring's singleton the same as the Gang of Four singleton?" (No — it is one instance per container, managed by Spring, not enforced by the class.)
 - "When is prototype genuinely the right scope?" (Stateful short-lived helpers — builders, per-operation accumulators — that must not be shared.)
@@ -649,7 +854,9 @@ Mechanisms for choosing between several beans of the same type: `@Primary` sets 
 Because injection is driven by type, and a type is not always unique — several implementations of one interface are normal. A container that guessed would wire the wrong one silently, so it demands the missing information instead and fails loudly without it.
 
 #### Interview explanation
-Walk the resolution order and justify it from specific to general — type first; then any `@Qualifier` at the injection point narrows the candidates, because the caller said exactly what it wants; then `@Primary` breaks remaining ties as the default; then a bean whose name matches the parameter name. Say what happens when it fails: `NoUniqueBeanDefinitionException` at startup. Then mention `Map<String, T>` injection as the clean way to build a strategy registry.
+**In 30 seconds** — Spring injects by type, so when several beans share a type it needs more information. `@Qualifier` at the injection point names the one you want; `@Primary` on a bean makes it the default when nothing more specific is said; and a `List<T>` or `Map<String, T>` takes all of them. If none of these — nor a parameter name matching a bean name — settles it, the context fails at startup with `NoUniqueBeanDefinitionException`.
+
+**If they push deeper** — walk the resolution order and justify it from specific to general — type first; then any `@Qualifier` at the injection point narrows the candidates, because the caller said exactly what it wants; then `@Primary` breaks remaining ties as the default; then a bean whose name matches the parameter name. Say what happens when it fails: `NoUniqueBeanDefinitionException` at startup. Then mention `Map<String, T>` injection as the clean way to build a strategy registry.
 
 #### Syntax
 ```java
@@ -677,13 +884,39 @@ public class PaymentRouter {
 }
 ```
 
+Predict which gateway each service receives — a question below asks for it:
+
+```java
+@Configuration
+class GatewayConfig {
+    @Bean @Primary PaymentGateway stripe() { return new StripeGateway(); }
+    @Bean          PaymentGateway paypal() { return new PayPalGateway(); }
+}
+
+@Service class Checkout  { Checkout(PaymentGateway gateway) { } }
+@Service class Refunds   { Refunds(@Qualifier("paypal") PaymentGateway gateway) { } }
+@Service class Reporting { Reporting(List<PaymentGateway> gateways) { } }
+```
+
 #### Common interview questions
 - "What happens when two beans match an injection point?" (Startup fails with `NoUniqueBeanDefinitionException` unless `@Primary`, a `@Qualifier` or a matching parameter name disambiguates.)
 - "What is the difference between `@Primary` and `@Qualifier`?" (`@Primary` declares the default at the bean; `@Qualifier` narrows the candidates at the injection point before `@Primary` is consulted, so it wins.)
 - "How do you inject all implementations of an interface?" (A `List<T>` for all of them, or a `Map<String, T>` keyed by bean name.)
 - "How is list ordering determined?" (By `@Order` or `Ordered`; otherwise it is not guaranteed.)
+- "Which gateway does each service in the example receive?" (`Checkout` gets `stripe` — `@Primary` is the only signal. `Refunds` gets `paypal`, because a `@Qualifier` at the injection point narrows the candidates before `@Primary` is consulted. `Reporting` gets both, since a list asks for every match.)
+- "Why does Spring fail at startup instead of picking one of two matching beans?" (Because any rule it guessed with would sometimes wire the wrong implementation — a sandbox gateway in production — silently. Failing at startup forces the decision into the code, where it is visible and reviewed.)
+- "A team adds a second `DataSource` bean for reporting, and the application's JPA setup stops starting. Why, and what is the fix?" (Boot's JPA auto-configuration applies only when there is a single `DataSource` candidate, which a `@Primary` bean satisfies. With two and no primary it backs off, so no `EntityManagerFactory` is created and the repositories fail. Mark the main one `@Primary` and inject the reporting one with a `@Qualifier`.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What happens when two beans match an injection point?" — they drill down from your answer. Answer each step before opening it:
+
+- "In what order does Spring try to resolve it?" (It finds the candidates by type, narrows them with any `@Qualifier` at the injection point, then prefers a `@Primary` bean, then a bean whose name matches the parameter name. If more than one remains, startup fails.)
+- "When would you use `@Primary` rather than `@Qualifier`?" (`@Primary` when one implementation is the obvious default and most callers should not have to say so — the main `DataSource`. `@Qualifier` when a particular caller needs a particular bean, because it is decided at the injection point and beats the default.)
+- "What if neither bean should be the default?" (Leave `@Primary` off and qualify every injection point. Then a caller that forgets to choose fails at startup instead of silently receiving a default.)
+- "How would you choose the implementation per request rather than at startup?" (Inject all of them — a `Map<String, PaymentGateway>` keyed by bean name — and pick by key, as the routing example above does. Qualifiers decide once, at startup; a map decides on every call.)
+
+Other follow-ups:
+
 - "Why prefer a custom qualifier annotation?" (It is type-checked and refactor-safe, unlike a string literal.)
 - "Does parameter-name matching always work?" (For constructor and method parameters, only when compiled with `-parameters` — Boot's build plugins set it, a hand-rolled build may not.)
 - "How does this interact with profiles?" (`@Profile` can make only one implementation eligible per environment, removing the ambiguity entirely.)
@@ -724,7 +957,9 @@ Spring applies cross-cutting behaviour by wrapping beans in proxies — JDK dyna
 Because transactions, security, caching and retries must run around hundreds of methods, and writing them into each method would bury the business logic. Since the container already creates every bean, it can hand callers a wrapper that runs the concern around each call — written once, applied everywhere.
 
 #### Interview explanation
-Explain that the annotation is honoured by the proxy, not the method, and then derive the consequences from how the proxy is made: self-invocation never reaches the proxy; a CGLIB proxy is a subclass, so `private`, `static` and `final` methods — which a subclass cannot override — are not advised, and `final` classes cannot be proxied at all. This single idea explains most "my annotation does nothing" bugs.
+**In 30 seconds** — Spring applies behaviour like transactions, caching and security by handing callers a proxy instead of your bean: the proxy runs the extra code around each call, then delegates to the real object. Spring Boot creates CGLIB proxies — runtime subclasses — by default. Everything follows from that: a call that does not pass through the proxy, such as a call on `this`, gets no advice, and a method a subclass cannot override is never advised.
+
+**If they push deeper** — explain that the annotation is honoured by the proxy, not the method, and then derive the consequences from how the proxy is made: self-invocation never reaches the proxy; a CGLIB proxy is a subclass, so `private`, `static` and `final` methods — which a subclass cannot override — are not advised, and `final` classes cannot be proxied at all. This single idea explains most "my annotation does nothing" bugs.
 
 #### Syntax
 ```java
@@ -752,13 +987,45 @@ public class OrderService {
 }
 ```
 
+Predict which methods run in a transaction when a controller calls them — a question below asks for it:
+
+```java
+@Service
+public class AccountService {
+    @Transactional
+    public void transfer(Long from, Long to, BigDecimal amount) { ... }
+
+    @Transactional
+    private void audit(Long account) { ... }
+
+    @Transactional
+    public final void close(Long account) { ... }
+
+    public void transferAll(List<Transfer> transfers) {
+        transfers.forEach(t -> transfer(t.from(), t.to(), t.amount()));
+    }
+}
+```
+
 #### Common interview questions
 - "How does `@Transactional` actually work?" (A proxy around the bean begins a transaction before the method and commits or rolls back after; the annotation itself does nothing without that proxy.)
 - "Why does calling an annotated method from within the same class not work?" (The internal call goes straight to `this`, bypassing the proxy and therefore the advice.)
 - "What is the difference between JDK dynamic proxies and CGLIB?" (JDK proxies implement interfaces; CGLIB subclasses the class. Spring Boot uses CGLIB by default so proxying works without an interface.)
 - "Which methods cannot be advised?" (`private`, `static` and `final` methods — anything a subclass cannot override — and any method on a `final` class under CGLIB.)
+- "Called from a controller, which methods of the example's `AccountService` run in a transaction?" (Only `transfer`, and only when called directly. `audit` is `private` and `close` is `final`, so the CGLIB subclass cannot override them — `close` even runs on the proxy instance itself, whose fields were never injected. `transferAll` is not annotated and calls `transfer` through `this`, so the batch runs with no transaction of its own.)
+- "Why does Spring Boot default to CGLIB proxies rather than JDK proxies?" (Because a JDK proxy implements only the bean's interfaces: injecting the bean by its class then fails, and methods that are not on an interface are not advised. A CGLIB subclass is assignable to the class itself, so injection by class works and every overridable method can be advised, interface or not.)
+- "A `@Cacheable` method never seems to cache, though the annotation and cache configuration look right. What do you check first?" (Whether the call reaches the proxy: a call from another method of the same class, a `private` or `final` method, or an object built with `new` all skip it. Then whether caching is enabled at all — without `@EnableCaching`, no caching proxy is created.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does `@Transactional` actually work?" — they drill down from your answer. Answer each step before opening it:
+
+- "Where does the proxy come from?" (A `BeanPostProcessor` — the auto-proxy creator — sees each bean as it is built, finds the advice that applies to it, such as transactional methods, and returns a proxy in place of the bean. Every other bean is injected with that proxy.)
+- "What does the proxy do on a call?" (It runs the advice chain: the transaction interceptor begins or joins a transaction, calls the real method on the target, then commits — or rolls back if a runtime exception or `Error` escapes.)
+- "So why does a call from another method of the same class skip it?" (Because inside the bean, `this` is the target, not the proxy. The proxy sees only calls that come in through it — from other beans.)
+- "How does CGLIB limit what can be advised?" (The proxy is a runtime subclass, so it can intercept only methods it can override: `private`, `static` and `final` methods are never advised, and a `final` class cannot be proxied at all.)
+
+Other follow-ups:
+
 - "What are the AOP terms?" (Aspect — the concern; join point — where it can apply; pointcut — which join points; advice — the code that runs.)
 - "What join points does Spring AOP support?" (Method execution on Spring beans only — it is not full AspectJ, which can weave constructors and field access.)
 - "How do you fix self-invocation?" (Move the annotated method to another bean; a `@Lazy` self-reference or `AopContext.currentProxy()` work but indicate the responsibility is in the wrong class.)

@@ -412,7 +412,7 @@ public class ShopApplication {
 
 **Disadvantages:** Scanning a very broad package costs startup time; and implicit registration makes it harder to see the full bean list without Actuator or a debugger.
 
-> 💡 **Tip:** `@Repository`'s exception translation is a real feature, not decoration. It converts vendor-specific `SQLException`s into a consistent hierarchy, so callers are not coupled to the database driver.
+> 💡 **Tip:** `@Repository`'s exception translation is a real feature, not decoration. It converts the persistence provider's runtime exceptions — JPA's or Hibernate's — into Spring's `DataAccessException` hierarchy, so callers are not coupled to one provider. (With `JdbcTemplate`, the template translates `SQLException`s itself.)
 
 **Common mistake:** Placing the main class in a sibling package, so half the application is never scanned and the failure appears as a missing bean at startup.
 

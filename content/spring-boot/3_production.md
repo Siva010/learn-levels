@@ -105,7 +105,7 @@
 
 **Debugging tips:** `/actuator/beans` lists every registered bean with its type and dependencies — the fastest way to confirm whether a class was scanned at all, and which instance won when there were several.
 
-**Maintainability:** Use `@Repository` on data-access classes deliberately. Exception translation turns vendor-specific `SQLException`s into Spring's hierarchy, so switching database drivers does not ripple into service-layer catch blocks.
+**Maintainability:** Use `@Repository` on data-access classes deliberately. Exception translation turns the persistence provider's runtime exceptions — a Hibernate constraint violation, say — into Spring's `DataAccessException` hierarchy, so switching provider or database does not ripple into service-layer catch blocks.
 
 ---
 
