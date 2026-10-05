@@ -176,9 +176,19 @@ class StartupLogger {
 
 ### 1.4 Beans and the Bean Lifecycle
 
-**The problem:** Some work can only happen at a particular moment. A cache can be warmed only after its repository is injected; a pool must be closed before the JVM exits; and a proxy must be in place before the bean is handed to anyone, because whoever receives the raw object bypasses it.
+**The problem:** When you create an object yourself, you own the moments around it: you call `new`, run any setup straight after, and clean up when you are finished with it. Once Spring creates your objects (1.3), those moments belong to Spring — yet some work can only happen at a particular one. A cache can be warmed only after its repository is injected; a pool must be closed before the JVM exits; and a proxy must be in place before the bean is handed to anyone, because whoever receives the raw object bypasses it. So Spring has to tell your code when each moment arrives.
 
-**How it works:** So every bean goes through the same fixed sequence, and each stage exists because something needs that exact moment: instantiate; populate dependencies; aware-interface callbacks; `BeanPostProcessor.postProcessBeforeInitialization`; initialisation callbacks (`@PostConstruct`, then `afterPropertiesSet`, then a custom `initMethod`) — the first moment every dependency is guaranteed present; `postProcessAfterInitialization` — where proxies are normally created, because it is the last stop before the bean is handed out, so whatever it returns is what everyone receives; and finally hand the bean out.
+**The simple picture:** Spring does the same things to every bean, always in the same order: it **creates** it, **injects** what it needs, **gets it ready**, and **hands it out**. When the application shuts down cleanly, it **destroys** the singletons. Your code gets two moments of its own — "I am ready" and "I am about to go" — and Spring's own extensions get one more, just before the bean is handed out, where they may swap it for a proxy. Everything below is detail on those moments.
+
+**How it works:** So every bean goes through the same fixed sequence, and each stage exists because something needs that exact moment:
+
+1. **Instantiate** — call the constructor; with constructor injection, the dependencies arrive here.
+2. **Populate** — inject field and setter dependencies.
+3. **Aware callbacks** — tell the bean what it asked to know by implementing an aware interface: its own bean name, for example, or the container itself.
+4. **`postProcessBeforeInitialization`** — every `BeanPostProcessor` sees the bean before its init callbacks.
+5. **Initialisation callbacks** — `@PostConstruct`, then `afterPropertiesSet`, then a custom `initMethod`: the moment meant for setup, when every dependency — constructor, field or setter — is guaranteed present. `@PostConstruct` is in fact run by one of the processors in step 4, which is why it always comes first.
+6. **`postProcessAfterInitialization`** — where proxies are normally created, because it is the last stop before the bean is handed out, so whatever it returns is what everyone receives.
+7. **Hand the bean out** — the container keeps what step 6 returned and injects it wherever it is needed.
 
 ```mermaid
 ---
@@ -249,7 +259,8 @@ flowchart TD
     class J,K,L destroy
 ```
 
-**Example:**
+**Example:** Read `implements InitializingBean, DisposableBean` as the class telling Spring: "call my `afterPropertiesSet()` once you have finished setting me up, and my `destroy()` when the application shuts down." The annotations say the same thing a different way. Real code picks one style — usually the annotations — but this class uses every hook so that the order shows.
+
 ```java
 @Component
 public class DatabaseService implements InitializingBean, DisposableBean {
@@ -303,9 +314,53 @@ public class DatabaseService implements InitializingBean, DisposableBean {
 }
 ```
 
+Starting the application and then shutting it down cleanly prints:
+
+```text
+1. Constructor
+2. @PostConstruct
+3. afterPropertiesSet()
+   … the application runs …
+4. @PreDestroy
+5. destroy()
+```
+
+**Who calls what:** Spring finds each kind of hook in a different way, at a different point in the sequence — which is why they can be mixed, and why their order is fixed.
+
+| Hook | What it is | Who calls it, and how it is found | Use it for |
+|---|---|---|---|
+| `@PostConstruct` / `@PreDestroy` | Annotations on a no-argument method — from Jakarta (`jakarta.annotation`), not Spring | A built-in `BeanPostProcessor` that looks for the annotations | Your own classes — the usual choice, since the class does not depend on Spring |
+| `InitializingBean` / `DisposableBean` | Spring interfaces, not annotations — each has one method: `afterPropertiesSet()` / `destroy()` | The container itself, after checking `bean instanceof InitializingBean` | Framework code; implementing them ties your class to Spring |
+| `initMethod` / `destroyMethod` | Method names written on `@Bean(initMethod = "start", destroyMethod = "stop")` | The container, reading the names from the bean definition | Third-party classes you cannot annotate |
+| Aware interfaces | Interfaces such as `BeanNameAware` or `ApplicationContextAware`, each with a setter the container calls | The container, during initialisation | Rarely needed — injection does the same job |
+
+On a `@Bean`, Spring also infers a destroy method: a public `close()` or `shutdown()` is called on shutdown without being named — which is how a `@Bean` connection pool gets closed.
+
+**What a BeanPostProcessor is:** Not a callback on your bean, but a separate bean that receives *other* beans. Four questions cover it:
+
+- **Why it exists:** The container cannot know about every feature — transactions, `@Async`, caching, even `@PostConstruct`. Each feature is added as a processor that gets to see, and change, every bean, so new features plug in without changing the container.
+- **What it is:** An interface with two methods, `postProcessBeforeInitialization(bean, beanName)` and `postProcessAfterInitialization(bean, beanName)`. Both have default implementations that return the bean unchanged, so you override only the one you need.
+- **Who calls it:** The container. It creates the processors before ordinary beans, then passes each bean it builds through every one of them — once before that bean's init callbacks and once after.
+- **What it returns:** The object to use from now on. Usually that is the same bean. A processor that returns something else — normally a proxy wrapping it — has replaced the bean: the replacement is what the container keeps and injects.
+
+```java
+@Component
+class ReadyLogger implements BeanPostProcessor {
+
+    // Called by the container for each bean it builds after this one,
+    // once that bean's init callbacks have run.
+    @Override
+    public Object postProcessAfterInitialization(Object bean, String beanName) {
+        System.out.println("ready: " + beanName);
+        return bean;   // unchanged; for a bean with @Transactional methods,
+                       // Spring's own processor returns a proxy here instead
+    }
+}
+```
+
 **Destruction is only for singletons:** The container tracks singletons and calls their destroy callbacks on shutdown. Prototype beans are handed out and forgotten — Spring never destroys them, so anything holding a resource must be closed by the code that requested it.
 
-**When the proxy comes early:** The rule is "before anyone receives the bean", not "after initialisation" — the two usually coincide. In a circular dependency they do not: when A and B need each other through fields or setters (1.6), B must receive A while A is still being built. If A is going to be proxied, B must get the proxy rather than the raw object, so Spring creates A's proxy early, through `getEarlyBeanReference`, before A's injection and init callbacks have finished. That works because a proxy only holds a reference to its target: it can exist before the target is finished, as long as nothing calls it until then. Spring Boot has rejected circular references by default since 2.6, so in a Boot application this path appears only when they are re-enabled.
+**Going deeper — when the proxy comes early:** Safe to skip on a first read. The rule is "before anyone receives the bean", not "after initialisation" — the two usually coincide. In a circular dependency they do not: when A and B need each other through fields or setters (1.6), B must receive A while A is still being built. If A is going to be proxied, B must get the proxy rather than the raw object, so Spring creates A's proxy early, through `getEarlyBeanReference`, before A's injection and init callbacks have finished. That works because a proxy only holds a reference to its target: it can exist before the target is finished, as long as nothing calls it until then. Spring Boot has rejected circular references by default since 2.6, so in a Boot application this path appears only when they are re-enabled.
 
 **Advantages:** Deterministic setup and teardown, a standard place for warm-up and cleanup, and lifecycle hooks the framework itself uses consistently.
 
@@ -321,7 +376,7 @@ public class DatabaseService implements InitializingBean, DisposableBean {
 
 **Best intuition:** The lifecycle is a pipeline with labelled stages. The one that matters most is "after initialisation", because it is the last stop before the bean is handed out — where your bean is normally swapped for a proxy.
 
-**Terminology:** *`@PostConstruct`*, *`InitializingBean`*, *`DisposableBean`*, *graceful shutdown*, *lifecycle callback*.
+**Terminology:** *`@PostConstruct`*, *`InitializingBean`*, *`DisposableBean`*, *aware interface*, *`BeanPostProcessor`*, *init method / destroy method*, *graceful shutdown*, *lifecycle callback*.
 
 ---
 
