@@ -3083,7 +3083,9 @@ An arrangement in which controllers adapt HTTP, services hold business operation
 Because HTTP handling, business decisions and data access change for different reasons and at different rates. In one undivided class they collide, so a change to one ripples through the others and none can be tested or reused alone. Separate layers, with dependencies pointing one way, contain each change.
 
 #### Interview explanation
-Name each layer with its single responsibility, then say where the transaction lives and why — on the service, because the business operation is the unit of work. That one detail shows you have built something rather than read about it.
+**In 30 seconds** — A typical Spring Boot service has three layers: controllers adapt HTTP, services hold the business operations and their transactions, and repositories handle persistence — each depending only on the layer below. They are separated because they change for different reasons. The detail that shows experience is where the transaction lives: on the service method, because the business operation is the unit that must commit or roll back as a whole.
+
+**If they push deeper** — name each layer with its single responsibility, then say where the transaction lives and why — on the service, because the business operation is the unit of work. That one detail shows you have built something rather than read about it.
 
 #### Syntax
 ```java
@@ -3101,13 +3103,44 @@ public Order place(PlaceOrderCommand command) {
 }
 ```
 
+Predict the database state if the second save fails — a question below asks for it:
+
+```java
+@RestController
+class TransferController {
+    private final AccountRepository accounts;
+
+    @PostMapping("/transfers")
+    void transfer(@RequestBody TransferRequest r) {
+        var from = accounts.findById(r.from()).orElseThrow();
+        var to   = accounts.findById(r.to()).orElseThrow();
+        from.withdraw(r.amount());
+        accounts.save(from);
+        to.deposit(r.amount());
+        accounts.save(to);           // suppose this save fails
+    }
+}
+```
+
 #### Common interview questions
 - "Describe the layers of a typical Spring Boot application." (Controller for HTTP adaptation, service for business logic and transactions, repository for persistence; each depends only on the layer below.)
 - "Why not let the controller call the repository?" (It bypasses the transaction boundary and business rules, and leaves no place for cross-cutting concerns to live.)
 - "Where does `@Transactional` belong?" (On the service method, because the business operation is the atomic unit; on a repository it commits each step independently.)
 - "What is an anaemic domain model?" (Entities that are only data holders with all behaviour in services — workable, but rules then scatter and drift.)
+- "In the example, what state is the database in if the second `save` fails?" (The money has left the first account and arrived nowhere. Each repository call runs in its own transaction, so the first `save` committed before the second failed. Move the operation into a service method annotated `@Transactional`, so both changes commit or roll back together.)
+- "Why put the transaction on the service rather than on the repository or the controller?" (Because the business operation is what must be atomic. On the repository each call commits on its own, so partial work survives a failure; on the controller the transaction also spans HTTP concerns — mapping, building the response — holding a connection longer than needed. A service method is exactly one business operation.)
+- "A nightly job needs the same cancellation logic as an HTTP endpoint, but that logic sits in the controller. What does that tell you, and what do you do?" (That the business logic is in the wrong layer: a controller can only be reached over HTTP. Move it into a service method, have both the controller and the job call it, and leave the controller to binding and status codes.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Describe the layers of a typical Spring Boot application." — they drill down from your answer. Answer each step before opening it:
+
+- "Why separate them at all?" (Because HTTP handling, business rules and data access change for different reasons. Separated, a change to one — a new endpoint shape, a new query — stays in one layer, and each layer can be tested alone.)
+- "Which way do the dependencies point?" (Downward only: controllers call services, services call repositories, and nothing below knows what is above it — so a service can be called from a controller, a scheduler or a message consumer alike.)
+- "How would you stop someone calling a repository from a controller?" (Code review alone does not scale; an architecture test — with ArchUnit, for instance — fails the build when a controller depends on a repository.)
+- "When is this layering not enough?" (When the domain is complex and the business core should not depend on persistence at all. Hexagonal architecture then inverts the dependency: the core defines interfaces, and infrastructure implements them.)
+
+Other follow-ups:
+
 - "Should layers be separate modules?" (Packages suffice for most services; modules enforce boundaries mechanically at the cost of build complexity.)
 - "How do you keep the service layer from growing without limit?" (Organise by use case rather than by entity, and push invariants into the domain objects.)
 - "Where do DTO mappings happen?" (At the boundary each DTO belongs to — controller for API DTOs, repository for persistence shapes.)
@@ -3149,7 +3182,9 @@ The HTTP adapter: it binds and validates requests, maps DTOs, calls one service 
 Because if protocol details leak into business code, that code can only be reached over HTTP. Keeping everything HTTP-specific in one translating layer leaves the business logic reusable from schedulers, message consumers and tests.
 
 #### Interview explanation
-Say "thin controller" and define it concretely — bind, delegate, map, return — then name what must not appear: business conditionals, repository calls, transactions.
+**In 30 seconds** — A controller is a thin HTTP adapter: it binds and validates the request, turns the DTO into a call to one service method, maps the result back, and chooses the status code. It holds no business rules, no repository calls and no transactions — those belong to the operation, not the protocol — and errors are translated centrally in a `@RestControllerAdvice`.
+
+**If they push deeper** — say "thin controller" and define it concretely — bind, delegate, map, return — then name what must not appear: business conditionals, repository calls, transactions.
 
 #### Syntax
 ```java
@@ -3170,13 +3205,39 @@ void cancel(@PathVariable Long id) {
 }
 ```
 
+Spot the problem in this handler, even though it works — a question below asks for it:
+
+```java
+@PostMapping("/orders/{id}/cancel")
+ResponseEntity<Void> cancel(@PathVariable Long id) {
+    var order = orders.findById(id).orElse(null);
+    if (order == null) return ResponseEntity.notFound().build();
+    if (order.getStatus() == Status.SHIPPED) return ResponseEntity.status(409).build();
+    order.setStatus(Status.CANCELLED);
+    orders.save(order);
+    return ResponseEntity.noContent().build();
+}
+```
+
 #### Common interview questions
 - "What belongs in a controller?" (Request binding, validation triggering, DTO mapping, calling the service and choosing the status code — nothing else.)
 - "How do you test a controller?" (`@WebMvcTest` with `MockMvc` and a mocked service: it loads only the web layer, so tests are fast and focused.)
 - "How should a controller handle 'not found'?" (Let the service throw a domain exception and translate it centrally in `@RestControllerAdvice`.)
 - "Why not put `@Transactional` on a controller?" (The transaction would span everything the handler does — mapping, response building, any remote call — holding a connection far longer than the business operation needs, in the wrong layer.)
+- "What is wrong with the example's `cancel` handler, even though it works?" (It holds the business rule — a shipped order cannot be cancelled — and the persistence, so a scheduled job or message consumer that needs to cancel must duplicate both, and the copies drift. Move them into `service.cancel(id)`, which throws domain exceptions, and let a `@RestControllerAdvice` map those to 404 and 409.)
+- "Why translate exceptions in a `@RestControllerAdvice` rather than in each controller?" (So that every endpoint fails the same way — the same status for the same error, the same body shape — and controllers contain no try/catch. A rule kept in one place cannot drift between endpoints.)
+- "A `@WebMvcTest` fails to start with 'No qualifying bean of type OrderService'. Why?" (`@WebMvcTest` loads only the web layer — controllers, advice, converters — not services or repositories. Provide the collaborator as a mock with `@MockitoBean`, or `@MockBean` before Spring Boot 3.4.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What belongs in a controller?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why should it call only one service method?" (Because one request is usually one business operation, and the operation's transaction lives in the service. Two service calls from a controller mean two transactions — if the second fails, the first has already committed.)
+- "Where does validation happen?" (At the boundary: `@Valid` on the request DTO makes Spring validate before the method runs. Rules that need business data — may this customer order? — belong in the service.)
+- "How does the controller produce a 404?" (It does not decide it: the service throws a domain exception such as `OrderNotFoundException`, and a `@RestControllerAdvice` maps it to 404 for every endpoint.)
+- "How do you test it?" (With `@WebMvcTest`, `MockMvc` and a mocked service: assert the status, the body and that the service was called correctly — without starting a server or a database.)
+
+Other follow-ups:
+
 - "How do you avoid duplicated mapping code?" (Static factories on DTOs or a mapper component, used consistently in one direction per boundary.)
 - "What if an endpoint needs two service calls?" (Usually a sign the use case belongs in one service method that owns the whole operation and its transaction.)
 - "Should controllers return `Optional`?" (No — translate absence to a 404 through an exception, so every endpoint behaves the same.)
@@ -3218,7 +3279,9 @@ The layer holding business operations: it coordinates repositories and collabora
 Because business behaviour is the application's own value and must be independent of how it is invoked or stored — and because a business operation must succeed or fail as a whole, it needs one place that defines that unit: the service method and its transaction.
 
 #### Interview explanation
-Describe one service method as one use case inside one transaction, then raise the production point interviewers like: avoid remote calls inside a transaction, because an open transaction holds a database connection across a network round trip.
+**In 30 seconds** — The service layer holds the business operations: one public method per use case, coordinating repositories and collaborators, enforcing the rules and defining the transaction, so the operation commits or rolls back as a whole. It knows nothing about HTTP, which is why schedulers, consumers and tests can call it too. The production rule interviewers like: no remote calls inside a transaction.
+
+**If they push deeper** — describe one service method as one use case inside one transaction, then raise the production point interviewers like: avoid remote calls inside a transaction, because an open transaction holds a database connection across a network round trip.
 
 #### Syntax
 ```java
@@ -3239,20 +3302,44 @@ public void cancel(Long id) {
 }
 ```
 
+Predict what goes wrong when the payment service slows down — a question below asks for it:
+
+```java
+@Transactional
+public Order place(PlaceOrderCommand command) {
+    var order = orders.save(Order.from(command));
+    var payment = paymentClient.charge(order.total());   // HTTP: usually 200 ms, sometimes 30 s
+    order.markPaid(payment.id());
+    return order;
+}
+```
+
 #### Common interview questions
 - "What goes in the service layer?" (Business operations: coordinating repositories and collaborators, enforcing rules, and defining the transaction boundary.)
 - "Why should the service own the transaction?" (The business operation is what must be atomic; a transaction per repository call commits partial work.)
 - "Why avoid HTTP calls inside a transaction?" (The database connection stays open for the duration of the remote call, so a slow dependency exhausts the connection pool.)
 - "How do you keep services from becoming huge?" (Split by use case, push invariants into domain objects, and treat a growing service as a modelling signal.)
+- "What goes wrong with the example's `place` method when the payment service slows down?" (The transaction, and its database connection, stays open for the whole HTTP call. With Hikari's default pool of ten, ten slow payments hold every connection, and requests that only need the database start waiting too. And if the commit fails after the charge succeeded, the customer has paid for an order that does not exist. Make the call outside the transaction: save the order in one short transaction, then record the payment in another.)
+- "Why should side effects such as emails run after the commit?" (Because until the transaction commits, the change may still roll back: a listener that sends an email before commit can announce something that never happened. `@TransactionalEventListener(phase = AFTER_COMMIT)` runs it only once the change is durable — though a crash right after commit can still lose it, which is what the outbox pattern addresses.)
+- "An `OrderService` has grown to 2,000 lines and forty methods. What do you do?" (Treat it as a modelling signal: split it by use case — placing, cancelling, refunding — into smaller services, and move invariants that keep being re-checked into the domain objects themselves, such as `order.cancel()`.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Why should the service own the transaction?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly does the transaction cover?" (Everything between entering the method through the proxy and returning from it: the repository calls share one connection and one transaction, and the changes commit together on return — or roll back if a runtime exception escapes.)
+- "What if the method calls another `@Transactional` method on the same class?" (Nothing extra happens: the call goes through `this`, not the proxy, so the inner method's annotation — say `REQUIRES_NEW` — is ignored, and it runs inside the outer transaction.)
+- "Why keep remote calls out of it?" (Because the transaction holds a database connection for its whole duration, so a slow remote call pins a connection, and enough of them exhaust the pool. The remote side effect also cannot be rolled back with the database.)
+- "How do you trigger side effects safely, then?" (Publish an event inside the transaction and handle it with `@TransactionalEventListener(AFTER_COMMIT)`, so it runs only if the commit succeeded — or write it to an outbox table when the side effect must never be lost.)
+
+Other follow-ups:
+
 - "Where do domain events fit?" (Published from the service, consumed by listeners — ideally with `@TransactionalEventListener(AFTER_COMMIT)` so side effects only happen if the transaction succeeded.)
 - "How do you test a service?" (Plain unit tests with faked repositories; add an integration test for the transactional behaviour itself.)
 - "Should services call other services?" (Sparingly, and in one direction — mutual calls between services are a cycle in disguise.)
 
 #### Edge cases
 - Self-invocation inside a service bypasses `@Transactional` on the called method, because the call never passes through the proxy.
-- `@Transactional(readOnly = true)` lets Hibernate skip dirty checking and some databases route to a replica.
+- `@Transactional(readOnly = true)` lets Hibernate skip dirty checking, and lets a replica-aware driver or routing `DataSource` send the work to a replica.
 - Publishing an event before commit means listeners can observe state that is later rolled back.
 
 #### Common mistakes
@@ -3287,7 +3374,9 @@ The persistence boundary — in Spring, an interface extending `JpaRepository` f
 Because business code containing data-access plumbing is tied to one database and untestable without it. A repository interface makes persistence a typed, substitutable dependency — and since most repositories look alike, Spring Data generates them, removing the boilerplate.
 
 #### Interview explanation
-Explain that Spring Data implements the interface at startup by parsing method names, and that `@Query` takes over when a name would be unreadable. Mention projections, since selecting fewer columns is the standard fix for slow list endpoints.
+**In 30 seconds** — In Spring, a repository is an interface extending `JpaRepository`, and Spring Data generates its implementation at startup. Methods named like `findByCustomerIdAndStatus` become queries automatically; `@Query` takes over when a name would be unreadable or a join fetch is needed; and projections select only the columns you need. A method name Spring Data cannot parse fails the startup.
+
+**If they push deeper** — explain that Spring Data implements the interface at startup by parsing method names, and that `@Query` takes over when a name would be unreadable. Mention projections, since selecting fewer columns is the standard fix for slow list endpoints.
 
 #### Syntax
 ```java
@@ -3308,13 +3397,36 @@ public interface OrderSummaryView {       // projection: selects only these colu
 List<OrderSummaryView> findByStatus(Status status);
 ```
 
+Predict what happens at startup — a question below asks for it:
+
+```java
+public interface OrderRepository extends JpaRepository<Order, Long> {
+    List<Order> findByCustomerId(Long customerId);
+    List<Order> findByCustomerEmail(String email);
+    List<Order> findByStatusIn(Collection<Status> statuses);
+    List<Order> findByCustmerId(Long customerId);        // typo
+}
+```
+
 #### Common interview questions
 - "How does Spring Data create repository implementations?" (It generates a proxy at startup, deriving queries from method names and using `@Query` where provided.)
 - "What is a derived query?" (A query parsed from the method name — `findByCustomerIdAndStatus` becomes a where clause on two columns.)
 - "When would you use `@Query` instead?" (When the derived name would be unreadable, when you need a join fetch, or when you need native SQL.)
 - "What is a projection and why use one?" (An interface or record with a subset of fields, so the query selects only those columns — the usual fix for heavy list endpoints.)
+- "What happens at startup with the example's `OrderRepository`?" (The application fails to start because of `findByCustmerId`: Spring Data parses every method name when it creates the repository, and `custmerId` is not a property of `Order`. The other methods are valid — `findByCustomerEmail` even traverses the `customer` association to its `email`.)
+- "Why does a projection make a list endpoint faster?" (Because the query selects only the projected columns instead of every column of the entity, and the results are not managed entities: less data read and transferred, no dirty-checking snapshots and no accidental lazy loads.)
+- "An admin endpoint that calls `findAll()` worked for months, then starts timing out and its pod is killed for memory. What happened?" (The table grew. `findAll()` loads every row as an entity in one go, so time and memory grow with the table until both run out. Page it with `findAll(Pageable)`, or stream with a bounded fetch size, and select a projection.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does Spring Data create repository implementations?" — they drill down from your answer. Answer each step before opening it:
+
+- "What is behind the interface at runtime?" (A proxy, created at startup, that sends each method to a query derived from its name, to its `@Query`, or to `SimpleJpaRepository`'s implementation of the built-in CRUD methods.)
+- "Are those methods transactional?" (The inherited CRUD methods are: `SimpleJpaRepository` runs reads in a read-only transaction and writes such as `save` in a read-write one. Your own declared query methods get no transaction by default — they join the caller's, or run without one.)
+- "When would you write `@Query` instead of a derived name?" (When the derived name would be unreadable, when you need a join fetch to load an association in the same query, or when you need native SQL.)
+- "What is the trap with `@Modifying` queries?" (They update the database directly, bypassing the persistence context, so entities already loaded in the same transaction keep their old values — set `clearAutomatically = true`, or reload them.)
+
+Other follow-ups:
+
 - "How do you add custom implementation code?" (A custom fragment interface plus an `Impl` class, which Spring Data mixes into the generated repository.)
 - "What does `@Modifying` do?" (Marks a query as an update or delete; it bypasses the persistence context, so entities already loaded can become stale.)
 - "Why does `findAll()` worry you?" (It loads the entire table; it is correct in a test fixture and dangerous in production.)
@@ -3356,7 +3468,9 @@ Dedicated request and response types that define the API contract independently 
 Because the API and the schema change for different reasons, and one shared class turns every schema change into an API change. A separate type per boundary also means only intended fields cross it — in both directions.
 
 #### Interview explanation
-Give the three concrete reasons not to expose entities — lazy loading during serialisation, automatic exposure of new columns, and mass assignment on binding. Those are specific failures, not style preferences, which is what makes the answer convincing.
+**In 30 seconds** — DTOs are the API's request and response types, separate from the JPA entities. They exist because the API and the schema change for different reasons, and because a separate type lets only the intended fields cross the boundary. Exposing entities instead causes three specific failures: lazy loading during serialisation, every new column published automatically, and mass assignment when requests bind onto entities.
+
+**If they push deeper** — give the three concrete reasons not to expose entities — lazy loading during serialisation, automatic exposure of new columns, and mass assignment on binding. Those are specific failures, not style preferences, which is what makes the answer convincing.
 
 #### Syntax
 ```java
@@ -3371,13 +3485,44 @@ public static OrderResponse from(Order order) {
 }
 ```
 
+Spot what a client can do with this endpoint — a question below asks for it:
+
+```java
+@Entity
+class User {
+    @Id Long id;
+    String email;
+    String passwordHash;
+    boolean admin;
+    // getters and setters omitted
+}
+
+@PutMapping("/users/{id}")
+User update(@PathVariable Long id, @RequestBody User body) {
+    body.setId(id);
+    return users.save(body);
+}
+```
+
 #### Common interview questions
 - "Why not return JPA entities from controllers?" (Lazy associations can trigger queries or exceptions during serialisation, every new column is published automatically, and the API becomes coupled to the schema.)
 - "What is mass assignment?" (Binding request data straight onto an entity, letting a client set fields such as `role` or `status` that were never meant to be writable.)
 - "Should request and response DTOs be the same class?" (No — they differ in which fields exist and which are required; sharing one forces everything to be optional.)
 - "Is the extra mapping worth it?" (Yes at any boundary that outlives a single release — it is the difference between a schema change and a breaking API change.)
+- "What can a client do with the example's `update` endpoint that it should not?" (Make itself an administrator: `"admin": true` in the body binds straight onto the entity and is saved — mass assignment. It can overwrite `passwordHash` too, fields it omits are saved as null, and every response leaks the password hash. Bind to a request DTO holding only the editable fields, and return a response DTO without secrets.)
+- "Why use separate request and response DTOs rather than one shared class?" (Because they differ in which fields exist and which are required: an id and timestamps belong in responses but must not be accepted in requests. One shared class makes everything optional and lets clients send fields they should never set.)
+- "A migration adds a `cost_price` column, and the next day a competitor scrapes your margins from the public product API. How did that happen?" (The API returns the entity, so the new field was published the moment it was mapped — nobody decided to expose it. With a response DTO, a new column reaches the API only when someone adds it deliberately.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Why not return JPA entities from controllers?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly goes wrong during serialisation?" (Jackson calls every getter, so lazy associations load mid-response — extra queries or `LazyInitializationException` — and bidirectional relationships recurse.)
+- "And on the way in?" (Binding a request onto an entity is mass assignment: the client can set any mapped field — `admin`, `status`, `price` — whether or not the endpoint meant it to be writable.)
+- "Where should validation annotations go, then?" (On the request DTO, so invalid input becomes a 400 at the boundary before any business logic runs — not on the entity, where it surfaces as a persistence error after the work is done.)
+- "Is all that mapping worth the extra code?" (At any boundary that outlives one release, yes: it is the difference between a schema change and a breaking API change, and between an accidental exposure and a deliberate one.)
+
+Other follow-ups:
+
 - "Where should DTO classes live?" (With the feature they belong to, near the controller that uses them.)
 - "How do DTOs interact with OpenAPI?" (They are the documented schema; annotations on them produce the published contract.)
 - "Can records be used?" (Yes — they are the natural fit: immutable, concise and supported by Jackson and Bean Validation.)
@@ -3419,7 +3564,9 @@ Explicit conversion between DTOs, domain objects and entities, written by hand o
 Because once each layer has its own types, something must convert between them — and the boundary is where you decide what crosses it. Making that decision explicit is the point of having boundaries.
 
 #### Interview explanation
-Compare hand-written mapping, MapStruct and reflection-based mappers on safety and speed, and state a preference with a reason: compile-time generation catches renamed fields, reflection does not.
+**In 30 seconds** — Once each layer has its own types, something converts between them: a static factory on the DTO, a hand-written mapper, or a compile-time generator such as MapStruct. Prefer approaches the compiler checks — a renamed field should break the build, not silently become `null` at runtime, which is the weakness of reflection-based mappers. Map once per boundary, and keep business logic out of mappers.
+
+**If they push deeper** — compare hand-written mapping, MapStruct and reflection-based mappers on safety and speed, and state a preference with a reason: compile-time generation catches renamed fields, reflection does not.
 
 #### Syntax
 ```java
@@ -3438,13 +3585,34 @@ record OrderResponse(Long id, String status) {
 }
 ```
 
+Predict what happens to the response after the rename — a question below asks for it:
+
+```java
+// A reflection-based mapper copies properties by matching their names at runtime
+OrderResponse response = mapper.map(order, OrderResponse.class);
+
+// Later, a refactor renames Order.total to Order.amountDue
+```
+
 #### Common interview questions
 - "How do you map between DTOs and entities?" (A static factory on the DTO, a dedicated mapper class, or a compile-time generator such as MapStruct.)
 - "Why avoid reflection-based mappers?" (They match by field name at runtime, so a rename produces silent nulls instead of a build-time report — and they are slower.)
 - "Where should mapping happen?" (At the boundary, once per direction: controller maps DTO to command, service works in domain terms.)
 - "What does MapStruct generate?" (Plain Java mapping code at compile time, so it is as fast as hand-written code and reports mismatches at build time — warnings by default, errors with `unmappedTargetPolicy = ERROR`.)
+- "What happens to the example's response after the rename?" (`total` is silently `null` in every response: the reflection-based mapper finds no matching property and skips it, the build passes, and clients discover the missing field. A hand-written factory, or MapStruct with `unmappedTargetPolicy = ERROR`, fails the build instead.)
+- "Why is MapStruct as fast as hand-written mapping?" (Because it generates plain Java at compile time — the getter and setter calls you would have written yourself — so at runtime there is no reflection and nothing to look up.)
+- "A list endpoint maps 500 orders to DTOs and suddenly issues 501 queries. What happened?" (The mapping reads a lazy association — say `order.getCustomer().getName()` — for each order, so each access loads one customer: an N+1 hidden inside the mapper. Fetch the association in the query, with a join fetch or an entity graph, or query a projection holding exactly the fields the DTO needs.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you map between DTOs and entities?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which approach would you choose, and why?" (Hand-written factories for small models — explicit and dependency-free — and MapStruct when there are many types: both are checked at compile time. Not a reflection-based mapper, which turns renamed fields into silent nulls.)
+- "How does MapStruct report a field it cannot map?" (As a compile-time warning by default; set `unmappedTargetPolicy = ReportingPolicy.ERROR` to make an unmapped target field fail the build.)
+- "Where in the request flow should the mapping happen?" (At each boundary, once per direction: the controller maps the request DTO into a command and the result into a response DTO, and the service works only in domain terms.)
+- "What must a mapper never contain?" (Business decisions. A mapper translates shapes; a rule hidden in one — a discount, a status change — runs only on that path and is invisible to anyone reading the service.)
+
+Other follow-ups:
+
 - "How do you handle a field that needs computing?" (`@Mapping(expression = ...)` in MapStruct, or a hand-written method where the logic is clearer.)
 - "Is mapping duplication a smell?" (The structures look alike but change for different reasons — that is not duplication in the meaningful sense.)
 - "How do you test mappers?" (Plain unit tests asserting every field, including nulls and edge values.)
@@ -3486,7 +3654,9 @@ Jakarta Bean Validation: declarative constraints on fields and parameters, enfor
 Because every input from outside can be missing, too long or malformed, and hand-written checks in each method are repetitive and easy to forget. Declaring constraints on the fields keeps each rule next to the data it describes and enforces all of them before business code runs.
 
 #### Interview explanation
-Distinguish `@NotNull`, `@NotEmpty` and `@NotBlank` precisely — that trio is the most common question — and mention that the exception depends on where the constraint sits — `MethodArgumentNotValidException` for a `@Valid` body, `HandlerMethodValidationException` for constraints on controller parameters.
+**In 30 seconds** — Bean Validation lets you declare constraints on fields — `@NotBlank`, `@Size`, `@Email`, `@Positive` — and Spring enforces them before your method runs when a parameter is annotated `@Valid`, or a class `@Validated`. The question that always comes up is `@NotNull` versus `@NotEmpty` versus `@NotBlank`: they reject, respectively, null; null or empty; and null, empty or whitespace-only.
+
+**If they push deeper** — distinguish `@NotNull`, `@NotEmpty` and `@NotBlank` precisely — that trio is the most common question — and mention that the exception depends on where the constraint sits — `MethodArgumentNotValidException` for a `@Valid` body, `HandlerMethodValidationException` for constraints on controller parameters.
 
 #### Syntax
 ```java
@@ -3508,13 +3678,37 @@ public @interface ValidSku {
 }
 ```
 
+Predict which fields fail validation — a question below asks for it:
+
+```java
+record CreateCustomer(
+    @NotNull  String name,
+    @NotEmpty String email,
+    @NotBlank String phone,
+    @NotEmpty List<@Email String> aliases) { }
+
+// body: { "name": "", "email": "   ", "phone": "   ", "aliases": ["a@x.io", "nope"] }
+```
+
 #### Common interview questions
 - "What is the difference between `@NotNull`, `@NotEmpty` and `@NotBlank`?" (`@NotNull` only rejects null; `@NotEmpty` also rejects empty strings and collections; `@NotBlank` additionally rejects whitespace-only strings.)
 - "How do you validate a request body?" (`@Valid` on the `@RequestBody` parameter, with constraints on the DTO.)
-- "How do you write a custom constraint?" (An annotation plus a `ConstraintValidator` implementation; register nothing else — Spring discovers it.)
+- "How do you write a custom constraint?" (An annotation plus a `ConstraintValidator` implementation. Nothing else needs registering: the annotation names its validator in `validatedBy`, and Spring creates the validator with dependency injection, so it can use beans.)
 - "Which exceptions do validation failures throw?" (In controllers, `MethodArgumentNotValidException` for `@Valid` bodies and `HandlerMethodValidationException` for constraints on parameters, since Spring 6.1. In other `@Validated` beans, `ConstraintViolationException`.)
+- "Which of the example's fields fail validation, given that body?" (`phone` — whitespace only fails `@NotBlank` — and the second alias, which is not an email address. `name` passes `@NotNull` although it is empty, and `email` passes `@NotEmpty` although it is only spaces: neither constraint inspects the content.)
+- "Why validate at the API boundary rather than in the entity?" (Because a failure at the boundary is a clear 400 before any business logic runs. The same constraint on an entity fires only when the entity is persisted or flushed — after the work is done — and surfaces as a persistence error in the wrong layer.)
+- "In a controller annotated `@Validated`, a constraint on a `@PathVariable` returns 500 instead of 400. Why?" (With a class-level `@Validated`, a method-validation proxy checks the parameter and throws `ConstraintViolationException`, which Spring MVC does not map to 400 by default. Handle it in your `@RestControllerAdvice` — or, on Spring 6.1+, drop the class-level `@Validated` and let MVC's built-in validation raise `HandlerMethodValidationException`, which becomes a 400.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between `@NotNull`, `@NotEmpty` and `@NotBlank`?" — they drill down from your answer. Answer each step before opening it:
+
+- "How do you validate an object nested inside the body?" (Annotate the field `@Valid` so validation cascades into it — and for a collection, put `@Valid` on the element type: `List<@Valid LineRequest>`.)
+- "How do you enforce a rule across two fields, such as end after start?" (With a class-level custom constraint: a field constraint sees only its own field, so the validator must receive the whole object.)
+- "How do you apply different rules on create and update?" (With validation groups — `@Validated(OnCreate.class)` selects the constraints in that group — or, often clearer, a separate request type for each operation.)
+- "Can a custom validator use a repository — to check that an email is unique, say?" (It can, because Spring injects dependencies into validators. But a uniqueness check races with concurrent requests — two can pass it together — so a unique constraint in the database must remain the real guarantee.)
+
+Other follow-ups:
+
 - "How do you validate nested objects?" (`@Valid` on the field or on the collection's element type, which cascades.)
 - "What are validation groups?" (Named sets of constraints applied selectively — for example different rules on create and update.)
 - "Why not validate on entities?" (Entity constraints fire when the entity is persisted or flushed, deep inside persistence, producing a confusing error at the wrong layer.)
@@ -3556,7 +3750,9 @@ The `@NotNull` / `@NotEmpty` / `@NotBlank` trio.
 Because exceptions arise everywhere, and converting them in each controller makes the API's error behaviour drift — different codes, different shapes, leaked stack traces. One central translator gives the whole API one error contract and removes repetitive try/catch blocks from controllers.
 
 #### Interview explanation
-Describe the advice plus handler mechanism, then show a `ProblemDetail` response and the catch-all that logs with a reference id but returns no internals. The reference-id detail signals operational experience.
+**In 30 seconds** — A `@RestControllerAdvice` class holds `@ExceptionHandler` methods that turn exceptions into HTTP responses for every controller, so the whole API has one error contract and controllers contain no try/catch. Spring's `ProblemDetail` — RFC 9457's `application/problem+json` — is the standard body. A catch-all handler logs the details under a reference id and returns only that id, never a stack trace.
+
+**If they push deeper** — describe the advice plus handler mechanism, then show a `ProblemDetail` response and the catch-all that logs with a reference id but returns no internals. The reference-id detail signals operational experience.
 
 #### Syntax
 ```java
@@ -3577,14 +3773,42 @@ ProblemDetail conflict(DataIntegrityViolationException ex) {
 }
 ```
 
+Predict the status the client receives — a question below asks for it:
+
+```java
+@RestControllerAdvice @Order(1)
+class GeneralErrors {
+    @ExceptionHandler(Exception.class)
+    ProblemDetail any(Exception e) { return ProblemDetail.forStatus(500); }
+}
+
+@RestControllerAdvice @Order(2)
+class OrderErrors {
+    @ExceptionHandler(OrderNotFoundException.class)
+    ProblemDetail notFound(OrderNotFoundException e) { return ProblemDetail.forStatus(404); }
+}
+```
+
 #### Common interview questions
 - "How do you handle exceptions globally?" (A `@RestControllerAdvice` class with `@ExceptionHandler` methods per exception type, returning a consistent error body.)
 - "What is `ProblemDetail`?" (Spring 6's RFC 9457 implementation — a standard error body with type, title, status, detail and instance.)
 - "How do you choose the status code?" (`@ResponseStatus` on the handler or the exception class, or by returning a `ResponseEntity`/`ProblemDetail` with the status set.)
 - "What should a 500 response contain?" (A generic message and a reference id — never a stack trace, SQL or class names.)
+- "In the example, what status does a controller's `OrderNotFoundException` produce?" (500. Spring asks the advice classes in order and uses the first one with any matching handler; `GeneralErrors` comes first and its `Exception` handler matches, so the more specific handler in `OrderErrors` is never consulted. Within one advice class the closest match wins — across classes, order wins. Keep the catch-all in the lowest-priority advice.)
+- "Why return a reference id rather than the exception message on a 500?" (Because the message can leak internals — SQL, class names, file paths — that help an attacker and mean nothing to a user. The same id, logged with the full stack trace, lets support find the real cause.)
+- "An exception thrown in a servlet filter returns Spring Boot's default error JSON instead of your `ProblemDetail`. Why?" (Filters run before the `DispatcherServlet`, so `@ControllerAdvice` never sees the exception; it reaches the servlet container, which forwards to Boot's `/error` handling. Write the problem response in the filter itself, or customise the error controller.)
 
 #### Follow-up questions
-- "How does handler selection work?" (The most specific matching exception type wins, so a handler for `Exception` acts as the fallback.)
+Interviewers rarely stop at "How do you handle exceptions globally?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does Spring choose among several handlers?" (Within one advice class, the handler for the closest matching exception type wins. Across advice classes, the first class in `@Order` with any matching handler is used — so a catch-all in a high-priority advice swallows everything.)
+- "What about Spring's own exceptions — binding failures, unsupported media types?" (Extend `ResponseEntityExceptionHandler`, which already handles them, and override the ones you want to shape — or set `spring.mvc.problemdetails.enabled=true` to get `ProblemDetail` bodies for them.)
+- "How do you present validation errors usefully?" (Collect the field errors into the problem body — field name, rejected value, message — so a client can highlight exactly which inputs to fix.)
+- "What should the catch-all return?" (A generic 500 problem with a reference id, while logging the full exception under the same id — internals stay private, and support can still find them.)
+
+Other follow-ups:
+
+- "How does handler selection work?" (Within one advice class, the handler for the closest matching exception type wins, so a handler for `Exception` acts as the fallback. Across several advice classes, the first one in `@Order` that has any matching handler is used — even when a later one has a more specific handler.)
 - "What is `ResponseEntityExceptionHandler`?" (A base class providing handlers for Spring's own exceptions — binding failures, unsupported media types — which you can extend and override.)
 - "How do you handle validation errors usefully?" (Collect field errors into a map in the problem body so clients can highlight the offending inputs.)
 
@@ -3625,7 +3849,9 @@ Expressing the business in types — entities with identity, value objects witho
 Because when entities are only field holders, each rule lives in the services that use them — re-checked in several places and forgotten in one. Putting the rule inside the object that owns the data enforces it once, on every path.
 
 #### Interview explanation
-Contrast rich and anaemic models with a concrete example: `order.cancel()` enforcing "cannot cancel a shipped order" versus that check repeated in three services. Then mention value objects as the cheapest first step.
+**In 30 seconds** — Domain modelling puts business rules inside the objects that own the data. An entity with identity, like `Order`, exposes intention-revealing methods such as `cancel()` that enforce its invariants; value objects such as `Money` are immutable and validate themselves; and an aggregate root guards a cluster of objects and marks a transaction's boundary. The alternative — an anaemic model of field holders — scatters each rule across the services that use it.
+
+**If they push deeper** — contrast rich and anaemic models with a concrete example: `order.cancel()` enforcing "cannot cancel a shipped order" versus that check repeated in three services. Then mention value objects as the cheapest first step.
 
 #### Syntax
 ```java
@@ -3642,13 +3868,36 @@ public void addLine(Product product, int quantity) {
 }
 ```
 
+Spot what the fourth service allows — a question below asks for it:
+
+```java
+// Three services, each with its own copy of the rule
+if (order.getStatus() == Status.SHIPPED) throw new IllegalStateException();
+order.setStatus(Status.CANCELLED);
+
+// A fourth service, added later
+order.setStatus(Status.CANCELLED);
+```
+
 #### Common interview questions
 - "What is an anaemic domain model?" (Entities holding only data, with all behaviour in services — rules then scatter and drift out of sync.)
 - "What is a value object?" (An immutable type with no identity, equal by value — `Money`, `EmailAddress` — which can validate itself on construction.)
 - "What is an aggregate root?" (The entity through which a cluster of related objects is accessed and whose invariants it enforces — the boundary of a transaction.)
 - "Where should business rules live?" (With the data they constrain, so no code path can bypass them.)
+- "What does the example's fourth service allow, and how would a rich model have prevented it?" (It cancels shipped orders: the rule lived in the callers, and the new one forgot it. With `order.cancel()` checking the rule inside `Order`, and no public status setter, no code path could cancel a shipped order.)
+- "Why are value objects called the cheapest first step?" (Because they need no framework or architecture change. Replacing a raw `BigDecimal` with `Money`, or a `String` with `EmailAddress`, validates once at construction and makes invalid values impossible to pass around — a whole class of bugs disappears for the cost of one small type.)
+- "Entities added to a `HashSet` before being saved can no longer be found in it afterwards. Why?" (Their `equals` and `hashCode` use the generated id, which is `null` before persist and set afterwards — the hash changes, so the set looks in the wrong bucket. Use id-based `equals` only once the id is set, with a constant `hashCode`, or an immutable business key.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is an anaemic domain model?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does the rich alternative look like?" (Behaviour on the entity: `order.cancel()` checks that the order has not shipped and changes the state, so the rule lives with the data and every caller gets it.)
+- "How do you stop callers bypassing it?" (Remove blanket setters: keep fields private and expose only intention-revealing methods, so the only way to change the status is through the method that enforces the rule.)
+- "What is an aggregate, and why does it matter for transactions?" (A cluster of objects changed together through one root — an `Order` and its lines. Its invariants span the cluster, so one transaction should change one aggregate; that keeps transactions small and the rules enforceable in one place.)
+- "Where does JPA push back on this?" (It needs a no-argument constructor, mutable collections and lazily loaded proxies, which pull against immutability and encapsulation — so teams compromise deliberately, for example with a `protected` constructor and no public setters.)
+
+Other follow-ups:
+
 - "Does JPA constrain domain modelling?" (Yes — no-arg constructors, mutable collections and lazy proxies pull against immutability and encapsulation; most teams compromise deliberately.)
 - "How do you avoid public setters?" (Expose intention-revealing methods — `cancel()`, `addLine()` — and keep fields private with no blanket setters.)
 - "Do you need full DDD?" (No — value objects and invariants in entities deliver most of the benefit without the full method and vocabulary.)
@@ -3690,7 +3939,9 @@ Ports and adapters: the application core defines interfaces for what it needs an
 Because in plain layering the business core depends on the infrastructure beneath it, so every framework or storage change reaches into the rules. Inverting the dependency — the core declares ports, infrastructure supplies adapters — keeps the valuable, long-lived logic independent, testable and durable across technology changes.
 
 #### Interview explanation
-Explain the inward dependency rule with one example — a repository interface defined in the domain, implemented by a JPA adapter. Then be honest about the trade-off: it is justified by domain complexity, not by default.
+**In 30 seconds** — Hexagonal architecture — ports and adapters — makes dependencies point inward: the business core defines interfaces for what it needs, such as `OrderRepository` or `PaymentPort`, and infrastructure implements them, so the core never imports Spring, JPA or HTTP. The core is then testable without any framework, and infrastructure can be swapped by writing a new adapter. It is justified by domain complexity, not adopted by default.
+
+**If they push deeper** — explain the inward dependency rule with one example — a repository interface defined in the domain, implemented by a JPA adapter. Then be honest about the trade-off: it is justified by domain complexity, not by default.
 
 #### Syntax
 ```java
@@ -3711,13 +3962,40 @@ public class PlaceOrder {
 }
 ```
 
+Spot why this class breaks the architecture — a question below asks for it:
+
+```java
+package com.shop.core;                       // the business core
+
+import jakarta.persistence.EntityManager;
+import org.springframework.web.client.RestClient;
+
+public class PlaceOrder {
+    private final EntityManager entityManager;
+    private final RestClient paymentClient;
+    // ...
+}
+```
+
 #### Common interview questions
 - "What is hexagonal architecture?" (Ports and adapters: the core defines interfaces, infrastructure implements them, and all dependencies point inward toward the domain.)
 - "How does it differ from layered architecture?" (Layered dependencies point downward, so the domain depends on persistence abstractions defined below it; hexagonal inverts that — the domain defines the interface and infrastructure implements it.)
 - "What is the benefit?" (The core is testable with no framework, and infrastructure can be replaced by writing a new adapter.)
 - "When is it not worth it?" (Simple CRUD services, where the extra interfaces and mapping add indirection without protecting anything valuable.)
+- "Why does the example's `PlaceOrder` break hexagonal architecture, and how would you fix it?" (The core depends on infrastructure — JPA's `EntityManager` and an HTTP client — so it cannot be tested without them and changes whenever they do. Define ports in the core — `OrderRepository`, `PaymentPort` — and implement them in adapters; the core then imports only its own interfaces.)
+- "Why does it matter whether the repository interface is defined in the core or beside its implementation?" (Because the owner of an interface sets its terms. Defined in the core, it speaks the domain's language — `save(Order)`, `findById(OrderId)` — and infrastructure must adapt to it; defined beside JPA, the core has to adapt to persistence instead.)
+- "A team proposes hexagonal architecture for a small CRUD service with no business rules. What do you say?" (That it would add interfaces, adapters and mapping that protect nothing, because there is no valuable core to isolate. Plain layering suffices; revisit the choice if real domain logic appears.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How does it differ from layered architecture?" — they drill down from your answer. Answer each step before opening it:
+
+- "What is a port, and what is an adapter?" (A port is an interface the core defines — what it needs, such as `PaymentPort`, or what it offers, such as a use case. An adapter implements or drives a port with real technology: a JPA repository, an HTTP client, a REST controller.)
+- "Where does Spring fit in?" (In the outer ring: adapters are Spring beans, and configuration wires them to the core's ports. The core classes themselves stay plain Java, with no Spring annotations.)
+- "How do you test the core?" (With plain unit tests and in-memory fakes of its ports — no Spring context, no database — because the core depends only on interfaces it owns.)
+- "What does it cost?" (More types — ports, adapters, and a mapping between domain and persistence models with bugs of its own. That cost pays only when the core is complex enough to be worth protecting.)
+
+Other follow-ups:
+
 - "How does this relate to clean or onion architecture?" (Different names for the same dependency-inversion idea with slightly different layer vocabularies.)
 - "Can you adopt it partially?" (Yes — defining repository interfaces in domain terms and keeping framework annotations out of domain classes captures most of the testability benefit.)
 - "Where do DTOs live in this style?" (In the adapters — each adapter maps between its own representation and the domain model.)
