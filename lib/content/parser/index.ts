@@ -182,14 +182,22 @@ function buildSection(
 /**
  * Interview questions are written as `- "Question?" (Answer.)`. The answer, when present,
  * comes from the source — nothing is generated to fill an empty one.
+ *
+ * Answers often quote things themselves — `@Profile("prod")`, "the application is up" — so the
+ * question ends at the first closing quote that is followed by the parenthesised answer, not at
+ * the last quote on the line. Items in any other shape keep the looser split.
  */
+const QUESTION_WITH_ANSWER = /^"(.*?)"\s*(\(.*\))?$/s;
+const QUESTION_LOOSE = /^"(.*)"\s*(.*)$/s;
+
 function toQuestionBlocks(blocks: Block[]): Block[] {
   return blocks.flatMap((block) => {
     if (block.type !== "list") return [block];
     return block.items.map((item): QaBlock => {
-      const quoted = /^"(.*)"\s*(.*)$/s.exec(item.trim());
+      const text = item.trim();
+      const quoted = QUESTION_WITH_ANSWER.exec(text) ?? QUESTION_LOOSE.exec(text);
       if (!quoted) return { type: "qa", question: item, lines: block.lines };
-      const remainder = quoted[2].trim();
+      const remainder = (quoted[2] ?? "").trim();
       const answer = /^\((.*)\)$/s.exec(remainder);
       return {
         type: "qa",
