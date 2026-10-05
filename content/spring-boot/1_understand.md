@@ -4695,7 +4695,7 @@ class AdminControllerSecurityTest {
 
 **Advantages:** Access rules become regression-tested code, with each role's access to each endpoint pinned down explicitly.
 
-**Disadvantages:** Easy to test default security instead of your own, and `@WithMockUser` bypasses token parsing, so token-specific behaviour needs separate tests.
+**Disadvantages:** Easy to test default security instead of your own. And both `@WithMockUser` and `jwt()` bypass decoding the token — `jwt()` builds the authentication directly, mapping claims with Spring's default converter unless you pass yours — so signature validation and your claim mapping need tests of their own.
 
 > 💡 **Tip:** For every protected endpoint, three tests: anonymous (401), wrong role (403), right role (2xx). Missing any one of them is how open endpoints go unnoticed.
 

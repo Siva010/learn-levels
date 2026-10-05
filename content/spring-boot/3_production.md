@@ -1523,7 +1523,7 @@
 
 **Security implications:** Security tests are regression protection for the controls attackers probe first. Insecure direct object references in particular are found by attackers within minutes and by teams, usually, only after an incident.
 
-**Testing advice:** Use `jwt()` post-processors with realistic claims for resource servers, so your claim-to-authority mapping is exercised. `@WithMockUser` bypasses it and can hide a broken converter.
+**Testing advice:** For resource servers, pass your claim converter to the `jwt()` post-processor — `jwt().authorities(converter)` — with realistic claims, so your claim-to-authority mapping is exercised. On its own, `jwt()` maps claims with Spring's default converter, and `@WithMockUser` bypasses claims entirely; either can hide a broken converter.
 
 **Maintainability:** A role-by-endpoint matrix test, generated from a table, documents the access model and keeps it under test as roles and endpoints evolve.
 

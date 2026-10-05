@@ -8169,7 +8169,9 @@ A model for proportioning tests: many fast unit tests, fewer slice and integrati
 Because test levels trade speed and precision against realism — no single level is both fast and fully convincing — so a suite needs enough of each to be both fast and trustworthy.
 
 #### Interview explanation
-Describe the levels including Spring's slices as the middle tier, then show judgement: the pyramid is a heuristic, and a database-heavy service may legitimately lean on slice and integration tests rather than heavily mocked unit tests.
+**In 30 seconds** — The testing pyramid says: many fast unit tests, fewer tests that exercise one layer with real framework behaviour — Spring's slices, such as `@WebMvcTest` and `@DataJpaTest` — and few full integration or end-to-end tests. Each level trades speed and failure precision against realism, so the aim is to test each behaviour at the lowest level that can actually see it. It is a heuristic: a database-heavy service may rightly lean on slice and integration tests.
+
+**If they push deeper** — describe the levels including Spring's slices as the middle tier, then show judgement: the pyramid is a heuristic, and a database-heavy service may legitimately lean on slice and integration tests rather than heavily mocked unit tests.
 
 #### Syntax
 ```java
@@ -8187,13 +8189,37 @@ Typical healthy proportions for a Spring service:
   ~5%  integration tests (critical end-to-end paths)
 ```
 
+Predict what this test proves — a question below asks for it:
+
+```java
+// A test for a repository's custom query, written as a unit test
+@Test
+void findsOverdueInvoices() {
+    var repo = mock(InvoiceRepository.class);
+    when(repo.findOverdue(LocalDate.of(2026, 1, 1))).thenReturn(List.of(overdueInvoice));
+    assertThat(repo.findOverdue(LocalDate.of(2026, 1, 1))).containsExactly(overdueInvoice);
+}
+```
+
 #### Common interview questions
 - "What is the testing pyramid?" (A guideline for many fast unit tests, fewer integration tests and very few end-to-end tests, balancing speed against confidence.)
 - "What are Spring test slices?" (Annotations like `@WebMvcTest` and `@DataJpaTest` that load only one layer of the application for fast, focused tests.)
 - "When are unit tests not the best choice?" (When the behaviour lives in framework or database interaction — queries, mappings, JSON — which mocks cannot exercise.)
 - "How do you keep a test suite fast?" (Test at the lowest effective level, share Spring contexts through consistent configuration, and reserve full integration tests for critical paths.)
+- "What does the example's test prove about the `findOverdue` query?" (Nothing: it tests the mock it has just configured, and the real query never runs. A wrong `@Query`, a mapping error or a date-comparison bug would all pass. Behaviour that lives in the database needs a `@DataJpaTest` against a real engine.)
+- "Why test each behaviour at the lowest level that can see it?" (Because lower levels are faster and pinpoint failures — a failing unit test names one rule — while higher levels are slow and point vaguely at the whole system. Going higher is worth it only when the behaviour lives in wiring, framework or infrastructure that a lower level cannot exercise.)
+- "A suite of 1,200 tests takes 25 minutes because nearly every test is a `@SpringBootTest`. How do you speed it up?" (Move each test to the lowest level that sees its behaviour: business rules to unit tests, controllers to `@WebMvcTest`, queries to `@DataJpaTest`. For the integration tests that remain, unify their configuration so Spring's context cache reuses one context instead of building many.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What are Spring test slices?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does a slice give you that a unit test cannot?" (Spring's real behaviour for one layer — request mapping, JSON serialisation, validation, generated queries — which a plain unit test with mocks never executes.)
+- "And what does it cost compared with a unit test?" (A partial application context: hundreds of milliseconds instead of a few, and failures that can come from configuration as well as from the code under test.)
+- "When do you need a full `@SpringBootTest`?" (To prove the layers work together — wiring, security, transactions and serialisation in one flow — for critical paths only, because each such test is slow and imprecise when it fails.)
+- "How do you know the suite is actually good?" (Not from coverage, which shows only what ran. Mutation testing — PIT — changes the code and checks that some test fails; surviving mutations reveal tests that assert too little.)
+
+Other follow-ups:
+
 - "What is the testing trophy?" (An alternative shape emphasising integration tests, argued for applications where most logic is wiring rather than computation.)
 - "How do you measure test quality?" (Mutation testing — PIT — reveals tests that pass even when the code is changed, which coverage alone cannot.)
 - "Is 100% coverage a goal?" (No — coverage shows what ran, not what was asserted; high coverage with weak assertions is false confidence.)
@@ -8235,7 +8261,9 @@ Tests of a single class in isolation, written with JUnit Jupiter and typically A
 Because business rules have many cases, and checking each by starting the application would be slow and vague. Testing one class directly verifies them quickly and precisely, with failures that point straight at the broken behaviour.
 
 #### Interview explanation
-Mention JUnit 5's features — `@ParameterizedTest`, `@Nested`, lifecycle hooks — and AssertJ for readable assertions. Then name what makes unit tests reliable: no time, randomness or ordering dependencies.
+**In 30 seconds** — A unit test checks one class in isolation — no Spring, no database — and runs in milliseconds, so it can cover every case of a business rule precisely. JUnit 5 provides the structure — `@Test`, lifecycle hooks, `@ParameterizedTest` for many inputs, `@Nested` for grouping — and AssertJ provides readable assertions. Good unit tests are deterministic: nothing in them depends on the current time, randomness, or the order in which tests run.
+
+**If they push deeper** — mention JUnit 5's features — `@ParameterizedTest`, `@Nested`, lifecycle hooks — and AssertJ for readable assertions. Then name what makes unit tests reliable: no time, randomness or ordering dependencies.
 
 #### Syntax
 ```java
@@ -8260,13 +8288,37 @@ class DiscountPolicyTest {
 }
 ```
 
+Predict why this test fails now and then — a question below asks for it:
+
+```java
+class TrialServiceTest {
+    @Test
+    void trialIsActiveForFourteenDays() {
+        var trial = new Trial(LocalDate.now().minusDays(13));
+        assertThat(trial.isActive()).isTrue();     // isActive() compares with LocalDate.now()
+    }
+}
+```
+
 #### Common interview questions
 - "What changed from JUnit 4 to JUnit 5?" (A modular architecture — Platform, Jupiter, Vintage — with extensions replacing runners and rules, parameterised tests built in, and `@Nested` test classes.)
 - "How do you test time-dependent code?" (Inject a `java.time.Clock` and use `Clock.fixed` in tests rather than calling `Instant.now()` directly.)
 - "What is a parameterised test?" (One test method run over many inputs — `@ValueSource`, `@CsvSource`, `@MethodSource` — each reported separately.)
 - "What makes a unit test good?" (One behaviour, a descriptive name, independence from other tests, and determinism.)
+- "Why can the example's test fail occasionally, and how do you fix it?" (Both the test and `isActive()` read the system clock. If the test starts just before midnight and `isActive()` runs just after, the two dates differ by a day and the result changes. Inject a `Clock` into `Trial` and pass `Clock.fixed(...)` in the test, so time becomes an input instead of a race.)
+- "Why does JUnit 5 create a new test-class instance for every test method?" (So that no state carries over from one test to the next: each test starts with fresh fields, and tests can run in any order — or in parallel — without affecting each other.)
+- "A test passes alone but fails when the whole class runs. What do you look for?" (Shared state between tests: a `static` field, a singleton, a database row or file left by another test, or a `@TestInstance(PER_CLASS)` lifecycle sharing fields. Make each test set up everything it depends on.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What makes a unit test good?" — they drill down from your answer. Answer each step before opening it:
+
+- "How do you make time-dependent code testable?" (Inject a `java.time.Clock` and call `LocalDate.now(clock)`; tests pass `Clock.fixed(...)`, so the result no longer depends on when the test runs.)
+- "How would you test the same rule with twenty inputs?" (With a `@ParameterizedTest` fed by `@CsvSource` or `@MethodSource`: one method, each input reported as its own test, so a failure names the case.)
+- "How do you test that code throws?" (With `assertThatThrownBy(() -> ...)`, asserting the type and message — or by capturing the exception that `assertThrows` returns and asserting on it — rather than only checking that something was thrown.)
+- "What does JUnit 5's extension model replace?" (JUnit 4's runners and rules: `@ExtendWith` registers callbacks into the test lifecycle, and several extensions — Mockito, Spring — can be combined on one class.)
+
+Other follow-ups:
+
 - "Why AssertJ over JUnit assertions?" (Fluent, discoverable API and much more informative failure messages, especially for collections.)
 - "What is a test fixture?" (Reusable setup — builders or factory methods producing valid test objects — that keeps tests short and intention-revealing.)
 - "How do JUnit 5 extensions work?" (`@ExtendWith` registers callbacks into the test lifecycle — Mockito and Spring both integrate this way.)
@@ -8308,7 +8360,9 @@ Creating stand-in collaborators whose responses are scripted and whose calls are
 To isolate a unit from slow, non-deterministic or external collaborators, and to observe interactions that have no other visible effect.
 
 #### Interview explanation
-Distinguish stubbing (`when`) from verification (`verify`), name the four kinds of test double, and give the judgement call: mock boundaries such as gateways and clients, not value objects or simple collaborators.
+**In 30 seconds** — Mockito creates stand-ins for a class's collaborators: you script their answers with `when(...)` and check how they were called with `verify(...)`, so a class can be tested without a database, a payment gateway or a remote service. The judgement interviewers look for is what to mock — boundaries such as gateways, clients and repositories, not value objects or simple collaborators — because over-mocking ties tests to the implementation instead of the behaviour.
+
+**If they push deeper** — distinguish stubbing (`when`) from verification (`verify`), name the four kinds of test double, and give the judgement call: mock boundaries such as gateways and clients, not value objects or simple collaborators.
 
 #### Syntax
 ```java
@@ -8332,13 +8386,37 @@ void doesNotSaveWhenPaymentIsDeclined() {
 }
 ```
 
+Predict what happens when this test runs — a question below asks for it:
+
+```java
+@Test
+void appliesDiscount() {
+    when(pricing.discountFor("ana")).thenReturn(new BigDecimal("0.10"));
+    var total = service.total("Ana", List.of(item));     // the service looks up "Ana"
+    assertThat(total).isEqualByComparingTo("90.00");
+}
+// MockitoExtension, with its default strict stubs
+```
+
 #### Common interview questions
 - "What is the difference between a mock and a stub?" (A stub provides canned answers; a mock also records calls so the test can verify interactions.)
 - "What does `@InjectMocks` do?" (Creates the class under test and injects the `@Mock` fields into it via constructor, setter or field.)
 - "When should you not mock?" (Value objects, simple collaborators and anything an in-memory fake handles well — over-mocking couples tests to implementation.)
 - "What is a spy?" (A real object with selected methods stubbed — useful sparingly, and often a sign the class should be split.)
+- "What happens when the example's test runs?" (It fails, but not on the total: the stub was set up for `"ana"` while the service asks for `"Ana"`, so strict stubs report a potential stubbing problem — an argument mismatch — instead of silently returning `null`. The message points straight at the bug, in the test or in the service's handling of case.)
+- "Why does verifying every interaction make tests brittle?" (Because it asserts how the code works, not what it achieves: renaming a method, batching two calls or reordering them breaks the test though the behaviour is unchanged. Verify only interactions that are the behaviour — a payment charged, nothing saved.)
+- "A service test needs eight mocks and fifteen `when` calls of setup. What does that tell you?" (That the class does too much, or that the test mocks things it should not, such as value objects and simple collaborators. Split the class by responsibility, use real objects or in-memory fakes where they are cheap, and keep mocks for true boundaries.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the difference between a mock and a stub?" — they drill down from your answer. Answer each step before opening it:
+
+- "When do you verify a call rather than just stubbing it?" (When the call is the behaviour under test — the charge was made, the email sent, nothing saved — and has no other observable result. Otherwise, assert on the outcome.)
+- "How do you inspect the argument a mock received?" (Capture it with an `ArgumentCaptor` and assert on the captured value — clearer than a long `argThat` matcher.)
+- "What are strict stubs?" (`MockitoExtension`'s default: an unused stub, or a stubbed method called with different arguments, fails the test — exposing setup that no longer matches the code.)
+- "When is a fake better than a mock?" (When a collaborator is used by many tests or in many ways: an in-memory repository behaves consistently without per-test scripting, so tests describe behaviour rather than calls.)
+
+Other follow-ups:
+
 - "What are strict stubs?" (Mockito's default with `MockitoExtension`: unused stubs fail the test, exposing tests that no longer exercise what they claim.)
 - "How do you capture an argument?" (`ArgumentCaptor`, then assert on the captured value — clearer than complex `argThat` matchers.)
 - "Can Mockito mock final classes and static methods?" (Yes — the inline mock maker, default since Mockito 5, supports final classes and `mockStatic`.)
@@ -8380,7 +8458,9 @@ Annotations — `@WebMvcTest`, `@DataJpaTest`, `@JsonTest`, `@RestClientTest` an
 Because starting the whole application per test is slow, while plain unit tests cannot exercise Spring's own behaviour — mapping, serialisation, queries. A slice starts just one layer's worth of Spring: real framework behaviour, without paying for the entire application context.
 
 #### Interview explanation
-Name the main slices and what each loads, mention `@MockitoBean` as the current way to replace beans (with `@MockBean` deprecated in Boot 3.4), and explain context caching — the hidden cost of inconsistent test configuration.
+**In 30 seconds** — A test slice starts only the part of Spring that one layer needs: `@WebMvcTest` loads the MVC infrastructure and controllers, `@DataJpaTest` JPA and repositories, `@JsonTest` the JSON mapper, `@RestClientTest` an HTTP client. You get the framework's real behaviour for that layer without starting the whole application, and collaborators outside the slice are replaced with `@MockitoBean` — which replaced `@MockBean` in Spring Boot 3.4.
+
+**If they push deeper** — name the main slices and what each loads, mention `@MockitoBean` as the current way to replace beans (with `@MockBean` deprecated in Boot 3.4), and explain context caching — the hidden cost of inconsistent test configuration.
 
 #### Syntax
 ```java
@@ -8406,13 +8486,36 @@ class OrderResponseJsonTest {
 }
 ```
 
+Predict whether this test class starts — a question below asks for it:
+
+```java
+@WebMvcTest(OrderController.class)
+class OrderControllerTest {
+    @Autowired MockMvc mvc;
+    @MockitoBean OrderService orders;
+}
+// OrderController's constructor takes OrderService and PriceFormatter, a @Component
+```
+
 #### Common interview questions
 - "What is a test slice?" (A Spring Boot test annotation that loads only the components and auto-configuration for one layer.)
 - "What does `@WebMvcTest` load?" (Controllers, `@ControllerAdvice`, filters, `WebMvcConfigurer`s, Jackson and Spring Security's auto-configuration — but not your own `@Configuration` classes, so a custom `SecurityFilterChain` must be imported — and not services or repositories.)
 - "What replaced `@MockBean`?" (`@MockitoBean` from Spring Framework 6.2; Boot 3.4 deprecated `@MockBean` and `@SpyBean`.)
 - "Why can many test classes slow a suite dramatically?" (Each distinct context configuration — including different mock sets — creates a new context instead of reusing a cached one.)
+- "Does the example's test class start, and why?" (No — the context fails to start. `@WebMvcTest` loads web-layer beans only, so the `@Component` `PriceFormatter` is not registered and the controller cannot be created. Mock it with `@MockitoBean`, or `@Import(PriceFormatter.class)` if the real one should run.)
+- "Why does each distinct set of `@MockitoBean`s slow a suite down?" (Because the mocks are part of the context's configuration, and Spring caches contexts by configuration. Two test classes mocking different beans need two contexts, each built from scratch; classes with the same set share one.)
+- "A `@WebMvcTest` returns 401 for every request, though your security configuration permits the endpoint. Why?" (`@WebMvcTest` does not load your own `@Configuration` classes, so your `SecurityFilterChain` is missing and Spring Boot's default — everything authenticated — applies. `@Import` your security configuration into the test.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What does `@WebMvcTest` load?" — they drill down from your answer. Answer each step before opening it:
+
+- "And what does it leave out?" (Services, repositories, other `@Component`s and your own `@Configuration` classes — anything a controller depends on must be mocked with `@MockitoBean` or imported.)
+- "How is `@MockitoBean` different from Mockito's `@Mock`?" (It puts the mock into the Spring application context, replacing or adding a bean, so everything injected with that type receives the mock. `@Mock` creates a plain object outside any context.)
+- "How do you keep many slice tests fast?" (Share configuration: the same slice, the same mocks and the same properties let Spring's context cache reuse one context across classes — a base class or a shared test configuration helps.)
+- "When is a slice the wrong tool?" (When the behaviour spans layers — security, transactions and serialisation in one flow — which needs a `@SpringBootTest`.)
+
+Other follow-ups:
+
 - "How does context caching work?" (Spring keys cached contexts by their configuration; identical configurations share one context across test classes.)
 - "What does `@DirtiesContext` do?" (Discards the cached context after the test, forcing a rebuild — expensive and usually a sign of shared mutable state.)
 - "Can you add beans to a slice?" (Yes — `@Import` specific configuration or components the slice does not include by default.)
@@ -8454,7 +8557,9 @@ Driving the real `DispatcherServlet` with mock requests and asserting on the res
 Because most controller bugs live in the web plumbing, which a direct method call never runs. MockMvc pushes requests through the real dispatcher — mapping, binding, validation, serialisation, errors and security — without the cost of starting a server.
 
 #### Interview explanation
-Show a test asserting status, content type and body, with the service mocked. Mention that MockMvc runs your real filters and advice, and that `MockMvcTester` (Spring 6.2) offers an AssertJ alternative.
+**In 30 seconds** — MockMvc sends requests through the real `DispatcherServlet` without starting a server: mapping, argument binding, validation, JSON serialisation, exception handlers and the security filters all run, with mock request and response objects. In a `@WebMvcTest` the service is mocked, so the test checks the HTTP contract — status codes, headers and the JSON body — rather than business logic. Spring Framework 6.2 adds `MockMvcTester`, an AssertJ-style alternative.
+
+**If they push deeper** — show a test asserting status, content type and body, with the service mocked. Mention that MockMvc runs your real filters and advice, and that `MockMvcTester` (Spring 6.2) offers an AssertJ alternative.
 
 #### Syntax
 ```java
@@ -8480,13 +8585,37 @@ void getsAnOrder() {
 }
 ```
 
+Predict the status this test gets — a question below asks for it:
+
+```java
+@Test
+void createsOrder() throws Exception {
+    when(service.create(any())).thenReturn(OrderFixtures.order(1L));
+    mockMvc.perform(post("/api/orders").contentType(APPLICATION_JSON).content(validJson))
+           .andExpect(status().isCreated());
+}
+// The real SecurityFilterChain is imported; the API uses session cookies and CSRF protection
+```
+
 #### Common interview questions
 - "How do you test a REST controller?" (`@WebMvcTest` with MockMvc and the service mocked, asserting status, headers and JSON body.)
 - "Does MockMvc start a server?" (No — it calls the `DispatcherServlet` directly with mock request and response objects.)
 - "What should controller tests assert?" (The contract: status codes, error bodies, JSON field names and formats, and headers — not business logic.)
 - "How do you test validation errors?" (Send an invalid body and assert 400 plus the error structure listing the offending fields.)
+- "What status does the example's test get?" (403, never 201: the CSRF filter runs early and rejects a `POST` without a token — and the request is not authenticated either — so the controller never runs. Add `.with(user("ana"))` and `.with(csrf())` — and keep a separate test asserting the rejection without them.)
+- "Why test controllers through MockMvc rather than by calling the controller method directly?" (Because most controller bugs live in the web plumbing that a direct call skips: the mapping, the binding of path variables and bodies, validation, the JSON field names and the error responses. MockMvc runs all of it, still without a server.)
+- "A controller test passes, but real clients receive `createdAt` as an array of numbers instead of an ISO string. How did the test miss it?" (It asserted only the status, or deserialised the body back into the same class, which round-trips any format. Assert the JSON itself — `jsonPath("$.createdAt").value("2026-01-01T10:00:00Z")` — so the wire format is part of the contract.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you test a REST controller?" — they drill down from your answer. Answer each step before opening it:
+
+- "What should the assertions cover?" (The contract a client depends on: the status code, important headers such as `Location`, the JSON field names and formats, and the error body for invalid input — not the business logic, which the service's own tests cover.)
+- "How do you test a validation failure?" (Send a body that breaks a constraint and assert a 400 with the expected error structure, naming the offending field.)
+- "How do you include authentication?" (With `spring-security-test` request post-processors — `user(...)`, `jwt()`, `httpBasic(...)` — and `.with(csrf())` where CSRF applies, against your real security configuration.)
+- "When would you use a real server instead?" (When the behaviour depends on the servlet container or the network — filters registered with the container, HTTP client behaviour, streaming — then use `@SpringBootTest` with `RANDOM_PORT`.)
+
+Other follow-ups:
+
 - "MockMvc or a real HTTP client?" (MockMvc for fast web-layer tests; a real client with `RANDOM_PORT` when servlet-container behaviour or the full stack matters.)
 - "How do you include authentication?" (Request post-processors from `spring-security-test` such as `jwt()`, `user()` or `httpBasic()`.)
 - "How do you print the request and response when debugging?" (`.andDo(print())`.)
@@ -8528,7 +8657,9 @@ void getsAnOrder() {
 Because queries, mappings, constraints and fetch plans can only be verified by actually running them against a database.
 
 #### Interview explanation
-Explain the embedded-database replacement — the default before Boot 3.4, and still applied to non-test data sources — and why to avoid it, then the flush-and-clear technique that forces queries to hit the database. Those two details distinguish real repository testing from tests that only appear to work.
+**In 30 seconds** — Repositories are tested with `@DataJpaTest`, which starts JPA, the repositories and a `TestEntityManager`, and rolls back each test. Two details decide whether the tests mean anything: run them against the production engine — PostgreSQL in a Testcontainers container, not an embedded H2 — and flush and clear the persistence context before reading, so the query under test builds its results from the database.
+
+**If they push deeper** — explain the embedded-database replacement — the default before Boot 3.4, and still applied to non-test data sources — and why to avoid it, then the flush-and-clear technique that forces queries to hit the database. Those two details distinguish real repository testing from tests that only appear to work.
 
 #### Syntax
 ```java
@@ -8548,13 +8679,36 @@ void enforcesUniqueReference() {
 }
 ```
 
+Predict how much this test proves — a question below asks for it:
+
+```java
+@Test
+void findsByReference() {
+    repository.save(new Order("ORD-1"));
+    var found = repository.findByReference("ORD-1");    // derived query
+    assertThat(found).isPresent();
+}
+```
+
 #### Common interview questions
 - "How do you test a Spring Data repository?" (`@DataJpaTest`, ideally against a Testcontainers instance of the production database, asserting query results.)
 - "Why not test against H2?" (H2's dialect, constraint enforcement and query planning differ from PostgreSQL or MySQL, so passing tests prove little.)
 - "Why flush and clear in repository tests?" (Otherwise reads may be served from the persistence context and the query under test never executes.)
 - "Do `@DataJpaTest` changes persist between tests?" (No — each test runs in a transaction rolled back at the end.)
+- "Does the example's test prove that `findByReference` works?" (Partly. Hibernate flushes the pending insert before running the query, so the query does execute — but the result is the same instance already in the persistence context, not one rebuilt from the row, so a column that does not save or load correctly goes unnoticed. Flush, then `em.clear()`, before querying.)
+- "Why test repositories against the production database engine rather than H2?" (Because what repository tests exist to verify — SQL dialect, constraints, locking, query behaviour — is exactly where engines differ. A test that passes on H2 says little about PostgreSQL, and native queries may not run on it at all.)
+- "A repository test asserts that the new order has id 1; it passes alone but fails in the full suite. Why?" (Sequences are not rolled back with the test's transaction, so ids keep increasing across tests. Assert on content — the reference, the status — or on the id that `save` returned, never on a specific generated value.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you test a Spring Data repository?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which database does `@DataJpaTest` use by default?" (Since Spring Boot 3.4 it replaces only data sources that are not already test-specific, so a Testcontainers database connected with `@ServiceConnection` is kept. Before 3.4 it replaced any data source with an embedded one unless told `replace = NONE`.)
+- "Why flush and clear before asserting?" (So the data is written and the persistence context emptied: the next read must run SQL and rebuild entities from rows, testing the query and the mapping instead of returning the object you just saved.)
+- "What does the per-test rollback hide?" (Anything that happens at commit — deferred constraints, flush-time errors, `AFTER_COMMIT` listeners — and anything outside the transaction; test those with a committing integration test.)
+- "How would you catch an N+1 in a repository method?" (Count the statements — through Hibernate statistics or a datasource proxy — while calling it for several parents with associations, and assert an upper bound.)
+
+Other follow-ups:
+
 - "How do you test for N+1 queries?" (Count statements with Hibernate statistics or a datasource proxy and assert an upper bound.)
 - "What does rollback hide?" (Commit-time behaviour — deferred constraints, flush-time errors and anything after the transaction ends.)
 - "How do you test migrations?" (Run Flyway against a Testcontainers database at start-up and let `ddl-auto=validate` check the mapping.)
@@ -8596,7 +8750,9 @@ void enforcesUniqueReference() {
 To prove configuration, wiring, security, transactions and serialisation work together — failures invisible to unit and slice tests.
 
 #### Interview explanation
-Describe `RANDOM_PORT` plus a real HTTP client and Testcontainers, then the two operational concerns: test-data cleanup (the server's transaction is not rolled back) and context caching (avoid `@DirtiesContext`).
+**In 30 seconds** — A `@SpringBootTest` starts the whole application context — optionally with a real server on a random port — to prove that configuration, wiring, security, transactions and serialisation work together. Such tests are slow and imprecise when they fail, so keep them few and aimed at critical paths, run them against real dependencies through Testcontainers, and share one context configuration so Spring's context cache can reuse it.
+
+**If they push deeper** — describe `RANDOM_PORT` plus a real HTTP client and Testcontainers, then the two operational concerns: test-data cleanup (the server's transaction is not rolled back) and context caching (avoid `@DirtiesContext`).
 
 #### Syntax
 ```java
@@ -8618,13 +8774,42 @@ void orderLifecycle() {
 }
 ```
 
+Predict whether this test is isolated — a question below asks for it:
+
+```java
+@SpringBootTest(webEnvironment = RANDOM_PORT)
+@Transactional                                  // "so every test rolls back"
+class OrderApiTest {
+    @Autowired TestRestTemplate rest;
+    @Autowired OrderRepository orders;
+
+    @Test
+    void createsOrder() {
+        rest.postForEntity("/api/orders", request, OrderResponse.class);
+        assertThat(orders.count()).isEqualTo(1);
+    }
+}
+```
+
 #### Common interview questions
 - "When do you write a `@SpringBootTest`?" (For critical end-to-end paths where wiring, configuration, security and persistence must be proven together.)
 - "Why does data persist between integration tests?" (With a real server, requests run in the server's own transactions, which the test cannot roll back.)
 - "How do you keep integration tests fast?" (Share one context configuration across classes, reuse containers, and isolate data rather than resetting it.)
 - "What does `@DirtiesContext` cost?" (A full context rebuild for the next test — often seconds — and it usually masks shared state that should be fixed.)
+- "Does the example's `@Transactional` keep its tests isolated, and does `createsOrder` pass?" (Not reliably. The HTTP request is handled on a server thread, in its own transaction, which commits — the test's transaction cannot roll it back, so the order stays for later tests. And the assertion fails as soon as earlier tests have left orders behind. Clean up explicitly, or give each test unique data and assert on that.)
+- "Why does a `@SpringBootTest` context get reused across test classes?" (Because building one takes seconds. Spring caches contexts keyed by their configuration — classes, profiles, properties, mock beans — so test classes with identical configuration share one context instead of starting the application again.)
+- "An integration test for an asynchronous workflow uses `Thread.sleep(2000)` and fails a few times a week in CI. What do you change?" (Replace the sleep with Awaitility — poll for the expected state with a timeout, such as `await().atMost(10, SECONDS).until(...)` — so the test proceeds as soon as the workflow finishes and fails only if it truly never does.)
 
 #### Follow-up questions
+Interviewers rarely stop at "When do you write a `@SpringBootTest`?" — they drill down from your answer. Answer each step before opening it:
+
+- "MockMvc or a real port?" (MockMvc in the full context is faster and lets a test transaction roll back; `RANDOM_PORT` with a real HTTP client exercises the servlet container and the client — but its requests commit for real.)
+- "How do you stop separate tests' data interfering?" (Use unique data per test — unique references, unique users — asserted by key rather than by count, or clean up explicitly before each test. `@DirtiesContext` rebuilds the application, not the database.)
+- "Where do the database and the broker come from?" (From Testcontainers, connected with `@ServiceConnection` and declared once in shared configuration, so every test class reuses the same containers and context.)
+- "What does `@DirtiesContext` cost?" (A full context rebuild for the next test class — often seconds each — and it usually hides shared mutable state that should be fixed instead.)
+
+Other follow-ups:
+
 - "MockMvc or a real port in `@SpringBootTest`?" (MockMvc is faster and can roll back; a real port exercises the servlet container and HTTP client behaviour.)
 - "How do you test scheduled jobs?" (Call the job's method directly in an integration test, or use Awaitility to wait for its effect.)
 - "How do you test asynchronous outcomes?" (Awaitility — poll for the expected state with a timeout rather than sleeping.)
@@ -8666,7 +8851,9 @@ A library that starts real dependencies in Docker containers for tests, integrat
 Because in-memory substitutes differ from real engines in dialect, constraints, locking and ordering, and shared test servers drift and collide. Disposable containers let every run test against the same engines and versions as production.
 
 #### Interview explanation
-Show `@ServiceConnection` removing manual property wiring, explain container reuse through static fields or shared configuration, and stress pinned image versions matching production.
+**In 30 seconds** — Testcontainers starts real dependencies — PostgreSQL, Kafka, Redis — in Docker containers for the tests, so code is tested against the same engines and versions as production instead of in-memory substitutes. Since Spring Boot 3.1, `@ServiceConnection` on a container lets Boot derive the connection details automatically. Containers are expensive to start, so they are shared across the suite rather than started per class or per test.
+
+**If they push deeper** — show `@ServiceConnection` removing manual property wiring, explain container reuse through static fields or shared configuration, and stress pinned image versions matching production.
 
 #### Syntax
 ```java
@@ -8686,13 +8873,37 @@ public static void main(String[] args) {
 }
 ```
 
+Spot the two problems in this declaration — a question below asks for it:
+
+```java
+@SpringBootTest
+@Testcontainers
+class OrderIntegrationTest {
+    @Container @ServiceConnection
+    PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:latest");   // not static
+    // ... 12 test methods
+}
+```
+
 #### Common interview questions
 - "What is Testcontainers?" (A library that runs real dependencies — databases, brokers, caches — in Docker containers during tests.)
 - "What does `@ServiceConnection` do?" (Lets Spring Boot derive connection details from the container automatically, replacing manual property registration.)
 - "Why prefer it over H2 or embedded Kafka?" (Real engines expose dialect, constraint, locking and protocol behaviour that substitutes do not.)
 - "How do you keep it fast?" (Static or shared containers started once per context, plus Spring context caching, so the whole suite shares one container.)
+- "What two problems does the example's container declaration have?" (It is an instance field, so Testcontainers would start a new container for every test method — and Spring Boot requires `@ServiceConnection` fields to be `static`, because the shared context is built before any test instance exists. And `latest` means the tests run against whatever version was published last, not the one production uses. Make it `static`, ideally in shared configuration, and pin the version.)
+- "Why does `@ServiceConnection` replace `@DynamicPropertySource`?" (Because those properties were boilerplate Boot can derive: from the container's type it knows which connection details apply — URL, user and password for a database — and creates a `ConnectionDetails` bean that auto-configuration uses directly.)
+- "Container-backed tests pass on developers' laptops but fail on the CI agents. What do you check first?" (That the agents have a Docker-compatible runtime the build can reach — Testcontainers needs one — then image availability: registry access, rate limits, and image variants for the agents' CPU architecture.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What does `@ServiceConnection` do?" — they drill down from your answer. Answer each step before opening it:
+
+- "How did it work before Spring Boot 3.1?" (With `@DynamicPropertySource`, registering each container's URL and credentials as properties by hand.)
+- "Why must the container be `static`, or shared?" (Because the Spring context is cached and reused across test classes, while an instance container lives and dies with each test — the context would point at a container that no longer exists. A static or shared container lives as long as the context.)
+- "Can you use the containers outside tests?" (Yes — a test-scope `main` with `SpringApplication.from(...).with(ContainersConfig.class)` starts the application locally against the same containers, so developers need no locally installed databases.)
+- "How do you stop container start-up dominating the suite?" (Start each container once for the whole run — static fields in a shared configuration or base class — and keep the Spring context configuration identical, so both the containers and the context are reused.)
+
+Other follow-ups:
+
 - "What does Testcontainers need in CI?" (A Docker-compatible runtime available to the build agent, or Testcontainers Cloud.)
 - "What is container reuse?" (An opt-in mode that keeps containers alive between runs for faster local iteration — not for CI.)
 - "How did you configure it before Boot 3.1?" (`@DynamicPropertySource` registering the container's URL and credentials as properties.)
@@ -8734,7 +8945,9 @@ Verifying authentication and authorisation rules with `spring-security-test` —
 Because access rules are code, and their failures are silent until exploited — a missing rule makes an endpoint work perfectly for everyone, so happy-path tests can never notice it. Only tests that try to get in without permission do.
 
 #### Interview explanation
-Describe the three-test pattern per endpoint (401, 403, 2xx) and the importance of loading your real `SecurityFilterChain` in slices. Mention ownership tests with two users, which catch IDOR.
+**In 30 seconds** — Security is tested by trying to get in without permission. Each protected endpoint gets three tests — anonymous gets 401, the wrong role gets 403, the right role succeeds — using `spring-security-test`'s `@WithMockUser`, `user(...)` or `jwt()` post-processors against your real `SecurityFilterChain`. Ownership rules need two users, because with one user every record is that user's own.
+
+**If they push deeper** — describe the three-test pattern per endpoint (401, 403, 2xx) and the importance of loading your real `SecurityFilterChain` in slices. Mention ownership tests with two users, which catch IDOR.
 
 #### Syntax
 ```java
@@ -8754,19 +8967,48 @@ void userCannotReadAnotherUsersOrder() throws Exception {
 }
 ```
 
+Predict what this test proves — a question below asks for it:
+
+```java
+@WebMvcTest(OrderController.class)
+class OrderSecurityTest {
+    @Autowired MockMvc mvc;
+    @MockitoBean OrderService service;
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void adminCanDeleteOrders() throws Exception {
+        mvc.perform(delete("/api/orders/1").with(csrf())).andExpect(status().isNoContent());
+    }
+}
+// Your SecurityFilterChain restricts DELETE to ADMIN, but it is not imported into the test.
+```
+
 #### Common interview questions
 - "How do you test secured endpoints?" (With `spring-security-test` — `@WithMockUser` or `jwt()` post-processors — asserting 401, 403 and success for each protected endpoint.)
 - "Why might a security test pass while the endpoint is open?" (The slice loaded default security instead of your configuration, or only the permitted case was tested.)
 - "How do you test method security?" (Call the service through the Spring context with a security context established, asserting `AccessDeniedException` for disallowed users.)
 - "How do you test CSRF-protected endpoints?" (Add `.with(csrf())`; and test that the request without it is rejected.)
+- "What does the example's test prove about your security rules?" (Almost nothing. Your `SecurityFilterChain` is not loaded, so the test runs against Spring Boot's default — any authenticated user may do anything — and it would pass even if your rules let everyone delete. It also tests only the permitted case. Import the real configuration, and add the anonymous and wrong-role tests.)
+- "Why are negative tests more important than positive ones for security?" (Because a missing rule fails open: the endpoint works perfectly for everyone, so every happy-path test still passes. Only a test that tries to get in without permission — and expects 401 or 403 — notices that the protection is gone.)
+- "Your JWT-secured API's tests all use `@WithMockUser` and pass, yet in production admins get 403. What did the tests skip?" (The conversion from token claims to authorities. `@WithMockUser` places a ready-made user with ready-made roles in the context, so your `JwtAuthenticationConverter` never runs, and a claim-name or prefix mistake in it goes unseen. Unit-test the converter, and pass it to `jwt().authorities(...)` with realistic claims in the controller tests.)
 
 #### Follow-up questions
-- "How do you test a custom JWT claim mapping?" (Use `jwt().jwt(builder -> builder.claim(...))` so your converter runs, rather than `@WithMockUser`, which bypasses it.)
+Interviewers rarely stop at "How do you test secured endpoints?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which three cases does each protected endpoint need?" (Anonymous, expecting 401; authenticated with the wrong role, expecting 403; and authenticated with the right role, expecting success. Two of the three are negative tests.)
+- "Why might a security test pass while the endpoint is actually open?" (Because the test loaded Spring Boot's default security instead of your `SecurityFilterChain` — common in `@WebMvcTest` — or because it tested only the permitted case.)
+- "How do you test ownership rules?" (With two identities: user A creates a resource, and user B requests it and must get 403 or 404. With a single user, every record is that user's own, so the check is never exercised.)
+- "How would you catch an endpoint that someone forgot to protect?" (With a test that walks every registered handler mapping and asserts that each is either on an explicit public list or rejects an anonymous request.)
+
+Other follow-ups:
+
+- "How do you test a custom JWT claim mapping?" (Pass your converter to the post-processor along with realistic claims — `jwt().jwt(j -> j.claim("roles", List.of("ADMIN"))).authorities(rolesConverter)` — because `jwt()` builds the authentication itself and maps claims with Spring's default converter, not the one your application configures. Or unit-test the converter directly. `@WithMockUser` bypasses claims altogether.)
 - "How do you create a reusable custom user?" (A custom annotation with `@WithSecurityContext` and a factory building the principal.)
 - "How do you find unprotected endpoints?" (A test that enumerates all handler mappings and asserts each is explicitly public or rejects anonymous requests.)
 
 #### Edge cases
-- `@WithMockUser` skips token parsing, so token-specific bugs need `jwt()`-based tests.
+- `@WithMockUser` and `jwt()` both skip decoding a token — `jwt()` builds the authentication directly — so signature and claim validation need a test that sends a real signed token, and claim-to-authority mapping needs your converter passed to `jwt()`.
 - Security configuration excluded from a slice makes every test pass with default rules.
 - Ownership bugs require two distinct identities to detect, because with one user every record is that user's own.
 
@@ -8779,8 +9021,8 @@ void userCannotReadAnotherUsersOrder() throws Exception {
 
 | | `@WithMockUser` | `jwt()` post-processor |
 |---|---|---|
-| Token parsing | Bypassed | Exercised via converter |
-| Claims | Username and roles | Any claims |
+| Token decoding | Bypassed | Bypassed — the authentication is built directly |
+| Claims | Username and roles | Any claims, mapped by the converter you pass |
 | Best for | Simple role checks | JWT resource servers |
 
 #### Frequently confused with
@@ -8802,7 +9044,9 @@ Testing HTTP clients against fake servers — `MockRestServiceServer` or WireMoc
 To verify how code handles a dependency's failures, which real dependencies rarely produce on demand.
 
 #### Interview explanation
-Argue for stubbing at the HTTP level rather than mocking the client interface, list the failure cases worth testing, and mention contract testing as the defence against stubs drifting from reality.
+**In 30 seconds** — Code that calls other services is tested against a fake HTTP server — `MockRestServiceServer` for Spring's own clients, or WireMock as a real server — that returns prepared responses. Stubbing at the HTTP level, rather than mocking the client interface, exercises serialisation, status handling and timeouts. The cases worth testing are the failures the real service rarely produces on demand: 4xx and 5xx responses, slow responses, malformed bodies, and retry and circuit-breaker behaviour.
+
+**If they push deeper** — argue for stubbing at the HTTP level rather than mocking the client interface, list the failure cases worth testing, and mention contract testing as the defence against stubs drifting from reality.
 
 #### Syntax
 ```java
@@ -8824,13 +9068,37 @@ void retriesOnceThenFails() {
 }
 ```
 
+Spot what this test misses — a question below asks for it:
+
+```java
+@Test
+void returnsRates() {
+    var client = mock(RatesClient.class);
+    when(client.fetch()).thenReturn(new Rates(Map.of("EUR", 1.0)));
+    assertThat(new PricingService(client).priceIn("EUR", 10.0)).isEqualTo(10.0);
+}
+// In production, the provider returns {"rates": {"eur": 1.0}} — lower-case codes
+```
+
 #### Common interview questions
 - "How do you test code that calls an external API?" (Against a fake HTTP server — WireMock or `MockRestServiceServer` — returning prepared responses, including failures.)
 - "Why stub at the HTTP level rather than mocking the client?" (Serialisation, status handling and timeouts are exercised only by real HTTP; mocking the interface skips the parts most likely to be wrong.)
 - "Which scenarios should be tested?" (Success, 4xx, 5xx, timeouts, malformed bodies, connection failures, and retry and circuit-breaker behaviour.)
 - "What is contract testing?" (Verifying that a consumer's expectations match the provider's actual behaviour — Pact or Spring Cloud Contract — so stubs cannot silently drift.)
+- "What does the example's test miss?" (Everything between your code and the network: the mocked `RatesClient` never parses JSON, so the provider's lower-case currency codes — and any timeout or error handling — are never exercised. A WireMock stub returning the provider's real JSON would have exposed the mismatch, and a contract test would keep that stub honest.)
+- "Why test timeouts explicitly when the code already sets them?" (Because a timeout that is configured but not applied — set on a builder that is never used, or overridden by a default request factory — looks identical in the code. Only a stub that delays its response proves the call gives up when it should, and that the failure is handled.)
+- "Your stubs reproduce the partner's response format from two years ago; every test passes, and production breaks after the partner's next release. How do you prevent this?" (With contract tests: the consumer's expectations — requests and responses — are recorded as contracts that the provider verifies in its own build, with Pact or Spring Cloud Contract, so a breaking change fails the provider's pipeline before it ships.)
 
 #### Follow-up questions
+Interviewers rarely stop at "How do you test code that calls an external API?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why stub the HTTP server rather than mocking the client?" (Because serialisation, status handling, headers and timeouts happen between your code and the network — exactly where integration bugs live — and a mocked client skips all of it.)
+- "`MockRestServiceServer` or WireMock?" (`MockRestServiceServer` is in-process and light, for clients built from Spring's builders; WireMock is a real HTTP server that works with any client and can simulate delays, resets and malformed responses.)
+- "How do you test retry and circuit-breaker behaviour?" (Stub a sequence — failures, then success — and assert how many requests the stub received. For the breaker, stub repeated failures, assert further calls are short-circuited, then stub success and assert that it recovers.)
+- "What keeps the stubs honest over time?" (Contract tests verified by the provider — otherwise stubs encode what the API used to return, and keep passing after it changes.)
+
+Other follow-ups:
+
 - "WireMock or `MockRestServiceServer`?" (`MockRestServiceServer` is lighter and in-process for Spring clients; WireMock is a real server, client-agnostic, and exercises real network behaviour.)
 - "How do you test a circuit breaker?" (Stub repeated failures, assert the breaker opens and short-circuits further calls, then stub success and assert it recovers.)
 - "How do you avoid port conflicts?" (Dynamic ports with WireMock's JUnit extension, injected into the client's base URL.)
