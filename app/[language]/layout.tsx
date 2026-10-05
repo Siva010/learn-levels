@@ -28,7 +28,7 @@ export default async function LanguageLayout({
       <div className="flex min-h-screen flex-col">
         <SiteHeader language={language} tracks={tracks} />
         <div className="flex flex-1">
-          <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-64 shrink-0 border-r border-line lg:block">
+          <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-72 shrink-0 border-r border-line lg:block">
             <Sidebar />
           </aside>
           <main id="main" className="min-w-0 flex-1">
