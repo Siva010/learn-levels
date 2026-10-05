@@ -85,7 +85,7 @@
 
 **Best practices:** Keep `@PostConstruct` fast and local — validate configuration, build in-memory structures. Anything requiring the network belongs behind `ApplicationReadyEvent` or a scheduled warm-up, so the process becomes live quickly.
 
-**Common production bugs:** Slow startup caused by cache pre-loading in `@PostConstruct`, which delays the readiness probe past its threshold and makes the orchestrator kill and restart the pod in a loop.
+**Common production bugs:** Slow startup caused by cache pre-loading in `@PostConstruct`. The web server starts only after every bean is built, so the pod is unreachable meanwhile — and if a startup or liveness probe gives up before then, the orchestrator kills and restarts it in a loop.
 
 **Real-world use case:** Graceful shutdown. With `server.shutdown=graceful`, Spring stops accepting new requests, lets in-flight ones finish within a timeout, then runs destroy callbacks — which is what makes rolling deploys invisible to users.
 
@@ -113,7 +113,7 @@
 
 **Best practices:** Constructor injection everywhere, `final` fields, no `@Autowired` on single-constructor classes. Make the rule a lint check so it does not depend on review attention.
 
-**Common production bugs:** Field injection hiding a dependency that was never configured in a particular profile, so the NPE appears only in the environment nobody tested.
+**Common production bugs:** A field-injected class constructed with `new` somewhere — a test, a factory, a static helper — where nothing fills the fields, so the `NullPointerException` appears only on that path. Constructor injection makes that construction impossible without the dependencies.
 
 **Testing advice:** A test that needs `@SpringBootTest` to construct one service is telling you the wiring is implicit. Constructor-injected classes are instantiated directly, so unit tests stay fast and the failure points at your code rather than at context startup.
 
@@ -135,7 +135,7 @@
 
 **Modern recommendations:** Prefer `@ConfigurationProperties` records over scattered `@Value` fields. One typed object, validated at startup, beats a dozen string injections discovered to be misspelled at runtime.
 
-> ⚠️ **Warning:** Marking a `@Configuration` class or its `@Bean` methods `final` breaks CGLIB proxying. In full mode that means inter-method calls stop returning singletons — silently, with duplicate objects as the only symptom.
+> ⚠️ **Warning:** Marking a `@Configuration` class or its `@Bean` methods `final` breaks CGLIB proxying, so in full mode Spring refuses it at startup. The silent version of the same bug is a `@Component` — or `@Configuration(proxyBeanMethods = false)` — whose `@Bean` methods call each other: no error, just duplicate objects.
 
 ---
 
@@ -209,7 +209,7 @@
 
 **Best practices:** Treat Boot's defaults as the baseline and override by declaring beans, not by accumulating property overrides. A single `@Bean` method states intent far better than four properties that approximate it.
 
-**Common production bugs:** A dependency added for one helper class activates its auto-configuration and changes runtime behaviour. Adding `spring-boot-starter-security` without configuring it locks every endpoint behind HTTP Basic with a generated password — a surprise outage on deploy.
+**Common production bugs:** A dependency added for one helper class activates its auto-configuration and changes runtime behaviour. Adding `spring-boot-starter-security` without configuring it locks every endpoint behind a login — a form for browsers, HTTP Basic for other clients — with a generated password: a surprise outage on deploy.
 
 **Maintainability:** Keep an explicit list of the auto-configurations you rely on in architecture notes. The implicit ones are fine until an upgrade changes a default and nobody knows which behaviour was deliberate.
 
@@ -255,11 +255,11 @@
 
 **Scalability concerns:** Maximum concurrency is the thread-pool size, and the database connection pool is usually smaller. Raising one without the other just moves the queue. Scale horizontally once a single instance is saturated at a healthy latency.
 
-**Monitoring:** Export `tomcat.threads.busy`, `tomcat.threads.config.max` and the connection-pool gauges. Busy threads approaching the maximum is the earliest reliable warning of saturation — well before error rates move.
+**Monitoring:** Export `tomcat.threads.busy`, `tomcat.threads.config.max` (they need `server.tomcat.mbeanregistry.enabled=true`) and the connection-pool gauges. Busy threads approaching the maximum is the earliest reliable warning of saturation — well before error rates move.
 
 **Modern recommendations:** On Java 21, virtual threads (`spring.threads.virtual.enabled=true`) remove the thread-per-request ceiling for blocking I/O workloads. Benchmark it rather than assuming: on JDK 21–23 a `synchronized` block pins a virtual thread to its carrier thread (JDK 24 removed that limitation), and native calls still pin, either of which can negate the benefit.
 
-> ⚠️ **Warning:** A missing timeout on an outbound call is the single most common cause of a Spring MVC service becoming unresponsive. The thread pool is finite; a call with no timeout can hold a thread for minutes.
+> ⚠️ **Warning:** A missing timeout on an outbound call is the single most common cause of a Spring MVC service becoming unresponsive. The thread pool is finite; a call with no timeout can hold a thread indefinitely.
 
 ---
 
@@ -417,7 +417,7 @@
 
 **Best practices:** Validate at the boundary with `@Valid`, give optional parameters defaults, and bind groups of query parameters into a record rather than growing the signature.
 
-**Common production bugs:** A packaged jar where parameter names were stripped, so record-based query binding fails in production while working in the IDE. The Boot plugin sets `-parameters`; a hand-rolled build may not.
+**Common production bugs:** A build without `-parameters`, so binding that relies on parameter names fails at runtime while working in an IDE that compiled with the flag. Boot's parent POM and Gradle plugin set it; a hand-rolled build may not.
 
 **Security implications:** Bind to purpose-built request DTOs, never to entities. Binding directly to an entity is mass assignment — a client can set `role`, `status` or `price` fields you never intended to expose.
 
@@ -631,7 +631,7 @@
 
 **Common production bugs:** `@NotNull` used for required strings, so empty and whitespace-only values pass validation and fail later — often as a confusing database constraint violation or an empty field in a downstream system.
 
-**Security implications:** Validation is an input-sanitising boundary. Bound string lengths and collection sizes explicitly: an unbounded `List` in a request body is an easy memory-exhaustion vector.
+**Security implications:** Validation is an input-sanitising boundary. Bound string lengths and collection sizes explicitly — and cap the request body size at the server too, because validation runs only after the whole body has been parsed into memory.
 
 **Testing advice:** Test the invalid cases, not just the valid ones, and assert the response body includes the offending field names. Clients build their form errors from that structure.
 
@@ -880,7 +880,7 @@
 
 **Performance considerations:** Measure queries per request, not just latency. A request issuing 200 small queries can look acceptable locally and fail completely across a network with 1 ms round trips.
 
-**Debugging tips:** `hibernate.generate_statistics=true` exposes query counts, cache hit ratios and flush timings through Actuator. It is the single most useful switch when diagnosing a JPA performance problem.
+**Debugging tips:** `hibernate.generate_statistics=true` — with `hibernate-micrometer` on the classpath — exposes query counts, cache hit ratios and flush timings through Actuator. It is the single most useful switch when diagnosing a JPA performance problem.
 
 **Modern recommendations:** Use JPA for domain CRUD, and plain `JdbcTemplate` or jOOQ for reporting, bulk work and complex SQL. Mixing them deliberately is a sign of maturity, not inconsistency.
 
@@ -904,13 +904,13 @@
 
 **Best practices:** `SEQUENCE` with a pooled `allocationSize` on PostgreSQL and Oracle, matching the database sequence's increment. Reserve `IDENTITY` for schemas you do not control.
 
-**Common production bugs:** Duplicate key violations under concurrency because `allocationSize` did not match the sequence increment — instances reserve overlapping blocks of ids, a mismatch invisible with one instance and fatal with several. Recent Hibernate versions check the increment at startup; do not disable that check.
+**Common production bugs:** Duplicate key violations because `allocationSize` did not match the sequence increment — the blocks of ids Hibernate hands out overlap, so even a single instance collides once it fetches its second block. Recent Hibernate versions check the increment at startup; do not disable that check.
 
 **Performance considerations:** `IDENTITY` disables JDBC batching entirely. On a bulk import path, switching to a pooled sequence can turn tens of thousands of statements into a few hundred batches.
 
 **Scalability concerns:** Random UUID primary keys fragment B-tree indexes and inflate every secondary index. If distributed id generation is required, prefer time-ordered UUIDs (UUIDv7) to keep insert locality.
 
-**Testing advice:** Test id generation under concurrency, not just sequentially. The failure modes here appear only when two instances insert simultaneously.
+**Testing advice:** Test id generation against the real database sequence, inserting more rows than one allocation block — a mismatch shows up as soon as the second block is fetched, which a test inserting a handful of rows never reaches.
 
 ---
 
@@ -918,7 +918,7 @@
 
 **Best practices:** Always set both sides through helper methods, keep collections lazy, use `orphanRemoval` only for true compositions, and model many-to-many as an explicit entity.
 
-**Common production bugs:** Children never persisted because only the inverse collection was updated — the insert simply does not happen, with no error. The bug appears as missing data rather than as a failure.
+**Common production bugs:** Children saved without their parent because only the inverse collection was updated — with a cascade the row is inserted with no foreign key (or rejected by a `NOT NULL` column); without one it is never inserted. The bug appears as missing or orphaned data rather than as a clear failure.
 
 **Performance considerations:** `CascadeType.ALL` with large collections means loading and writing the whole collection on every change. For large child sets, operate on the child repository directly.
 
@@ -932,7 +932,7 @@
 
 **Best practices:** `spring.jpa.open-in-view=false`, short transactions, deliberate fetch plans, and periodic flush-and-clear in batch loops to bound memory.
 
-**Common production bugs:** Connection-pool exhaustion caused by `open-in-view` holding a connection for the entire request, including serialisation and any slow client. It appears as pool timeouts under load with no slow query to blame.
+**Common production bugs:** Connection-pool exhaustion caused by `open-in-view` holding a connection from the first query to the end of the request, including serialisation and any slow client. It appears as pool timeouts under load with no slow query to blame.
 
 **Memory considerations:** A batch job loading a million entities in one transaction holds every one of them plus a snapshot each. Flush and clear every few hundred, or use a stateless session.
 
@@ -940,7 +940,7 @@
 
 **Debugging tips:** When the same row appears with different values in one request, check whether two transactions are involved — identity only holds within one persistence context.
 
-> ⚠️ **Warning:** `open-in-view` is enabled by default and Boot logs a warning about it. That warning is not noise: it means a database connection is held for the whole request and lazy loading can happen while writing the response.
+> ⚠️ **Warning:** `open-in-view` is enabled by default and Boot logs a warning about it. That warning is not noise: it means a connection, once used, is held until the request ends, and lazy loading can happen while writing the response.
 
 ---
 
@@ -1006,7 +1006,7 @@
 
 **Best practices:** Projections for read models, join fetches for write paths that need the graph, native SQL where the database offers something JPQL cannot, and bound parameters everywhere.
 
-**Common production bugs:** A bulk `@Modifying` update in a transaction that also holds loaded entities, whose dirty checking then writes the old values back over the bulk change.
+**Common production bugs:** A bulk `@Modifying` update in a transaction that also holds loaded entities. Any later change to one of those stale entities makes dirty checking write all its columns — old values included — back over the bulk change.
 
 **Performance considerations:** Loading entities to return a few fields costs the select, the persistence context overhead and the dirty-check at flush. A projection avoids all three and is frequently several times faster.
 
@@ -1082,7 +1082,7 @@
 
 ### 7.3 Propagation
 
-**Best practices:** Default to `REQUIRED`. Use `REQUIRES_NEW` sparingly and deliberately — audit records, failure logs — and never in a loop.
+**Best practices:** Default to `REQUIRED`. Use `REQUIRES_NEW` sparingly and deliberately — audit records, failure logs — and never as a per-item transaction inside an outer one.
 
 **Common production bugs:** `UnexpectedRollbackException` at commit, after an inner method's exception was caught and logged. The operation appears to have handled the failure and then fails anyway, far from the cause.
 
@@ -1092,7 +1092,7 @@
 
 **Maintainability:** Propagation settings change behaviour invisibly at the call site. Comment every non-default propagation with the reason — the next reader cannot infer it.
 
-> ⚠️ **Warning:** `REQUIRES_NEW` inside a loop over a large collection can exhaust the connection pool and deadlock the application. If each item needs its own transaction, run the loop outside any transaction.
+> ⚠️ **Warning:** `REQUIRES_NEW` inside an outer transaction needs two connections per request at once; under concurrent load that can exhaust the pool and deadlock it. If each item in a loop needs its own transaction, run the loop outside any transaction, so each item needs only one connection.
 
 ---
 
@@ -1112,7 +1112,7 @@
 
 ### 7.5 Rollback Rules
 
-**Best practices:** Adopt a project-wide convention — commonly a custom annotation meta-annotated with `@Transactional(rollbackFor = Exception.class)` — so checked exceptions roll back consistently without relying on each developer to remember.
+**Best practices:** Adopt a project-wide convention so checked exceptions roll back consistently without relying on each developer to remember — since Spring Framework 6.2, `@EnableTransactionManagement(rollbackOn = ALL_EXCEPTIONS)`; before that, a custom annotation meta-annotated with `@Transactional(rollbackFor = Exception.class)`.
 
 **Common production bugs:** A checked exception from a payment or file operation leaving earlier writes committed, so the order exists but payment failed. The data is inconsistent and nothing in the logs says the transaction committed.
 
@@ -1186,7 +1186,7 @@
 
 **Best practices:** Use the outbox pattern for every "write data and publish event" operation, make every consumer idempotent, and design compensations as first-class business operations when a workflow spans services.
 
-**Common production bugs:** The dual write: an order committed to the database and the `OrderPlaced` event lost because the broker was briefly unavailable. Downstream systems never learn about the order, and nothing retries.
+**Common production bugs:** The dual write: an order committed to the database and the `OrderPlaced` event lost because the broker stayed unavailable longer than the producer's retry window, or the process died before the send completed. Downstream systems never learn about the order, and nothing retries.
 
 **Scalability concerns:** Outbox relays become a throughput bottleneck if they poll a single table with one worker. Use change data capture or partitioned relays as volume grows, preserving per-aggregate ordering.
 
@@ -1455,7 +1455,7 @@
 
 **Debugging tips:** Spring logs context cache statistics at DEBUG for `org.springframework.test.context.cache`. A high miss count explains a slow suite better than any profiler.
 
-**Modern recommendations:** Migrate `@MockBean` and `@SpyBean` to `@MockitoBean` and `@MockitoSpyBean`. The old annotations are deprecated as of Boot 3.4 and slated for removal.
+**Modern recommendations:** Migrate `@MockBean` and `@SpyBean` to `@MockitoBean` and `@MockitoSpyBean`. The old annotations are deprecated as of Boot 3.4 and removed in Boot 4.
 
 ---
 
@@ -1535,7 +1535,7 @@
 
 **Best practices:** Stub dependencies at the HTTP level, test every failure mode your client must handle, keep test timeouts short through configuration, and add consumer-driven contract tests between teams that own the two sides.
 
-**Common production bugs:** A client that was only ever tested against a successful stub, so the first real 503 propagates as an unhandled exception and the first slow response holds a thread until the default socket timeout.
+**Common production bugs:** A client that was only ever tested against a successful stub, so the first real 503 propagates as an unhandled exception and the first slow response holds a thread indefinitely — most clients' default read timeout is infinite.
 
 **Real-world use case:** Verifying resilience configuration — that the retry fires the expected number of times, that the circuit breaker opens after the threshold and recovers afterwards — which is otherwise only tested by a real outage.
 
@@ -1773,7 +1773,7 @@
 
 **Best practices:** Pin image versions to match production, keep the module development-only, use random host ports, and add Compose healthchecks for services that initialise slowly.
 
-**Common production bugs:** Compose support packaged into a production jar, so the application tries to run `docker compose` at start-up in an environment without Docker — failing start-up or logging confusing errors.
+**Common production bugs:** Compose support reaching a production artifact — the Maven plugin excludes it by default, but a custom build or a Gradle `implementation` dependency packages it — so the application tries to run `docker compose` at start-up in an environment without Docker, failing start-up or logging confusing errors.
 
 **Maintainability:** Treat `compose.yaml` as code: review version bumps, keep it next to the application, and update it in the same change that adopts a new infrastructure feature.
 
@@ -2028,7 +2028,7 @@
 
 **Best practices:** Readiness probes, a `preStop` delay, graceful shutdown inside the grace period, `maxUnavailable: 0`, expand-and-contract migrations, additive API and event changes, and automated rollback on canary metric regressions.
 
-**Common production bugs:** A Flyway migration that adds a `NOT NULL` column without a default, applied by the first new pod — every old pod's inserts now fail for the remainder of the rollout.
+**Common production bugs:** A Flyway migration that renames or drops a column the previous release still uses, applied by the first new pod — every old pod's queries against it now fail for the remainder of the rollout.
 
 **Performance considerations:** Large migrations — index creation, backfills — lock or load tables. Run them online (`CREATE INDEX CONCURRENTLY` in PostgreSQL) and batch backfills, separately from the deploy.
 

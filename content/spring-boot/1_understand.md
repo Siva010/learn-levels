@@ -47,7 +47,7 @@
 
 **The module map:** `spring-core` and `spring-beans` are the container; `spring-context` adds events, scheduling and the `ApplicationContext`; `spring-aop` adds proxying; `spring-web` and `spring-webmvc` add HTTP; `spring-tx` and `spring-orm` add transactions and JPA integration; Spring Data, Security, Batch and Kafka are separate projects built on the same container.
 
-**Why this shape won:** The alternative at the time, EJB, required components to extend framework classes and run inside an application server. Spring's components are plain classes, so they can be instantiated in a test with `new` and run anywhere a JVM runs.
+**Why this shape won:** The alternative at the time, EJB, required components to implement framework interfaces and run inside an application server. Spring's components are plain classes, so they can be instantiated in a test with `new` and run anywhere a JVM runs.
 
 **Spring Framework 6 and Jakarta:** Spring 6 (and therefore Spring Boot 3) moved from the `javax.*` namespace to `jakarta.*`, requires Java 17 or later, and supports native images via AOT processing. That namespace change is the single largest source of upgrade friction from Spring Boot 2.
 
@@ -121,7 +121,7 @@ public class OrderService {
 
 **The problem:** The container takes over the wiring you would otherwise write by hand in `main()`, and inherits two duties with it. Objects must be created in dependency order — a repository before the service that needs it. And a mistake such as a missing dependency should be found before any traffic arrives, not on the first request that happens to need it.
 
-**How it works:** You cannot order a list you have not finished reading, so startup runs in two phases. First the container reads every source of metadata and registers **bean definitions** — recipes describing what to create, not instances. (A *bean* is simply an object the container manages; 1.4 follows one through its life.) Recipes are just data, so the container can inspect the whole graph, order it, and let extensions edit it before a single object exists. Then it builds the singletons — the default kind of bean, one shared instance each — in dependency order, skipping any marked `@Lazy`: each is created, injected and initialised before anything that needs it. When all of them are ready it publishes a `ContextRefreshedEvent`. Spring calls the whole sequence a **refresh**, after the `refresh()` method that runs it.
+**How it works:** You cannot order a list you have not finished reading, so startup runs in two phases. First the container reads every source of metadata and registers **bean definitions** — recipes describing what to create, not instances. (A *bean* is simply an object the container manages; 1.4 follows one through its life.) Recipes are just data, so the container can inspect the whole graph, order it, and let extensions edit it before a single object exists. Then it builds the singletons — the default kind of bean, one shared instance each — in dependency order, skipping any marked `@Lazy`: each is normally created, injected and initialised before anything that needs it (1.4 covers the circular exception). When all of them are ready it publishes a `ContextRefreshedEvent`. Spring calls the whole sequence a **refresh**, after the `refresh()` method that runs it.
 
 ```mermaid
 flowchart LR
@@ -176,16 +176,16 @@ class StartupLogger {
 
 ### 1.4 Beans and the Bean Lifecycle
 
-**The problem:** Some work can only happen at a particular moment. A cache can be warmed only after its repository is injected; a pool must be closed before the JVM exits; and a proxy can wrap a bean only once the bean is completely set up.
+**The problem:** Some work can only happen at a particular moment. A cache can be warmed only after its repository is injected; a pool must be closed before the JVM exits; and a proxy must be in place before the bean is handed to anyone, because whoever receives the raw object bypasses it.
 
-**How it works:** So every bean goes through the same fixed sequence, and each stage exists because something needs that exact moment: instantiate; populate dependencies; aware-interface callbacks; `BeanPostProcessor.postProcessBeforeInitialization`; initialisation callbacks (`@PostConstruct`, then `afterPropertiesSet`, then a custom `initMethod`) — the first moment every dependency is guaranteed present; `postProcessAfterInitialization` — where proxies are created, because only now is there a finished object to wrap; and finally hand the bean out.
+**How it works:** So every bean goes through the same fixed sequence, and each stage exists because something needs that exact moment: instantiate; populate dependencies; aware-interface callbacks; `BeanPostProcessor.postProcessBeforeInitialization`; initialisation callbacks (`@PostConstruct`, then `afterPropertiesSet`, then a custom `initMethod`) — the first moment every dependency is guaranteed present; `postProcessAfterInitialization` — where proxies are normally created, because it is the last stop before the bean is handed out, so whatever it returns is what everyone receives; and finally hand the bean out.
 
 ```mermaid
 flowchart TD
     A["instantiate"] --> B["inject dependencies"]
     B --> C["BeanPostProcessor — before init"]
     C --> D["@PostConstruct → afterPropertiesSet → initMethod"]
-    D --> E["BeanPostProcessor — after init (proxy created here)"]
+    D --> E["BeanPostProcessor — after init (proxy usually created here)"]
     E --> F["bean in use"]
     F --> G["@PreDestroy → destroyMethod on shutdown"]
 ```
@@ -210,6 +210,8 @@ public class ConnectionWarmer {
 
 **Destruction is only for singletons:** The container tracks singletons and calls their destroy callbacks on shutdown. Prototype beans are handed out and forgotten — Spring never destroys them, so anything holding a resource must be closed by the code that requested it.
 
+**When the proxy comes early:** The rule is "before anyone receives the bean", not "after initialisation" — the two usually coincide. In a circular dependency they do not: when A and B need each other through fields or setters (1.6), B must receive A while A is still being built. If A is going to be proxied, B must get the proxy rather than the raw object, so Spring creates A's proxy early, through `getEarlyBeanReference`, before A's injection and init callbacks have finished. That works because a proxy only holds a reference to its target: it can exist before the target is finished, as long as nothing calls it until then. Spring Boot has rejected circular references by default since 2.6, so in a Boot application this path appears only when they are re-enabled.
+
 **Advantages:** Deterministic setup and teardown, a standard place for warm-up and cleanup, and lifecycle hooks the framework itself uses consistently.
 
 **Disadvantages:** Work in `@PostConstruct` runs during startup and delays readiness; and lifecycle ordering between beans is only guaranteed through dependency relationships, not declaration order.
@@ -220,9 +222,9 @@ public class ConnectionWarmer {
 
 **Predict it:** Inside its `@PostConstruct` method, a bean calls one of its own `@Transactional` methods. Does a transaction start?
 
-**No.** `@PostConstruct` runs before `postProcessAfterInitialization`, so the proxy does not exist yet — and even later, a call on `this` would bypass it. Initialisation code always runs on the raw object. Work that needs transactions at startup belongs in an `ApplicationReadyEvent` listener calling another bean.
+**No.** `@PostConstruct` runs before `postProcessAfterInitialization`, so normally the proxy does not exist yet — and even when it does, a call on `this` bypasses it. Initialisation code always runs on the raw object. Work that needs transactions at startup belongs in an `ApplicationReadyEvent` listener calling another bean.
 
-**Best intuition:** The lifecycle is a pipeline with labelled stages. The one that matters most is "after initialisation", because that is where your bean may be swapped for a proxy.
+**Best intuition:** The lifecycle is a pipeline with labelled stages. The one that matters most is "after initialisation", because it is the last stop before the bean is handed out — where your bean is normally swapped for a proxy.
 
 **Terminology:** *`@PostConstruct`*, *`InitializingBean`*, *`DisposableBean`*, *graceful shutdown*, *lifecycle callback*.
 
@@ -285,7 +287,7 @@ public class ShopApplication {
 | Fully built on construction | Yes | No | No |
 | Fields can be `final` | Yes | No | No |
 | Usable without the container | Yes | Yes | Only via reflection |
-| Circular dependency | Fails at startup | Tolerated | Tolerated |
+| Circular dependency | Fails at startup | Rejected by default since Boot 2.6 | Rejected by default since Boot 2.6 |
 | Recommended | Yes | For optional deps | No |
 
 **Example:**
@@ -303,7 +305,7 @@ public class OrderService {
 }
 ```
 
-**Circular dependencies:** Two beans requiring each other through constructors cannot both be built first — each needs the other to exist already — so the context fails. Spring Boot 2.6+ rejects them by default rather than resolving them with field injection. The right fix is to extract the shared behaviour into a third bean, not to enable the workaround.
+**Circular dependencies:** Two beans requiring each other through constructors cannot both be built first — each needs the other to exist already — so the context fails, in any version. Setter and field injection *can* break such a cycle — create both objects, then fill in the references — and plain Spring does exactly that. Spring Boot 2.6+ refuses by default (`spring.main.allow-circular-references=false`), so in Boot a cycle fails whichever style it uses. The right fix is to extract the shared behaviour into a third bean, not to enable the workaround.
 
 **Advantages of constructor injection:** Immutability, a compile-time-visible dependency list, no possibility of a half-initialised object, and tests that call the constructor directly.
 
@@ -327,7 +329,7 @@ public class OrderService {
 
 **The problem:** Some beans must be built by code — third-party classes, builder-configured clients, choices made at startup. But `@Bean` methods are ordinary Java methods, so when one calls another, plain Java would build a brand-new object on every call and break the one-instance-per-container rule.
 
-**How it works:** So Spring subclasses every `@Configuration` class with CGLIB and intercepts calls between `@Bean` methods: the first call creates the bean, and every later call returns the container-managed instance. Each `@Bean` method's return value becomes a bean named after the method.
+**How it works:** So Spring subclasses each `@Configuration` class with CGLIB — unless it opts out with `proxyBeanMethods = false` — and intercepts calls between `@Bean` methods: the first call creates the bean, and every later call returns the container-managed instance. Each `@Bean` method's return value becomes a bean named after the method.
 
 **Example:**
 ```java
@@ -351,7 +353,7 @@ public class HttpConfig {
 }
 ```
 
-**`@Configuration` versus `@Component` for bean methods:** In a `@Configuration` class (full mode) inter-method calls are intercepted and return the singleton. In a `@Component` (lite mode) they are plain Java calls, so each call constructs a new object — a subtle source of duplicate connection pools.
+**`@Configuration` versus `@Component` for bean methods:** In a `@Configuration` class (full mode) inter-method calls are intercepted and return the singleton. In a `@Component`, or a `@Configuration(proxyBeanMethods = false)` (lite mode), they are plain Java calls, so each call constructs a new object — a subtle source of duplicate connection pools.
 
 **When to use `@Bean` over `@Component`:** For third-party classes you cannot annotate, for choosing an implementation based on configuration, and for objects that need builder-style construction.
 
@@ -424,7 +426,7 @@ public class RequestContext {
 
 **The problem:** Injection is driven by type, but a type is not always unique — two `PaymentGateway` beans are normal — and a container that guessed would wire the wrong one silently.
 
-**How it works:** So when the type is not enough, Spring uses more information in a fixed order, from most specific to least. First it collects every bean of the type. If the injection point carries a `@Qualifier`, only beans with that qualifier remain — the caller has said exactly what it wants. If several still remain, a `@Primary` bean wins; failing that, a bean whose name matches the parameter name. If nothing narrows it to one, startup fails with `NoUniqueBeanDefinitionException`.
+**How it works:** So when the type is not enough, Spring uses more information in a fixed order, from most specific to least. First it collects every bean of the type. If the injection point carries a `@Qualifier`, only beans with that qualifier remain — the caller has said exactly what it wants. If several still remain, a `@Primary` bean wins; failing that, a bean whose name matches the parameter name; failing that, the highest `@Priority` (rarely used). If nothing narrows it to one, startup fails with `NoUniqueBeanDefinitionException`.
 
 ```mermaid
 flowchart TD
@@ -510,7 +512,7 @@ public class OrderService {
     public void save(Order order) { ... }   // annotation silently does nothing here
 }
 ```
-The fix is to call through an injected reference to another bean, or to move the annotated method into a collaborator. Self-injection and `AopContext.currentProxy()` work but signal a design problem.
+The fix is to call through an injected reference to another bean, or to move the annotated method into a collaborator. Self-injection (through a `@Lazy` reference, since Boot rejects a plain self-reference as a cycle) and `AopContext.currentProxy()` (which needs `exposeProxy = true`) work but signal a design problem.
 
 **AOP vocabulary:** an *aspect* is the concern (transactions), a *join point* is a place it can apply (a method call), a *pointcut* selects join points, and *advice* is the code that runs. Spring AOP only supports method execution join points on Spring-managed beans — it is not full AspectJ.
 
@@ -601,7 +603,7 @@ flowchart TD
 
 | Starter | Brings |
 |---|---|
-| `spring-boot-starter-web` | Spring MVC, Jackson, validation, embedded Tomcat |
+| `spring-boot-starter-web` | Spring MVC, Jackson, embedded Tomcat (renamed `spring-boot-starter-webmvc` in Boot 4) |
 | `spring-boot-starter-data-jpa` | Spring Data JPA, Hibernate, a connection pool |
 | `spring-boot-starter-security` | Spring Security and its filter chain |
 | `spring-boot-starter-validation` | Jakarta Bean Validation (Hibernate Validator) |
@@ -624,7 +626,7 @@ flowchart TD
 </dependencies>
 ```
 
-**Overriding a managed version:** Setting a property such as `<jackson.version>` changes the pinned version across the whole tree. That is the supported mechanism; adding an explicit version to one dependency risks a split where two libraries expect different versions.
+**Overriding a managed version:** Setting a property such as `<jackson-bom.version>` changes the pinned version across the whole tree. That is the supported mechanism; adding an explicit version to one dependency risks a split where two libraries expect different versions.
 
 **Advantages:** No version matrix to maintain, a single upgrade point, and transitive sets that are actually tested together.
 
@@ -636,7 +638,7 @@ flowchart TD
 
 **Predict it:** Your build inherits from the Boot parent. To silence a warning you add an explicit `<version>` to `jackson-databind` alone. What can go wrong, and when do you find out?
 
-**A split version set, found at runtime.** The other Jackson modules stay at Boot's managed version while `jackson-databind` moves, so libraries in one family now expect different APIs. It compiles, then throws `NoSuchMethodError` on the first code path that crosses the mismatch. Setting `<jackson.version>` would have moved the whole family together.
+**A split version set, found at runtime.** The other Jackson modules stay at Boot's managed version while `jackson-databind` moves, so libraries in one family now expect different APIs. It compiles, then throws `NoSuchMethodError` on the first code path that crosses the mismatch. Setting `<jackson-bom.version>` would have moved the whole family together.
 
 **Best intuition:** A starter is a shopping list; the parent POM is the price list that keeps every item compatible.
 
@@ -695,7 +697,7 @@ ObjectMapper objectMapper() {
 
 **Predict it:** You add `spring-boot-starter-security` to the build to use one of its utility classes, and change no code. What happens to your existing endpoints?
 
-**They all start demanding a login.** `@ConditionalOnClass` sees Spring Security on the classpath and nothing defines a `SecurityFilterChain`, so Boot's default applies: every endpoint behind HTTP Basic with a generated password. In Boot, what is on the classpath *is* configuration.
+**They all start demanding a login.** `@ConditionalOnClass` sees Spring Security on the classpath and nothing defines a `SecurityFilterChain`, so Boot's default applies: every endpoint requires authentication — a login form for browsers, HTTP Basic for other clients — against one user with a generated password printed in the log. In Boot, what is on the classpath *is* configuration.
 
 **Best intuition:** Boot asks a long list of yes/no questions about your classpath and configuration, and creates beans for every yes you have not already answered yourself.
 
@@ -732,7 +734,7 @@ ObjectMapper objectMapper() {
 </dependency>
 <dependency>
   <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-starter-undertow</artifactId>
+  <artifactId>spring-boot-starter-jetty</artifactId>
 </dependency>
 ```
 
@@ -766,7 +768,8 @@ ObjectMapper objectMapper() {
 
 ```mermaid
 flowchart TD
-    A["command-line args"] --> B["OS environment variables"]
+    A["command-line args"] --> S["Java system properties (-D)"]
+    S --> B["OS environment variables"]
     B --> C["application-{profile}.yml outside the jar"]
     C --> D["application.yml outside the jar"]
     D --> E["application-{profile}.yml inside the jar"]
@@ -774,13 +777,13 @@ flowchart TD
     F --> G["@PropertySource and defaults"]
 ```
 
-**Relaxed binding:** `spring.datasource.url`, `SPRING_DATASOURCE_URL` and `spring.datasource.URL` all bind to the same property. That is what makes environment-variable configuration in containers practical — the uppercase, underscore-separated form is the canonical environment spelling.
+**Relaxed binding:** `spring.datasource.url` and `SPRING_DATASOURCE_URL` bind to the same property, as do `spring.jpa.open-in-view`, `spring.jpa.openInView` and `SPRING_JPA_OPENINVIEW`. That is what makes environment-variable configuration in containers practical — the uppercase, underscore-separated form is the canonical environment spelling.
 
 **Example:**
 ```bash
 java -jar app.jar --server.port=9090                 # command line wins
 SPRING_DATASOURCE_URL=jdbc:postgresql://db/shop java -jar app.jar
-java -jar app.jar --spring.config.location=/etc/app/  # external config directory
+java -jar app.jar --spring.config.additional-location=/etc/app/  # add an external config directory
 ```
 
 **YAML versus properties:** YAML nests and is easier to read for deep structures; `.properties` is flatter and avoids YAML's indentation and type-coercion surprises. Boot reads both; mixing them in one application is legal and confusing.
@@ -828,7 +831,8 @@ public class GatewayConfig {
 spring:
   jpa:
     open-in-view: false
----
+```
+```yaml
 # application-prod.yml — overrides only what differs
 logging:
   level:
@@ -891,11 +895,11 @@ payment:
 
 **Advantages:** Typed and validated, discoverable, testable by constructing the record directly, and easy to pass into `@Bean` methods.
 
-**Disadvantages:** Binding failures produce verbose messages; and relaxed binding means several spellings map to one property, which can mask a typo in a *similar* property name.
+**Disadvantages:** Binding failures produce verbose messages; and unknown keys are ignored by default, so a misspelt key silently leaves its field at the default — relaxed binding widens what counts as a match but does not catch typos.
 
 > 💡 **Tip:** Add `spring-boot-configuration-processor` to the build. It generates metadata so your IDE auto-completes and documents your own properties exactly like Boot's.
 
-**Common mistake:** A dozen `@Value` fields scattered across services, so no one place lists what the application can be configured with, and a misspelled key fails only when that branch first runs.
+**Common mistake:** A dozen `@Value` fields scattered across services, so no one place lists what the application can be configured with, and nothing checks that the values make sense — only that each key exists and converts.
 
 **Predict it:** `payment.max-retries` is set to `0` by mistake. With the validated record above (`@Min(1)`), when do you find out? With `@Value("${payment.max-retries}") int maxRetries`, when?
 
@@ -927,7 +931,7 @@ com.shop
 
 **Layer packages versus feature packages:** Grouping by layer (`controller`, `service`, `repository`) is familiar and fine for small services. Grouping by feature keeps everything about orders in one package, makes dependencies between features visible, and scales better as the codebase grows.
 
-**Build essentials:** The Spring Boot Maven or Gradle plugin adds `repackage`, producing the executable jar, and `build-image` for container builds. `spring-boot-starter-test` is the only test dependency most projects need.
+**Build essentials:** The Spring Boot Maven or Gradle plugin builds the executable jar (`repackage` in Maven, `bootJar` in Gradle) and container images (`build-image`, `bootBuildImage`). `spring-boot-starter-test` is the only test dependency most projects need.
 
 **Advantages:** Convention means scanning, tests and tooling work with no configuration, and any Spring developer can navigate the project immediately.
 
@@ -951,14 +955,14 @@ com.shop
 
 **The problem:** Some startup work needs the *finished* application — every bean created, the server listening — but constructors and `@PostConstruct` run while the context is still being assembled, when other beans may not exist yet.
 
-**How it works:** So `SpringApplication.run()` performs a fixed sequence and puts the runners at the very end: create the environment, print the banner, create and refresh the context (creating all singletons), start the web server, call every `ApplicationRunner` and `CommandLineRunner`, then publish `ApplicationReadyEvent`.
+**How it works:** So `SpringApplication.run()` performs a fixed sequence and puts the runners at the very end: create the environment, print the banner, create and refresh the context — creating all singletons and, as refresh's last step, starting the web server — call every `ApplicationRunner` and `CommandLineRunner`, then publish `ApplicationReadyEvent`.
 
 ```mermaid
 flowchart TD
     A["SpringApplication.run"] --> B["prepare Environment, apply profiles"]
     B --> C["create context"]
     C --> D["refresh: auto-configuration + all singletons"]
-    D --> E["start embedded server"]
+    D --> E["start embedded server (end of refresh)"]
     E --> F["ApplicationRunner / CommandLineRunner"]
     F --> G["ApplicationReadyEvent"]
 ```
@@ -1008,22 +1012,22 @@ public class SeedData implements ApplicationRunner {
 
 **How it works:** So Boot adds a small launcher that can. The Boot plugin repackages the ordinary jar into an executable one: your classes under `BOOT-INF/classes`, dependencies under `BOOT-INF/lib`, and a `JarLauncher` as the main class. The launcher installs a class loader that reads nested jars, then invokes your `main`.
 
-**Layered jars:** `layertools` (superseded by the `tools` jar mode in Boot 3.3 — see [[#11.1 Containerising the Application]]) splits the jar into `dependencies`, `spring-boot-loader`, `snapshot-dependencies` and `application`. Because dependencies change rarely and application code changes constantly, extracting these into separate container image layers makes most rebuilds push only a few megabytes.
+**Layered jars:** The `tools` jar mode (Boot 3.3+, replacing the older `layertools` — see [[#11.1 Containerising the Application]]) splits the jar into `dependencies`, `spring-boot-loader`, `snapshot-dependencies` and `application`. Because dependencies change rarely and application code changes constantly, extracting these into separate container image layers makes most rebuilds push only a few megabytes.
 
 **Example:**
 ```dockerfile
 FROM eclipse-temurin:21-jre AS builder
 WORKDIR /app
 COPY target/app.jar app.jar
-RUN java -Djarmode=layertools -jar app.jar extract
+RUN java -Djarmode=tools -jar app.jar extract --layers --destination extracted
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-COPY --from=builder /app/dependencies/ ./
-COPY --from=builder /app/spring-boot-loader/ ./
-COPY --from=builder /app/snapshot-dependencies/ ./
-COPY --from=builder /app/application/ ./
-ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]
+COPY --from=builder /app/extracted/dependencies/ ./
+COPY --from=builder /app/extracted/spring-boot-loader/ ./
+COPY --from=builder /app/extracted/snapshot-dependencies/ ./
+COPY --from=builder /app/extracted/application/ ./
+ENTRYPOINT ["java", "-jar", "app.jar"]      # a thin jar that references the extracted libraries
 ```
 
 **Other packaging options:** `bootBuildImage` produces an OCI image with Cloud Native Buildpacks and no Dockerfile. A WAR is still possible for a traditional application server, and GraalVM native images trade build time and some runtime dynamism for sub-second startup.
@@ -1151,7 +1155,7 @@ flowchart TD
 
 **The problem:** With one dispatcher receiving everything, it needs a reliable way to decide which method handles a given request — and two methods that both claim the same request must be caught, not resolved by luck.
 
-**How it works:** So each mapping is registered as a set of conditions, and all of them are compared at startup. `@RequestMapping` and its shortcuts register a mapping of path, method, headers, params and content types. At startup Spring builds a lookup structure; at request time it finds the most specific match, preferring exact paths over patterns.
+**How it works:** So each mapping is registered as a set of conditions, and all of them are compared at startup. `@RequestMapping` and its shortcuts register a mapping of path, method, headers, params and content types. At startup Spring builds a lookup structure and rejects exact duplicates; at request time it finds the most specific match, preferring exact paths over patterns, and treats a tie as an error rather than picking one.
 
 **Example:**
 ```java
@@ -1181,7 +1185,7 @@ public class OrderController {
 
 > ⚠️ **Common misconception:** "Trailing slashes still match." Since Spring 6 trailing-slash matching is off by default; clients sending `/api/orders/` get a 404 unless the behaviour is explicitly restored.
 
-**Common mistake:** Two mappings that can both match one request, producing an ambiguous-mapping error at startup — usually a path variable pattern colliding with a literal path.
+**Common mistake:** Two mappings that match the same requests equally well. Identical mappings fail at startup with an ambiguous-mapping error; two different patterns of equal specificity — `/{id}` and `/{code}` on the same path — pass startup and fail on the first matching request. A literal such as `/orders/search` beside `/orders/{id}` is fine: the literal is more specific and wins.
 
 **Predict it:** After upgrading from Spring Boot 2 to 3, a client calling `GET /api/orders/` — with a trailing slash — starts failing. Nothing in the controller changed. What does it get, and why?
 
@@ -1218,13 +1222,13 @@ record OrderQuery(String customer, Status status, int page, int size) { }
 Page<OrderSummary> list(OrderQuery query) { ... }     // binds from the query string
 ```
 
-**Validation:** `@Valid` or `@Validated` on a parameter triggers Bean Validation before the method body runs, producing `MethodArgumentNotValidException` for bodies and `ConstraintViolationException` for parameters — two different exceptions that must both be handled.
+**Validation:** `@Valid` on a `@RequestBody` triggers Bean Validation before the method body runs and fails with `MethodArgumentNotValidException`. Constraints declared directly on parameters — `@Min(0) int page` — are checked by Spring MVC's built-in method validation (Spring 6.1+), which fails with `HandlerMethodValidationException` and, once it applies, covers the `@Valid` body too. A class-level `@Validated` switches to the older proxy-based validation, which throws `ConstraintViolationException` instead. Several exception types, all of which need handling.
 
 **Advantages:** No manual parsing, declarative defaults and requirements, automatic type conversion, and validation at the boundary.
 
 **Disadvantages:** Binding failures produce framework exceptions whose default messages are unhelpful to API clients; and missing parameter names in the bytecode break binding for records in some build setups.
 
-> 💡 **Tip:** Compile with `-parameters` (the Boot Maven plugin sets this). Without it, parameter-name-based binding fails in the packaged jar while working in the IDE.
+> 💡 **Tip:** Compile with `-parameters` (Boot's parent POM and Gradle plugin set it). Without it, binding by parameter name — `@RequestParam String customer` with no explicit name — fails at runtime, and a build that lacks the flag can fail where the IDE worked.
 
 **Common mistake:** `@RequestParam` without `required = false` or a default, so a missing optional filter returns 400 instead of ignoring the filter.
 
@@ -1297,7 +1301,7 @@ ResponseEntity<OrderResponse> create(@RequestBody @Valid CreateOrderRequest requ
 ```java
 public record OrderResponse(
     Long id,
-    @JsonFormat(shape = STRING, pattern = "yyyy-MM-dd'T'HH:mm:ssXXX") Instant createdAt,
+    @JsonFormat(shape = STRING, pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "UTC") Instant createdAt,
     @JsonProperty("total_amount") BigDecimal total,
     @JsonInclude(NON_NULL) String note
 ) { }
@@ -1452,7 +1456,7 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
 
 **Disadvantages:** Logic hidden from the controller's reader, ordering bugs that are hard to see, and `ThreadLocal`/MDC state that leaks across requests if not cleared.
 
-> ⚠️ **Common misconception:** "A filter can read the request body and the controller will still get it." A body stream can be read once. Wrapping it in `ContentCachingRequestWrapper` is required, and it buffers the whole body in memory.
+> ⚠️ **Common misconception:** "A filter can read the request body and the controller will still get it." A body stream can be read once. Spring's `ContentCachingRequestWrapper` only records what the controller reads, so a filter can inspect the body *after* `chain.doFilter`; reading it beforehand needs a wrapper that buffers the whole body and replays it — all of it held in memory.
 
 **Common mistake:** Populating MDC in a filter without clearing it in a `finally`. Thread pools reuse threads, so the next request logs the previous request's correlation id.
 
@@ -1493,7 +1497,7 @@ Receipt charge(ChargeRequest request) {
 }
 ```
 
-The connect timeout bounds reaching the server; the read timeout bounds waiting for its answer. (Boot 3.3's `ClientHttpRequestFactories` helper is deprecated from 3.4 in favour of `ClientHttpRequestFactoryBuilder`; the plain Spring `JdkClientHttpRequestFactory` above works on every Boot 3 version.)
+The connect timeout bounds reaching the server; the read timeout bounds waiting for its answer. (Boot 3.3's `ClientHttpRequestFactories` helper is deprecated from 3.4 in favour of `ClientHttpRequestFactoryBuilder`; the plain Spring `JdkClientHttpRequestFactory` above works from Boot 3.2, like `RestClient` itself.)
 
 **Declarative clients:**
 ```java
@@ -1637,7 +1641,7 @@ class OrderController {
 
 > 💡 **Tip:** Let the service throw a domain exception for "not found" and translate it centrally. Returning `Optional` to the controller spreads null-handling across every endpoint.
 
-**Common mistake:** `@Transactional` on a controller method. It opens the transaction before validation and mapping, holds a database connection for the whole request, and puts the boundary in the wrong layer.
+**Common mistake:** `@Transactional` on a controller method. It wraps the whole handler — mapping, response building, any remote call — in the transaction, holding a database connection throughout, and puts the boundary in the wrong layer.
 
 **Predict it:** The rule "orders over 10,000 need approval" is an `if` inside the controller. Later, a nightly batch job imports orders by calling `OrderService.place(...)` directly. What happens to large imported orders?
 
@@ -1719,13 +1723,13 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @Modifying
     @Query("update Order o set o.status = :status where o.id = :id")
-    int updateStatus(Long id, Status status);                                  // bulk update
+    int updateStatus(Long id, Status status);       // bulk update — call it inside a transaction
 }
 ```
 
 **Projections:** Returning an interface or record with a subset of fields makes the query select only those columns — the straightforward way to avoid loading whole entities for a list view.
 
-**Where custom logic goes:** A `OrderRepositoryCustom` interface with an implementation class lets you write Criteria API or `EntityManager` code while keeping one injected repository type.
+**Where custom logic goes:** An `OrderRepositoryCustom` interface with an implementation class lets you write Criteria API or `EntityManager` code while keeping one injected repository type.
 
 **Advantages:** No boilerplate implementation, consistent paging and sorting, exception translation, and a seam where a test can substitute a fake.
 
@@ -1836,7 +1840,7 @@ public interface OrderMapper {
 
 **Predict it:** `OrderResponse.total` is renamed to `totalAmount`. What happens with a reflection mapper that copies by field name — and with MapStruct?
 
-**Reflection: `totalAmount` is silently `null` in every response. MapStruct: the build reports the unmapped property.** A reflection mapper looks for matching names at runtime and simply finds none. MapStruct generates the mapping code at compile time, so it notices the missing source — as a warning by default, or a failed build with `unmappedTargetPolicy = ERROR`.
+**Reflection: `totalAmount` is silently `null` in every response. MapStruct: the build reports the unmapped property.** A reflection mapper looks for matching names at runtime and simply finds none. MapStruct generates the mapping code at compile time, so it notices a target property with no source — as a warning by default, or a failed build with `unmappedTargetPolicy = ERROR`.
 
 **Best intuition:** Mapping is where you decide what crosses a boundary. Making it explicit is the point, not an inconvenience.
 
@@ -1876,11 +1880,11 @@ UserResponse create(@RequestBody @Valid CreateUserRequest request) { ... }
 
 **Nested and custom validation:** `@Valid` on a field cascades into nested objects. A custom constraint is an annotation plus a `ConstraintValidator`, which is the right home for rules such as "end date must follow start date".
 
-**Two exception types:** A `@Valid` body failure raises `MethodArgumentNotValidException`; constraints on method parameters raise `ConstraintViolationException`. A global handler must cover both or half your validation errors escape as 500s.
+**Several exception types:** In a controller, a `@Valid` body failure raises `MethodArgumentNotValidException`, and constraints placed directly on parameters raise `HandlerMethodValidationException` (Spring 6.1+). In other `@Validated` beans, violations raise `ConstraintViolationException`. A global handler must map each to 400 — `ConstraintViolationException` in particular reaches the client as a 500 if nothing handles it.
 
 **Advantages:** Declarative, close to the data, reusable across layers, and automatically documented into OpenAPI.
 
-**Disadvantages:** Default messages are developer-oriented; cross-field rules need custom validators; and validation annotations on entities fire at flush time, in the wrong layer, with a confusing exception.
+**Disadvantages:** Default messages are developer-oriented; cross-field rules need custom validators; and validation annotations on entities fire when the entity is persisted or flushed, in the wrong layer, with a confusing exception.
 
 > ⚠️ **Common misconception:** "`@NotNull` is enough for a required string." An empty string and a whitespace-only string both pass. `@NotBlank` is almost always what you meant.
 
@@ -2210,7 +2214,7 @@ GROUP BY c.id, c.name;
 
 **The problem:** Many questions want summaries — counts, totals, averages per group — and computing them in the application means transferring every row just to produce a few numbers.
 
-**How it works:** So the engine summarises next to the data. `GROUP BY` partitions rows into groups; aggregate functions produce one value per group; `HAVING` filters groups after aggregation, whereas `WHERE` filters rows before it. Every selected column must either be grouped or aggregated.
+**How it works:** So the engine summarises next to the data. `GROUP BY` partitions rows into groups; aggregate functions produce one value per group; `HAVING` filters groups after aggregation, whereas `WHERE` filters rows before it. Every selected column must either be grouped or aggregated (PostgreSQL also accepts a column determined by a grouped primary key).
 
 **Example:**
 ```sql
@@ -2238,7 +2242,7 @@ ORDER BY 1;
 
 > 💡 **Tip:** `coalesce(sum(x), 0)` when an empty result should be zero. Reports that show blank instead of zero are usually this.
 
-**Common mistake:** Fetching rows to count them in the application. `count(*)` is one round trip and uses an index; loading ten thousand rows to call `.size()` is not.
+**Common mistake:** Fetching rows to count them in the application. `count(*)` is one round trip that returns one number; loading ten thousand rows to call `.size()` moves all of them.
 
 **Predict it:** A report runs `SELECT sum(total_cents) FROM orders WHERE created_at >= today` on a day with no orders yet. What does it return — and what does the dashboard show?
 
@@ -2279,7 +2283,7 @@ WHERE r.position <= 10;
 
 **`EXISTS` versus `IN`:** `EXISTS` stops at the first match and handles nulls predictably; `IN` with a subquery containing `NULL` can return no rows for `NOT IN`. Prefer `EXISTS` for existence checks.
 
-**Materialisation:** PostgreSQL historically materialised CTEs as an optimisation fence; since version 12 it inlines them unless `MATERIALIZED` is specified. Behaviour differs by engine and version, which matters when a CTE-based query changes performance after an upgrade.
+**Materialisation:** PostgreSQL historically materialised CTEs as an optimisation fence; since version 12 it inlines a side-effect-free CTE that is referenced only once, unless `MATERIALIZED` is specified. Behaviour differs by engine and version, which matters when a CTE-based query changes performance after an upgrade.
 
 **Advantages:** Complex questions expressed in readable steps, recursive CTEs for hierarchies, and intermediate results named rather than repeated.
 
@@ -2332,7 +2336,7 @@ flowchart TD
 
 **Predict it:** There is an index on `(customer_id, status)`. Which of these can use it: `WHERE customer_id = 42`, `WHERE customer_id = 42 AND status = 'OPEN'`, `WHERE status = 'OPEN'`?
 
-**The first two, not the third.** The index is sorted by `customer_id` first and by `status` only *within* each customer — like a phone book sorted by surname, then first name. You can find every "Smith", or "Smith, Anna", but finding every "Anna" still means reading the whole book.
+**The first two; the third cannot use it efficiently.** The index is sorted by `customer_id` first and by `status` only *within* each customer — like a phone book sorted by surname, then first name. You can find every "Smith", or "Smith, Anna", but finding every "Anna" still means reading the whole book. (Some engines — PostgreSQL 18, MySQL 8, Oracle — can *skip-scan* such an index when the leading column has few distinct values: a rescue, not a design.)
 
 **Best intuition:** An index is a sorted copy of some columns. It helps exactly when the query's access pattern matches that sort order.
 
@@ -2452,7 +2456,7 @@ CREATE TABLE order_lines (
 
 **Predict it:** Sign-up checks "is this email taken?" and, if not, inserts the user. Two requests with the same email arrive within the same millisecond, and there is no unique constraint. How many users are created?
 
-**Two.** Both checks run before either insert, so both see "not taken" and both insert. The gap between check and write is unavoidable in application code; a `UNIQUE` constraint makes the second insert fail inside the database, where the check and the write are one step.
+**Possibly two.** If both checks run before either insert, both see "not taken" and both insert. The gap between check and write is unavoidable in application code; a `UNIQUE` constraint makes the second insert fail inside the database, where the check and the write are one step.
 
 **Best intuition:** Constraints are invariants the data keeps about itself, independent of any application.
 
@@ -2474,7 +2478,7 @@ flowchart LR
     D --> E["every environment converges on the same schema"]
 ```
 
-**Expand and contract:** A column rename that must not break a running deployment is three releases: add the new column and write to both; backfill and switch reads; drop the old column. Every zero-downtime schema change follows this shape.
+**Expand and contract:** A column rename that must not break a running deployment takes four releases: add the new column and write to both; backfill and switch reads to it; stop writing the old column; drop it. Stopping and dropping are separate because, during each rollout, the previous release is still running — and it must never meet a schema it cannot use. Every zero-downtime schema change follows this shape.
 
 **Example:**
 ```sql
@@ -2488,7 +2492,7 @@ ALTER TABLE orders ALTER COLUMN reference SET NOT NULL;
 CREATE UNIQUE INDEX CONCURRENTLY idx_orders_reference ON orders (reference);
 ```
 
-**Locking matters:** On PostgreSQL, `ALTER TABLE` takes an exclusive lock; adding an index without `CONCURRENTLY` blocks writes for the duration. On a large table during business hours, that is an outage caused by a migration.
+**Locking matters:** On PostgreSQL, most forms of `ALTER TABLE` take an `ACCESS EXCLUSIVE` lock — often only briefly, but it waits behind long-running transactions and every other query waits behind it. Adding an index without `CONCURRENTLY` blocks writes for the whole build. On a large table during business hours, that is an outage caused by a migration.
 
 **Advantages:** Reproducible schemas across environments, reviewable changes in version control, and a history that explains how the schema reached its current state.
 
@@ -2600,7 +2604,7 @@ public class Order {
 }
 ```
 
-**Requirements Hibernate imposes:** A no-argument constructor (may be `protected`), a non-final class, and non-final persistent fields — because it subclasses entities for lazy proxies. These constraints are why a pure immutable domain model and a JPA entity pull in opposite directions.
+**Requirements JPA imposes:** A no-argument constructor (may be `protected`), a non-final class, and no `final` methods or persistent fields. Hibernate relaxes some of these, but it builds lazy proxies by subclassing the entity, so a `final` class or method quietly loses lazy loading. These constraints are why a pure immutable domain model and a JPA entity pull in opposite directions.
 
 **`EnumType.STRING` versus `ORDINAL`:** Ordinal stores the enum's position, so reordering the Java enum silently reinterprets existing data. Always map enums as `STRING`.
 
@@ -2653,7 +2657,7 @@ private Long id;
 
 > ⚠️ **Common misconception:** "`IDENTITY` and `SEQUENCE` are interchangeable." They differ in when the id exists, which determines whether Hibernate can batch inserts at all. On a bulk-insert path, that is an order-of-magnitude difference.
 
-**Common mistake:** `allocationSize` left at the default of 50 while the database sequence increments by one — a mismatch that produces duplicate keys once two instances run concurrently. Recent Hibernate versions check the increment at startup (`hibernate.id.sequence.increment_size_mismatch_strategy`); keep that check enabled.
+**Common mistake:** `allocationSize` left at the default of 50 while the database sequence increments by one — a mismatch that makes the id ranges Hibernate hands out overlap, producing duplicate keys even from a single instance. Recent Hibernate versions check the increment at startup (`hibernate.id.sequence.increment_size_mismatch_strategy`); keep that check enabled.
 
 **Predict it:** A job saves 10,000 new entities with `hibernate.jdbc.batch_size=50`. How many `INSERT` round trips with `IDENTITY` ids — and with a pooled `SEQUENCE`?
 
@@ -2669,7 +2673,7 @@ private Long id;
 
 **The problem:** The database has one foreign-key column, but a bidirectional object model has two references — the parent's collection and the child's field — and they can disagree. Something has to decide which one the database follows.
 
-**How it works:** So exactly one side is declared the owner, and only that side is read when writing. The **owning side** holds the foreign key and is the only side Hibernate reads when deciding what to write. The inverse side declares `mappedBy` and is, for persistence purposes, read-only. For `@ManyToOne`/`@OneToMany`, the many side always owns.
+**How it works:** So exactly one side is declared the owner, and only that side is read when writing. The **owning side** holds the foreign key and is the only side Hibernate reads when deciding what to write. The inverse side declares `mappedBy` and is, for persistence purposes, read-only. In a bidirectional `@ManyToOne`/`@OneToMany` pair, the many side owns.
 
 ```mermaid
 flowchart LR
@@ -2712,7 +2716,7 @@ public class OrderLine {
 
 **Predict it:** With `Order.lines` mapped `mappedBy = "order"`, code calls only `order.getLines().add(line)` — never `line.setOrder(order)` — then commits. What does `order_lines.order_id` contain?
 
-**Nothing useful: `null`, or no row at all.** The collection is the inverse side, and Hibernate does not read it when writing the foreign key. Only `line.order` — the owning side — determines the column, and it was never set. Hence the helper method that sets both.
+**At best `null` — and with the `NOT NULL` column mapped above, a failed insert.** The collection is the inverse side, and Hibernate does not read it when writing the foreign key. Only `line.order` — the owning side — determines the column, and it was never set. If the cascade inserts the line, it goes in with no `order_id`: rejected here, silently orphaned where the column allows null. Hence the helper method that sets both.
 
 **Best intuition:** The database has one foreign key column. Exactly one side of your object model controls it, and that is the side Hibernate listens to.
 
@@ -2746,19 +2750,19 @@ public void rename(Long id, String name) {
 }                                  // flush at commit issues the UPDATE
 ```
 
-**Scope and `open-in-view`:** Spring Boot historically kept the persistence context open for the whole HTTP request (`spring.jpa.open-in-view=true`), so lazy loading worked during serialisation. It also holds a database connection for the entire request and hides N+1 problems inside the view layer. Set it to `false` and fetch deliberately.
+**Scope and `open-in-view`:** By default Spring Boot keeps the persistence context open for the whole HTTP request (`spring.jpa.open-in-view=true`, with a warning at startup), so lazy loading works during serialisation. It also holds a database connection from the first query to the end of the request, and hides N+1 problems inside the view layer. Set it to `false` and fetch deliberately.
 
 **Advantages:** Repeated reads are free, changes are detected automatically, writes are batched at flush, and object identity is consistent within a transaction.
 
 **Disadvantages:** A long transaction accumulates entities and memory; and entities become detached the moment the context closes, which is where `LazyInitializationException` comes from.
 
-> 💡 **Tip:** Set `spring.jpa.open-in-view=false` in new projects. The warning Boot logs about it is pointing at a real problem: a connection held for the whole request and lazy loads happening during serialisation.
+> 💡 **Tip:** Set `spring.jpa.open-in-view=false` in new projects. The warning Boot logs about it is pointing at a real problem: a connection held until the request ends and lazy loads happening during serialisation.
 
 **Common mistake:** Loading thousands of entities in one transaction for a batch job. They all stay in the context; memory grows until the job fails. Flush and clear in batches, or use a stateless session.
 
 **Predict it:** Inside one `@Transactional` method, `findById(1)` is called twice. How many `SELECT`s run, and does `a == b` hold? Now call it in two separate transactions.
 
-**One query, and `a == b` is true; across two transactions, two queries and `a != b`.** The context maps "Order #1" to a single instance for as long as the transaction lasts, so the second call never reaches the database. A new transaction starts with an empty workspace.
+**One query, and `a == b` is true; across two transactions, two queries and `a != b`.** The context maps "Order #1" to a single instance for as long as the transaction lasts, so the second call never reaches the database. A new transaction starts with an empty workspace — unless `open-in-view` keeps one context across both, in which case it is still one query and the same instance.
 
 **Best intuition:** The persistence context is a transaction-scoped workspace that remembers what it loaded and what it looked like at the time.
 
@@ -2776,7 +2780,7 @@ public void rename(Long id, String name) {
 |---|---|---|
 | Transient | New object, no id, unknown to Hibernate | No |
 | Managed | In a persistence context, tracked | Yes, automatically |
-| Detached | Was managed; the context has closed | No |
+| Detached | Was managed; the context has closed or released it | No |
 | Removed | Scheduled for deletion at flush | — |
 
 ```mermaid
@@ -2812,7 +2816,7 @@ repository.save(order);               // merge: copies state into a managed inst
 
 **Predict it:** A service loads an order in one transaction and returns it. The controller then calls `order.setStatus(CANCELLED)` and returns 200. Is the order cancelled in the database?
 
-**No.** When the transaction ended, the order became detached — nothing is tracking it any more, so the change lives only in memory. The endpoint reports success and changes nothing. Changes must happen inside a transaction, or be merged back.
+**No.** When the transaction ended, nothing was going to write the order any more: it became detached — or, with `open-in-view` on, it stays attached to a context that is never flushed. Either way the change lives only in memory. The endpoint reports success and changes nothing. Changes must happen inside a transaction, or be merged back.
 
 **Best intuition:** Ask "is anyone watching this object?" Managed means yes; everything else means your changes go nowhere unless you say so.
 
@@ -2824,7 +2828,7 @@ repository.save(order);               // merge: copies state into a managed inst
 
 **The problem:** Writing an `UPDATE` by hand for every changed field is tedious and easy to get wrong — yet the information is already there, if someone remembers what the object looked like when it was loaded.
 
-**How it works:** So Hibernate remembers, and works out the updates itself. When an entity is loaded, Hibernate keeps a snapshot of its state. At flush time it compares each managed entity against its snapshot and generates `UPDATE` statements for the differences. Flush happens at commit, before a query that might be affected by pending changes, or on an explicit `flush()`.
+**How it works:** So Hibernate remembers, and works out the updates itself. When an entity is loaded, Hibernate keeps a snapshot of its state. At flush time it compares each managed entity against its snapshot and issues an `UPDATE` for each one that changed — by default writing every column; `@DynamicUpdate` limits it to the changed ones. Flush happens at commit, before a query that might be affected by pending changes, or on an explicit `flush()`.
 
 **Example:**
 ```java
@@ -2833,7 +2837,7 @@ public void applyDiscount(Long id, int percent) {
     var order = repository.findById(id).orElseThrow();
     order.setTotalCents(order.getTotalCents() * (100 - percent) / 100);
     // no save(), no update statement written by you
-}   // flush at commit: UPDATE orders SET total_cents = ? WHERE id = ?
+}   // flush at commit: UPDATE orders SET ... WHERE id = ?
 ```
 
 **Write-behind:** Statements are not sent as you make changes; they are accumulated and ordered at flush. That allows batching (`hibernate.jdbc.batch_size`) and is why the SQL log shows everything happening at the end of the method rather than where the code changed the field.
@@ -2864,7 +2868,7 @@ public void applyDiscount(Long id, int percent) {
 
 **The problem:** Entities are connected in a graph, and following every reference on load would pull in far more data than any use case needs — but not following them means the data must be fetched later, when someone asks.
 
-**How it works:** So unloaded associations are replaced by stand-ins that fetch on first touch. A lazy association is represented by a proxy — a generated subclass that holds only the id. Touching any other property triggers a query. Eager associations are fetched with their owner, usually by a join or a second query at load time.
+**How it works:** So unloaded associations are replaced by stand-ins that fetch on first touch. A lazy to-one association is represented by a proxy — a generated subclass that holds only the id — and a lazy collection by a Hibernate collection wrapper. Touching anything beyond the id triggers a query. Eager associations are fetched with their owner, usually by a join or a second query at load time.
 
 | Association | Default | Recommended |
 |---|---|---|
@@ -2886,7 +2890,7 @@ private Customer customer;
 
 **Advantages of lazy:** Only what you use is loaded, and object graphs do not pull in the whole database.
 
-**Disadvantages:** Access outside a transaction fails; lazy loading inside loops produces N+1; and proxies break `instanceof`, `getClass()` and naive `equals` implementations.
+**Disadvantages:** Access outside a transaction fails; lazy loading inside loops produces N+1; and proxies break `getClass()` comparisons, `instanceof` checks against subtypes, and naive `equals` implementations.
 
 > ⚠️ **Common misconception:** "Eager fetching avoids the N+1 problem." It can make it worse: eager associations are fetched for every entity in a result set, including the ones you never touch, and nested eager mappings multiply.
 
@@ -2997,11 +3001,11 @@ List<Order> search(String q);
 
 > 💡 **Tip:** Use constructor expressions (`select new ...Dto(...)`) or interface projections for read models. Loading full entities to return three fields is the most common avoidable cost in a read endpoint.
 
-**Common mistake:** Bulk `@Modifying` updates in the same transaction as loaded entities, leaving the persistence context holding stale objects that are then written back over the bulk change.
+**Common mistake:** Bulk `@Modifying` updates in the same transaction as loaded entities, leaving the persistence context holding stale objects — and any later change to one of them writes its stale values back over the bulk change, because Hibernate's default `UPDATE` sets every column.
 
-**Predict it:** In one transaction, an order is loaded and its status changed in memory; then `@Modifying @Query("update Order o set o.status = 'ARCHIVED' where ...")` archives it in bulk. At commit, what is the status in the database?
+**Predict it:** In one transaction, an `OPEN` order is loaded; then `@Modifying @Query("update Order o set o.status = 'ARCHIVED' where ...")` archives it in bulk; then the code sets the loaded order's `note`. At commit, what is the status in the database?
 
-**The in-memory status — the bulk update is overwritten.** The bulk query writes straight to the database and bypasses the persistence context, which still holds the loaded order. At commit, dirty checking flushes that stale entity over the bulk change. `clearAutomatically = true`, or a separate transaction, prevents it.
+**`OPEN` — the bulk update is overwritten.** The bulk query writes straight to the database and bypasses the persistence context, which still holds the order as it was loaded. Setting `note` makes that stale entity dirty, and Hibernate's default `UPDATE` writes every column — including the old status. `clearAutomatically = true`, or a separate transaction, prevents it.
 
 **Best intuition:** Write the query you want in SQL first, then decide which JPA mechanism expresses it most clearly.
 
@@ -3013,7 +3017,7 @@ List<Order> search(String q);
 
 **The problem:** Some rows are read over and over — within one transaction, and across many — and each re-read repeats work whose answer has not changed. But a cache shared across transactions can serve data that changed underneath it.
 
-**How it works:** So there are two caches with very different risks. The **first-level cache** is the persistence context — mandatory, per transaction, guaranteeing one instance per row. The **second-level cache** is optional, shared across transactions in the same JVM (or distributed), and caches entity state by id. The **query cache** caches query results and requires the second-level cache.
+**How it works:** So there are two caches with very different risks. The **first-level cache** is the persistence context — mandatory, per context (normally one transaction), guaranteeing one instance per row. The **second-level cache** is optional, shared across transactions in the same JVM (or distributed), and caches entity state by id. The **query cache** caches query results and requires the second-level cache.
 
 ```mermaid
 flowchart TD
@@ -3034,7 +3038,7 @@ flowchart TD
 public class Country { }
 ```
 
-**Invalidation is the hard part:** Hibernate invalidates entries it writes itself. Changes made by another application, a migration, or a native bulk update are invisible to it, so the cache serves stale data until eviction.
+**Invalidation is the hard part:** Hibernate invalidates entries it writes itself. Changes made by another application or a migration are invisible to it, so the cache serves stale data until eviction. (A native update run *through* Hibernate is the opposite extreme: unable to tell which entities the SQL touched, Hibernate evicts every cached region.)
 
 **Advantages:** Dramatically fewer queries for hot reference data, and the first-level cache makes repeated reads within a transaction free without any configuration.
 
@@ -3148,7 +3152,7 @@ public class OrderService {
 }
 ```
 
-**`readOnly = true`:** It tells Hibernate to skip dirty-check snapshots and lets some drivers and routers send the query to a replica. It does not prevent writes at the database level — it is a hint, not a guarantee.
+**`readOnly = true`:** It tells Hibernate to skip dirty-check snapshots and marks the JDBC connection read-only, which lets some drivers and routers send the query to a replica. Whether the database then rejects writes depends on the driver — PostgreSQL's turns it into a read-only transaction, others treat it as a hint — so use it as an optimisation and a statement of intent, not as access control.
 
 **Where it must not go:** Private methods (the proxy cannot intercept them), controllers (the boundary belongs to the service) and repository methods for multi-step operations (each would commit independently).
 
@@ -3158,7 +3162,7 @@ public class OrderService {
 
 > ⚠️ **Common misconception:** "`@Transactional` on any method works." It works when the call arrives through the proxy, from another bean, on a method the proxy can override — not `private`, `static` or `final`. Internal calls are not advised — see [[#1.10 Proxies and AOP]].
 
-**Common mistake:** `@Transactional` on a controller method, which opens the transaction before validation and mapping and holds a connection for serialisation too.
+**Common mistake:** `@Transactional` on a controller method, which stretches the transaction over mapping, response building and any remote call the controller makes — holding a connection throughout.
 
 **Predict it:** A service method `importAll()` — not transactional itself — loops over 100 records calling `this.importOne(record)`, which is annotated `@Transactional`. Record 50 fails halfway. What has been committed?
 
@@ -3202,15 +3206,15 @@ public void recordAudit(AuditEvent event) {
 }
 ```
 
-**The `REQUIRED` rollback trap:** With the default, an inner method that catches an exception does not prevent the rollback: the transaction is already marked rollback-only, and the outer commit then fails with `UnexpectedRollbackException`. "I caught the exception" does not undo the mark.
+**The `REQUIRED` rollback trap:** Once a `RuntimeException` crosses *any* transactional proxy taking part in the shared transaction — the inner service method, or a repository method it calls — the transaction is marked rollback-only. Catching the exception afterwards, at any level, does not undo the mark, and the outer commit fails with `UnexpectedRollbackException`.
 
-**`REQUIRES_NEW` costs a connection:** The outer transaction is suspended but still holds its connection, so the inner one needs a second. Nested `REQUIRES_NEW` in a loop can exhaust the pool quickly.
+**`REQUIRES_NEW` costs a connection:** The outer transaction is suspended but still holds its connection, so the inner one needs a second. Under concurrency that can deadlock the pool: when every connection is held by an outer transaction waiting for a second one, none can ever be granted.
 
 **Advantages:** Composable transactional methods, independent commits for audit and logging, and savepoints for partial rollback with `NESTED`.
 
 **Disadvantages:** Subtle interactions that are hard to reason about, extra connections for `REQUIRES_NEW`, and `NESTED` support depending on the driver and transaction manager.
 
-> ⚠️ **Common misconception:** "Catching an exception in an inner `REQUIRED` method prevents rollback." The transaction is already marked rollback-only; the outer commit will fail.
+> ⚠️ **Common misconception:** "Catching the exception prevents the rollback." Only if it never crossed a transactional proxy. Once it has — leaving the inner method, or a repository call inside it — the transaction is marked rollback-only and the outer commit will fail.
 
 **Common mistake:** Using `REQUIRES_NEW` to "isolate" a step without realising it takes a second connection from the same pool — then deadlocking under load when the pool is exhausted.
 
@@ -3273,7 +3277,7 @@ public Report build(Long id) {
 
 **The problem:** When a method fails, the framework must decide whether the work done so far is invalid — and not every exception means that. Some signal an expected business outcome that the caller is meant to handle.
 
-**How it works:** So Spring follows the EJB convention for telling them apart: unchecked exceptions are unexpected failures, checked exceptions are anticipated outcomes. Spring's default rolls back on `RuntimeException` and `Error`, and commits on checked exceptions. The rule is configurable per method with `rollbackFor` and `noRollbackFor`.
+**How it works:** So Spring follows the EJB convention for telling them apart: unchecked exceptions are unexpected failures, checked exceptions are anticipated outcomes. Spring's default rolls back on `RuntimeException` and `Error`, and commits on checked exceptions. The rule is configurable per method with `rollbackFor` and `noRollbackFor` — and, since Spring Framework 6.2, globally with `@EnableTransactionManagement(rollbackOn = ALL_EXCEPTIONS)`.
 
 **Example:**
 ```java
@@ -3289,9 +3293,9 @@ public void risky() throws IOException {
 public void safer() throws IOException { ... }
 ```
 
-**Marking rollback-only:** Code can call `TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()` to doom a transaction without throwing. The commit then fails with `UnexpectedRollbackException`, which surprises callers expecting success.
+**Marking rollback-only:** Code can call `TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()` to doom a transaction without throwing. In the method that started the transaction, the commit then quietly becomes a rollback; in an inner method that merely joined it, the outer commit fails with `UnexpectedRollbackException`, which surprises callers expecting success.
 
-**Catching inside the transaction:** Catching an exception and continuing leaves the transaction intact only if the exception never reached the interceptor. If an inner `REQUIRED` method already triggered a rollback mark, catching it afterwards does not help.
+**Catching inside the transaction:** Catching an exception and continuing leaves the transaction intact only if the exception never crossed a transactional proxy — a repository's included. If an inner `REQUIRED` method already triggered a rollback mark, catching it afterwards does not help.
 
 **Advantages:** Sensible behaviour for the common case, with per-method control when the default is wrong.
 
@@ -3345,7 +3349,7 @@ class OrderWriter {
 
 The transactional step lives in a separate bean on purpose: called as `this.persist(...)`, it would bypass the proxy and run with no transaction at all — see [[#1.10 Proxies and AOP]]. `TransactionTemplate` is the programmatic alternative when only a block needs wrapping.
 
-**Read-only transactions:** Marking query methods `@Transactional(readOnly = true)` avoids dirty-check overhead and documents intent. For a single query, Spring Data already runs it in its own transaction, so the annotation adds little beyond clarity.
+**Read-only transactions:** Marking query methods `@Transactional(readOnly = true)` avoids dirty-check overhead and documents intent. For a single inherited CRUD call such as `findById`, Spring Data already runs it in its own read-only transaction, so the annotation adds little beyond clarity; declared query methods (`findByStatus`, `@Query`) get no transaction of their own by default.
 
 **Advantages:** Explicit atomicity, short lock windows, predictable connection usage, and a clear place to reason about consistency.
 
@@ -3438,7 +3442,7 @@ public void reserve(String sku, int quantity) {
 
 **When it is the right choice:** High contention on a single row where retrying is expensive or unfair — stock for a popular item, seat allocation, a counter incremented by many writers. Queueing beats repeatedly colliding and retrying.
 
-**Lock timeouts:** Always set one (`jakarta.persistence.lock.timeout` or the engine's own). Without a timeout, a blocked transaction waits indefinitely and holds its own connection and locks while doing so — the ingredients for a cascade.
+**Lock timeouts:** Always set one — `jakarta.persistence.lock.timeout` where the dialect honours it, or the engine's own setting, such as PostgreSQL's `lock_timeout`. Without a timeout, a blocked transaction waits indefinitely and holds its own connection and locks while doing so — the ingredients for a cascade.
 
 **Deadlocks:** Two transactions locking the same rows in opposite orders deadlock; the database detects it and kills one. Consistent lock ordering is the prevention, and the application must be ready to retry the victim.
 
@@ -3537,9 +3541,9 @@ public void place(Order order) {
 
 **Common mistake:** Publishing an event before the transaction commits, so consumers act on a change that is subsequently rolled back. `@TransactionalEventListener(AFTER_COMMIT)` or the outbox pattern avoids it.
 
-**Predict it:** A method saves an order, commits, then publishes `OrderPlaced` to Kafka — and Kafka is unreachable for that one second. What happens to the event? And with the outbox pattern instead?
+**Predict it:** A method saves an order, commits, then publishes `OrderPlaced` to Kafka — and the process is killed right after the commit, before the send completes. What happens to the event? And with the outbox pattern instead?
 
-**Direct publishing: the event is lost for good. Outbox: it is merely delayed.** With the outbox, the event was written to a table in the same transaction as the order, so it exists as soon as the order does, and the relay keeps trying until Kafka is back. The price is that consumers may see it twice and must be idempotent.
+**Direct publishing: the event is lost for good. Outbox: it is merely delayed.** Directly, the only record that an event should exist was in the dead process's memory. With the outbox, the event was written to a table in the same transaction as the order, so it exists as soon as the order does, and the relay sends it once a process is running again. The price is that consumers may see it twice and must be idempotent.
 
 **Best intuition:** One database transaction is the only atomicity you get cheaply. Everything beyond it is a design problem, not a configuration setting.
 
@@ -3851,7 +3855,7 @@ http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATEL
 
 **The problem:** A stateless token must prove two things to any server that receives it — who the user is, and that the token came from a trusted issuer unchanged — without that server calling anyone to check.
 
-**How it works:** So the claims are signed. A JWT has three base64url parts: a header naming the algorithm, a payload of claims, and a signature over both. Verification recomputes the signature with the issuer's key and then checks the claims — expiry (`exp`), issuer (`iss`), audience (`aud`), not-before (`nbf`).
+**How it works:** So the claims are signed. A JWT has three base64url parts: a header naming the algorithm, a payload of claims, and a signature over both. Verification checks the signature with the issuer's key and then checks the claims — expiry (`exp`), issuer (`iss`), audience (`aud`), not-before (`nbf`).
 
 ```mermaid
 flowchart LR
@@ -3896,7 +3900,7 @@ public String issue(UserDetails user) {
 
 **Predict it:** A user decodes their own JWT, changes `"roles": ["USER"]` to `["ADMIN"]`, re-encodes it and sends it. What happens?
 
-**It is rejected.** The signature was computed over the original header and payload; change one byte of the payload and the recomputed signature no longer matches — and without the private key the user cannot produce a valid new one. Anyone can *read* a JWT; nobody can *change* it undetected.
+**It is rejected.** The signature was computed over the original header and payload; change one byte of the payload and the signature no longer verifies — and without the signing key the user cannot produce a valid new one. Anyone can *read* a JWT; nobody can *change* it undetected.
 
 **Best intuition:** A JWT is a signed postcard: anyone can read it, nobody can alter it undetected.
 
@@ -3949,7 +3953,7 @@ JwtAuthenticationConverter jwtAuthenticationConverter() {
 
 **The problem:** URL rules protect entry points, but one operation can be reached through several — another endpoint, a scheduled job, a message consumer — and some rules depend on the data itself, such as "only the order's owner", which no URL pattern can express.
 
-**How it works:** So the rule is attached to the method that performs the operation. `@EnableMethodSecurity` (Spring Security 6, replacing `@EnableGlobalMethodSecurity`) registers interceptors for `@PreAuthorize`, `@PostAuthorize`, `@PreFilter` and `@PostFilter`. They are AOP proxies, so they share every proxy limitation — including self-invocation.
+**How it works:** So the rule is attached to the method that performs the operation. `@EnableMethodSecurity` (added in Spring Security 5.6 and the standard in 6, replacing the deprecated `@EnableGlobalMethodSecurity`) registers interceptors for `@PreAuthorize`, `@PostAuthorize`, `@PreFilter` and `@PostFilter`. They are AOP proxies, so they share every proxy limitation — including self-invocation.
 
 **Example — ownership checks:**
 ```java
@@ -4084,9 +4088,9 @@ CorsConfigurationSource corsConfigurationSource() {
 
 **Common mistake:** `allowedOrigins("*")` combined with credentials, or reflecting the request's `Origin` header back unchecked — which lets any website make authenticated calls through the user's browser.
 
-**Predict it:** Your API uses session cookies marked `SameSite=None` and has CSRF disabled. A logged-in user visits `evil.example`, whose page auto-submits a form that POSTs to `/api/account/email`. CORS allows only your own origin. Is the email changed?
+**Predict it:** Your API uses session cookies marked `SameSite=None` and has CSRF disabled. A logged-in user visits `evil.example`, whose page auto-submits a form that POSTs to `/api/account/email`, an endpoint that accepts form data. CORS allows only your own origin. Is the email changed?
 
-**Yes.** The browser sends the POST with the user's cookie regardless of CORS — CORS only stops `evil.example` from *reading* the response, and the attacker does not need to read it. Only a CSRF token, or `SameSite=Lax`/`Strict` cookies (which browsers now default to), would have stopped the write.
+**Yes.** The browser sends the POST with the user's cookie regardless of CORS — CORS only stops `evil.example` from *reading* the response, and the attacker does not need to read it. Only a CSRF token, or `SameSite=Lax`/`Strict` cookies (Chrome applies `Lax` when a cookie sets no attribute; not every browser does), would have stopped the write.
 
 **Best intuition:** CORS decides which websites may read your answers; CSRF protection decides whether a request genuinely came from your own pages.
 
@@ -4190,7 +4194,7 @@ class OrderTest {
 
 **Predict it:** A test passes when run alone but fails when the whole suite runs. What is the most likely cause?
 
-**State shared between tests.** JUnit creates a fresh test instance per method, but `static` fields, singletons, the system clock and databases are shared — so one test's leftovers change another's starting point, and the run order is deliberately unspecified. Reliable unit tests own everything they depend on.
+**State shared between tests.** JUnit creates a fresh test instance per method, but `static` fields, singletons, the system clock and databases are shared — so one test's leftovers change another's starting point, and the run order is deterministic but deliberately non-obvious. Reliable unit tests own everything they depend on.
 
 **Best intuition:** A unit test is a precise, cheap experiment on one class. If it needs a framework to run, it is not a unit test.
 
@@ -4202,7 +4206,7 @@ class OrderTest {
 
 **The problem:** The class under test calls collaborators — a repository, a payment client — and using real ones drags in a database and a network, making the test slow, unpredictable, and unable to produce failures on demand.
 
-**How it works:** So collaborators are replaced by programmable stand-ins. Mockito generates a subclass or proxy of a type whose methods return defaults (null, zero, empty) until stubbed. It records every call, so tests can verify interactions afterwards.
+**How it works:** So collaborators are replaced by programmable stand-ins. Mockito creates a stand-in for a type — since Mockito 5 by instrumenting the class inline rather than subclassing it — whose methods return defaults (null, zero, empty) until stubbed. It records every call, so tests can verify interactions afterwards.
 
 **Example:**
 ```java
@@ -4582,7 +4586,7 @@ class PaymentClientTest {
     void timesOutOnASlowProvider() {
         stubFor(post("/charges").willReturn(aResponse().withFixedDelay(6_000)));
         assertThatThrownBy(() -> client.charge(ChargeFixtures.any()))
-            .hasRootCauseInstanceOf(SocketTimeoutException.class);
+            .isInstanceOf(ResourceAccessException.class);    // RestClient wraps the timeout; the root cause depends on the HTTP library
     }
 }
 ```
@@ -4749,20 +4753,20 @@ public class ProductService {
 RedisCacheManager cacheManager(RedisConnectionFactory factory) {
     var json = RedisSerializationContext.SerializationPair
         .fromSerializer(new GenericJackson2JsonRedisSerializer());
+    var defaults = RedisCacheConfiguration.defaultCacheConfig()
+        .entryTtl(Duration.ofMinutes(10))
+        .serializeValuesWith(json)
+        .disableCachingNullValues();
     return RedisCacheManager.builder(factory)
-        .cacheDefaults(RedisCacheConfiguration.defaultCacheConfig()
-            .entryTtl(Duration.ofMinutes(10))
-            .serializeValuesWith(json)
-            .disableCachingNullValues())
-        .withCacheConfiguration("rates",
-            RedisCacheConfiguration.defaultCacheConfig().entryTtl(Duration.ofMinutes(1)))
+        .cacheDefaults(defaults)
+        .withCacheConfiguration("rates", defaults.entryTtl(Duration.ofMinutes(1)))   // derive, or lose the JSON setting
         .build();
 }
 ```
 
 **Serialisation:** Spring's Redis cache defaults to JDK serialisation, which ties stored values to Java class versions and breaks on refactors. JSON serialisation survives class changes and is readable when debugging.
 
-**Memory limits:** With `maxmemory` set, an eviction policy such as `allkeys-lru` removes old keys when memory fills. Without it, Redis can exhaust the host's memory — or reject writes, depending on the policy.
+**Memory limits:** With `maxmemory` set, an eviction policy such as `allkeys-lru` removes old keys when memory fills. Without a limit, Redis can exhaust the host's memory; with a limit but the default `noeviction` policy, it rejects writes once full.
 
 **Advantages:** Sub-millisecond latency, shared state across instances, atomic operations, and versatile data structures beyond plain key-value.
 
@@ -4799,7 +4803,7 @@ flowchart TD
 | Pattern | Read path | Write path | Consistency | Risk |
 |---|---|---|---|---|
 | Cache-aside | App loads on miss | App writes DB, evicts | Eventually consistent | Stale reads in a race |
-| Write-through | Always cached | Cache + DB synchronously | Strong for reads | Slower writes |
+| Write-through | Always cached | Cache + DB synchronously | Fresher reads, still racy | Slower writes |
 | Write-behind | Always cached | Cache now, DB later | Weak | Data loss if the cache fails |
 | Read-through | Cache loads on miss | — | Like cache-aside | Needs a loader in the cache layer |
 
@@ -4835,7 +4839,8 @@ flowchart TD
 
 **Example:**
 ```java
-// Invalidate across instances by publishing an event that each instance consumes
+// Evict once the writing transaction has committed — on this instance only;
+// other instances' in-process caches need a broadcast (see below)
 @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 public void onProductChanged(ProductChanged event) {
     cacheManager.getCache("products").evict(event.productId());
@@ -4921,7 +4926,7 @@ flowchart TD
 
 **Replication and durability:** Each partition has a leader and followers. With `acks=all` and `min.insync.replicas=2`, a write is acknowledged only once at least two replicas have it — surviving the loss of a broker.
 
-**Partitions are the unit of parallelism:** A consumer group can have at most as many active consumers as there are partitions. Partition count is therefore a capacity decision, and increasing it later changes which partition each key maps to.
+**Partitions are the unit of parallelism:** A consumer group can have at most as many active consumers as there are partitions. (Kafka 4's newer *share groups*, built for queue-style consumption, lift that limit; ordinary consumer groups keep it.) Partition count is therefore a capacity decision, and increasing it later changes which partition each key maps to.
 
 **KRaft:** Kafka now manages cluster metadata with its own Raft-based controller quorum. ZooKeeper mode was deprecated and then removed in Kafka 4.0, so new clusters run KRaft only.
 
@@ -5090,7 +5095,7 @@ public void onPaymentReceived(PaymentReceived event) {
 
 ### 10.11 Retries and Dead-Letter Topics
 
-**The problem:** Kafka delivers a partition's records strictly in order, so a record that keeps failing blocks every record behind it — possibly forever — while other failures are only temporary and deserve another try.
+**The problem:** Kafka delivers a partition's records strictly in order, so a record that keeps failing blocks every record behind it for as long as it is retried — while other failures are only temporary and deserve another try. Spring Kafka's default handler gives up after ten attempts and merely logs the record, so without a dead-letter topic a permanent failure is silently dropped.
 
 **How it works:** So failures are split in two: retry the temporary ones in place, and move the permanent ones aside. Spring Kafka's `DefaultErrorHandler` retries a failed record in place with a back-off, then passes it to a recoverer — typically `DeadLetterPublishingRecoverer`, which publishes it to a dead-letter topic (by default `<topic>.DLT`) with failure metadata in headers. `@RetryableTopic` instead provides **non-blocking** retries through dedicated retry topics, so the main partition keeps flowing.
 
@@ -5119,7 +5124,7 @@ DefaultErrorHandler errorHandler(KafkaTemplate<Object, Object> template) {
 
 **Blocking versus non-blocking retries:** In-place retries hold the partition: nothing behind the failing record is processed until retries finish, which preserves order. Retry topics release the partition but break per-key ordering, because the failed record is processed later than its successors.
 
-**Poison pills:** A record that can never be deserialised fails before your listener runs. Without an `ErrorHandlingDeserializer`, the consumer loops on it forever, blocking the partition entirely.
+**Poison pills:** A record that can never be deserialised fails before your listener runs. Without an `ErrorHandlingDeserializer`, the consumer can fail on it at every poll, blocking the partition entirely.
 
 **Advantages:** One bad record cannot halt a partition, transient failures recover automatically, and failed records are preserved for diagnosis and replay.
 
@@ -5389,7 +5394,7 @@ class OrderControllerV2 { ... }   // both delegate to the same service layer
 
 **The problem:** A collection endpoint that returns every row is fine with a hundred rows and an outage with a million — and the table keeps growing while the endpoint's code never changes.
 
-**How it works:** So every collection is returned in bounded pages, cut by the database. Spring Data's web support resolves a `Pageable` from `?page=2&size=20&sort=createdAt,desc`. A repository method accepting `Pageable` adds `LIMIT`/`OFFSET` and `ORDER BY` to its query and, when it returns `Page<T>`, runs a second `count` query for the total.
+**How it works:** So every collection is returned in bounded pages, cut by the database. Spring Data's web support resolves a `Pageable` from `?page=2&size=20&sort=createdAt,desc`. A repository method accepting `Pageable` adds `LIMIT`/`OFFSET` and `ORDER BY` to its query and, when it returns `Page<T>`, runs a second `count` query for the total — skipped only when the page itself reveals it, such as a short first page.
 
 **Return types:**
 
@@ -5863,7 +5868,7 @@ com.shop.orders
 
 > ⚠️ **Common misconception:** "Production-grade means microservices." Most services should start as a well-structured single application. Splitting introduces network failure, distributed data and operational cost that must be justified by real scaling or team needs.
 
-**Common mistake:** Publishing events directly from the service method inside the transaction. If the commit fails, the event is already out; if Kafka fails, the order exists with no event. The outbox — [[#7.10 Distributed Transactions]] — removes the gap.
+**Common mistake:** Publishing events directly from the service method inside the transaction. If the commit fails, the event is already out; if the asynchronous send fails after the commit, the order exists with no event. The outbox — [[#7.10 Distributed Transactions]] — removes the gap.
 
 **Predict it:** The payment provider is down for ten minutes. What happens to customers placing orders in this service?
 
@@ -5966,8 +5971,8 @@ RestClient paymentsClient(RestClient.Builder builder) {
     return builder.baseUrl("http://payments").requestFactory(factory).build();
 }
 
-@CircuitBreaker(name = "payments", fallbackMethod = "paymentUnavailable")
-@Retry(name = "payments")
+@Retry(name = "payments", fallbackMethod = "paymentUnavailable")   // fallback on the outermost layer
+@CircuitBreaker(name = "payments")
 public PaymentResult authorise(PaymentRequest request) {
     return paymentsClient.post().uri("/authorisations")
             .header("Idempotency-Key", request.idempotencyKey())
@@ -5997,7 +6002,7 @@ resilience4j:
           - org.springframework.web.client.ResourceAccessException
 ```
 
-**Ordering matters:** With Resilience4j's default aspect order, `Retry` wraps `CircuitBreaker`, so each retry attempt is recorded by the breaker, and an open breaker fails attempts immediately. Spring Framework 7 also adds `@Retryable` and `@ConcurrencyLimit` to the core framework, which covers simple cases without an extra library.
+**Ordering matters:** With Resilience4j's default aspect order, `Retry` wraps `CircuitBreaker`, so each retry attempt is recorded by the breaker, and an open breaker fails attempts immediately. The fallback belongs on the outermost layer: on the inner `@CircuitBreaker` it would turn every failure into a normal return, and the retry would never fire. Spring Framework 7 also adds `@Retryable` and `@ConcurrencyLimit` to the core framework, which covers simple cases without an extra library.
 
 **Advantages:** Bounded waiting, recovery from transient faults, fast failure during outages, and protection of both the caller's threads and the struggling dependency.
 
@@ -6332,7 +6337,7 @@ public Quote quote(Order order) {
 
 **Predict it:** The SLO is 99.9% of requests succeeding over 30 days. A bad deploy causes 100% errors for 20 minutes. How much of the month's error budget is gone?
 
-**Almost half.** 0.1% of 30 days is about 43 minutes of total failure, and 20 minutes of complete failure spends roughly 46% of it. The team now knows — as a number — how much risk is left for the rest of the month.
+**Almost half.** With steady traffic, 0.1% of 30 days is about 43 minutes of total failure, and 20 minutes of complete failure spends roughly 46% of it. The team now knows — as a number — how much risk is left for the rest of the month.
 
 **Best intuition:** The error budget turns "is it reliable enough?" from an argument into a number.
 

@@ -73,7 +73,7 @@ public class OrderService {                 // a plain class…
 #### Common interview questions
 - "What is the Spring Framework?" (A modular framework built around a dependency-injection container, with modules for web, data, security and messaging layered on it.)
 - "What is the difference between Spring and Spring Boot?" (Spring is the framework; Spring Boot adds auto-configuration, starter dependencies, an embedded server and sensible defaults so an application runs with almost no configuration.)
-- "Why did Spring succeed over EJB?" (Plain Java objects instead of framework base classes, no application server required, and testability without a container.)
+- "Why did Spring succeed over EJB?" (Plain Java objects instead of components implementing framework interfaces, no application server required, and testability without a container.)
 - "What changed in Spring 6 / Boot 3?" (Java 17 baseline, `javax.*` to `jakarta.*` namespace migration, and ahead-of-time processing for native images.)
 
 #### Follow-up questions
@@ -82,7 +82,7 @@ public class OrderService {                 // a plain class…
 - "What are the costs of using Spring?" (Startup time, a large API surface, and behaviour applied through proxies that is not visible in the source.)
 
 #### Edge cases
-- Spring Boot 3 requires Jakarta EE 9+ APIs, so libraries still on `javax.*` fail — the package names they import simply no longer exist at runtime.
+- Spring Boot 3 requires Jakarta EE APIs, so libraries still on the old Java EE packages (`javax.servlet`, `javax.persistence`) fail — the package names they import simply no longer exist at runtime.
 - Your classes do not need the container to exist — you can instantiate and test them directly — because Spring only assembles plain objects rather than requiring you to extend its classes.
 - Native images via GraalVM break some runtime-dynamic patterns, because everything reflective or proxied must be known at build time; those cases need explicit hints.
 
@@ -254,10 +254,10 @@ Startup cost grows with the number of bean definitions and the breadth of compon
 A bean is an object instantiated, assembled and managed by the Spring container, passing through a defined sequence of creation, injection, initialisation, use and destruction.
 
 #### Why it exists
-Because some work is only possible at a specific moment: initialisation needs injected dependencies, proxying needs a finished object, and cleanup must happen before the JVM exits. A fixed sequence of stages gives each of those jobs its moment, in a predictable order.
+Because some work is only possible at a specific moment: initialisation needs injected dependencies, a proxy must be in place before anyone receives the bean, and cleanup must happen before the JVM exits. A fixed sequence of stages gives each of those jobs its moment, in a predictable order.
 
 #### Interview explanation
-List the order — instantiate, inject, aware callbacks, post-process before init, init callbacks, post-process after init, use, destroy — and justify it: init callbacks come after injection because they need the dependencies, and the proxy appears in the "after initialisation" step because only then is there a finished object to wrap. Add that prototype beans are never destroyed by the container.
+List the order — instantiate, inject, aware callbacks, post-process before init, init callbacks, post-process after init, use, destroy — and justify it: init callbacks come after injection because they need the dependencies, and the proxy normally appears in the "after initialisation" step because that is the last stop before the bean is handed out. The real requirement is that the proxy exists before anyone receives the bean, which is why a circular reference forces it earlier. Add that prototype beans are never destroyed by the container.
 
 #### Syntax
 ```java
@@ -283,7 +283,7 @@ public class CacheWarmer {
 #### Common interview questions
 - "What is a Spring bean?" (Any object the container creates, configures and manages.)
 - "Describe the bean lifecycle." (Instantiate, inject dependencies, aware callbacks, `postProcessBeforeInitialization`, `@PostConstruct`/`afterPropertiesSet`/`initMethod`, `postProcessAfterInitialization`, in use, then `@PreDestroy`/`destroyMethod` on shutdown.)
-- "Where does the proxy get created?" (In `postProcessAfterInitialization` — the container swaps your instance for a proxy wrapping it.)
+- "Where does the proxy get created?" (Normally in `postProcessAfterInitialization` — the container swaps your instance for a proxy wrapping it. In a circular reference it is created earlier, through `getEarlyBeanReference`, because the other bean needs a reference before this one is finished.)
 - "Are prototype beans destroyed by Spring?" (No — the container does not track them after handing them out, so cleanup is the caller's responsibility.)
 
 #### Follow-up questions
@@ -293,7 +293,8 @@ public class CacheWarmer {
 
 #### Edge cases
 - `@PostConstruct` runs before the context is fully refreshed, so other beans may not be ready; use `ApplicationReadyEvent` if they must be.
-- `@PostConstruct` runs on the raw object, before the proxy is created, so calling your own `@Transactional` method from it starts no transaction.
+- `@PostConstruct` runs on the raw object — normally before the proxy exists, and `this` is never the proxy anyway — so calling your own `@Transactional` method from it starts no transaction.
+- When circular references are allowed, a post-processor that can only wrap after initialisation breaks them: the other bean already holds the raw object, so Spring fails startup, reporting that the bean "has been injected into other beans [...] in its raw version as part of a circular reference, but has eventually been wrapped". `@Async` is the usual cause, because its post-processor does not take part in early references.
 - Long work in `@PostConstruct` delays startup and the readiness probe, because the context is not ready until every singleton has finished initialising.
 - A bean implementing `DisposableBean` *and* declaring `@PreDestroy` runs both, annotation first.
 
@@ -314,7 +315,7 @@ public class CacheWarmer {
 Bean lifecycle versus application lifecycle events — one is per bean, the other per context.
 
 #### Important facts to remember
-- Proxies are created after initialisation — only a finished object can be wrapped.
+- A proxy must exist before anyone receives the bean — normally that means after initialisation, the last stop, but a circular reference forces it earlier.
 - Prototypes get no destroy callback — the container stops tracking them once handed out.
 - `@PreDestroy` needs an orderly shutdown — a killed JVM runs no code at all.
 
@@ -394,7 +395,7 @@ The three ways Spring supplies collaborators — constructor, setter and field i
 Because *when* a dependency arrives decides whether an object can ever be seen half-built. Mandatory dependencies belong in the constructor, where they exist before the object does; genuinely optional ones can arrive later through setters.
 
 #### Interview explanation
-Argue for constructor injection on three grounds: immutability, a fully initialised object, and testability without reflection. Then mention that a single constructor needs no `@Autowired`, and that constructor cycles fail fast by design in recent Boot versions.
+Argue for constructor injection on three grounds: immutability, a fully initialised object, and testability without reflection. Then mention that a single constructor needs no `@Autowired`, and that cycles fail fast — constructor cycles always, because neither object can be built first, and since Boot 2.6 field and setter cycles too.
 
 #### Syntax
 ```java
@@ -424,7 +425,7 @@ public class CheckoutService {
 - "Which injection type should you use and why?" (Constructor: the object is always fully built, fields can be `final`, dependencies are explicit, and tests can construct it directly.)
 - "Is `@Autowired` required on a constructor?" (Not since Spring 4.3 when the class has exactly one constructor.)
 - "What is wrong with field injection?" (It hides dependencies, prevents `final` fields, and makes the class impossible to instantiate in a plain unit test without reflection.)
-- "What happens with a circular dependency?" (With constructor injection the context fails to start; Spring Boot 2.6+ rejects cycles by default rather than resolving them.)
+- "What happens with a circular dependency?" (With constructor injection the context always fails to start — neither object can be built first. With field or setter injection plain Spring can resolve the cycle, but Spring Boot 2.6+ rejects every cycle by default.)
 
 #### Follow-up questions
 - "How do you fix a circular dependency properly?" (Extract the shared logic into a third bean, or invert one direction with an event — not by enabling the cycle workaround.)
@@ -456,7 +457,7 @@ public class CheckoutService {
 #### Important facts to remember
 - Constructor injection by default — the object is complete the moment it exists.
 - One constructor needs no annotation — there is nothing to choose between.
-- Cycles fail fast in Boot 2.6+ — two objects that each need the other first cannot both be built.
+- Cycles fail fast in Boot 2.6+ — constructor cycles cannot be built at all, and Boot refuses the field and setter workaround by default.
 
 ---
 
@@ -466,10 +467,10 @@ public class CheckoutService {
 `@Configuration` classes declare beans programmatically through `@Bean` methods, which Spring intercepts via a CGLIB subclass so inter-method calls return the managed singleton.
 
 #### Why it exists
-Because scanning only reaches classes you can annotate, and an annotation cannot make decisions. Third-party classes, objects needing builder-style construction, and implementations chosen at startup all need construction written as code — and that code must still yield one managed instance, which is why the class is proxied.
+Because scanning only reaches classes you can annotate, and an annotation cannot hold the code that builds an object. Third-party classes, objects needing builder-style construction, and implementations chosen at startup all need construction written as code — and that code must still yield one managed instance, which is why the class is proxied.
 
 #### Interview explanation
-Start from the tension: `@Bean` methods are plain Java, and plain Java calling a method twice builds two objects. Then contrast full mode (`@Configuration`, proxied, inter-method calls return singletons) with lite mode (`@Component`, plain calls, new objects each time). That distinction is the question behind "why do I have two connection pools?".
+Start from the tension: `@Bean` methods are plain Java, and plain Java calling a method twice builds two objects. Then contrast full mode (`@Configuration`, proxied, inter-method calls return singletons) with lite mode (`@Component` or `@Configuration(proxyBeanMethods = false)`, plain calls, new objects each time). That distinction is the question behind "why do I have two connection pools?".
 
 #### Syntax
 ```java
@@ -512,7 +513,7 @@ public class CacheConfig {
 #### Edge cases
 - `final` `@Configuration` classes cannot be CGLIB-proxied and fail in full mode, because the proxy is a subclass.
 - `@Bean` methods must not be `private` or `final`, because the subclass must override them to intercept the call.
-- A `@Bean` returning an interface type hides the implementation from type-based injection of the concrete class, because the container matches on the declared return type.
+- A `@Bean` returning an interface type can hide the implementation from injection by the concrete class, because until the bean is created the container knows only the declared return type.
 
 #### Common mistakes
 - Using `@Component` for a class with `@Bean` methods and getting duplicate instances.
@@ -596,7 +597,7 @@ public class ReportService {
 |---|---|---|---|
 | Instances | One per container | One per lookup | One per HTTP request |
 | Destroyed by Spring | Yes | No | Yes |
-| Safe for mutable state | No | Yes | Yes |
+| Safe for mutable state | No | Only if never shared | Yes |
 
 #### Frequently confused with
 Spring singleton versus the singleton design pattern.
@@ -653,13 +654,13 @@ public class PaymentRouter {
 
 #### Follow-up questions
 - "Why prefer a custom qualifier annotation?" (It is type-checked and refactor-safe, unlike a string literal.)
-- "Does parameter-name matching always work?" (Only when parameter names are retained in the bytecode — some build configurations strip them.)
+- "Does parameter-name matching always work?" (For constructor and method parameters, only when compiled with `-parameters` — Boot's build plugins set it, a hand-rolled build may not.)
 - "How does this interact with profiles?" (`@Profile` can make only one implementation eligible per environment, removing the ambiguity entirely.)
 
 #### Edge cases
-- Two `@Primary` beans of the same type is itself an error, because a default that is not unique cannot break a tie.
+- Two `@Primary` beans competing for one injection point is itself an error, because a default that is not unique cannot break a tie.
 - Generic types participate in resolution: `Repository<Order>` and `Repository<User>` are distinct injection targets, because Spring matches the full generic type.
-- An empty `List<T>` injection succeeds with no beans, which can silently disable a feature — "all of them" is a valid answer even when there are none.
+- A `List<T>` constructor parameter on a single-constructor class receives an empty list when no beans match, which can silently disable a feature — "all of them" is a valid answer even when there are none. A required `@Autowired` field of the same type fails instead.
 
 #### Common mistakes
 - String qualifiers scattered through the codebase.
@@ -708,6 +709,8 @@ Explain that the annotation is honoured by the proxy, not the method, and then d
 public class OrderService {
     private final OrderService self;                 // works, but a design smell
 
+    OrderService(@Lazy OrderService self) { this.self = self; }   // @Lazy, or Boot rejects the self-reference as a cycle
+
     public void place(Order order) {
         save(order);          // NOT transactional — internal call
         self.save(order);     // transactional — goes through the proxy
@@ -727,7 +730,7 @@ public class OrderService {
 #### Follow-up questions
 - "What are the AOP terms?" (Aspect — the concern; join point — where it can apply; pointcut — which join points; advice — the code that runs.)
 - "What join points does Spring AOP support?" (Method execution on Spring beans only — it is not full AspectJ, which can weave constructors and field access.)
-- "How do you fix self-invocation?" (Move the annotated method to another bean; self-injection or `AopContext.currentProxy()` work but indicate the responsibility is in the wrong class.)
+- "How do you fix self-invocation?" (Move the annotated method to another bean; a `@Lazy` self-reference or `AopContext.currentProxy()` work but indicate the responsibility is in the wrong class.)
 
 #### Edge cases
 - `@Transactional` on a `protected` or package-private method is honoured for CGLIB proxies since Spring Framework 6 — a subclass can override those — but ignored on interface-based JDK proxies, which only see interface methods.
@@ -885,7 +888,7 @@ Start from the failure it prevents — `NoSuchMethodError` from mismatched versi
 #### Example
 ```xml
 <properties>
-  <jackson.version>2.17.2</jackson.version>   <!-- overrides the managed version everywhere -->
+  <jackson-bom.version>2.17.2</jackson-bom.version>   <!-- overrides the managed version everywhere -->
 </properties>
 ```
 
@@ -893,7 +896,7 @@ Start from the failure it prevents — `NoSuchMethodError` from mismatched versi
 - "What is a Spring Boot starter?" (A dependency whose POM pulls in a tested set of libraries for one capability — web, JPA, security — with versions managed centrally.)
 - "How are dependency versions managed?" (By `spring-boot-starter-parent` or by importing the `spring-boot-dependencies` BOM; your build omits versions.)
 - "How do you override a managed version?" (Set the version property Boot defines, so the change applies consistently across the tree.)
-- "How do you swap Tomcat for Undertow?" (Exclude `spring-boot-starter-tomcat` from the web starter and add `spring-boot-starter-undertow`.)
+- "How do you swap Tomcat for Jetty?" (Exclude `spring-boot-starter-tomcat` from the web starter and add `spring-boot-starter-jetty`.)
 
 #### Follow-up questions
 - "What is in `spring-boot-starter-test`?" (JUnit 5, Mockito, AssertJ, Hamcrest, JSONassert, JSONPath and Spring's test support.)
@@ -974,7 +977,7 @@ public class CacheAutoConfiguration {
 
 #### Edge cases
 - An added dependency can enable behaviour silently — security is the usual surprise — because a class appearing on the classpath satisfies `@ConditionalOnClass`.
-- `@ConditionalOnMissingBean` is evaluated in registration order, so two user beans of the same type can still clash.
+- `@ConditionalOnMissingBean` sees only beans registered before it is evaluated — reliable in auto-configuration, which runs after yours, but order-dependent if you use it in your own configuration classes.
 - Excluding an auto-configuration that another one depends on can produce a confusing cascade of missing beans, because the dependent configuration's own conditions still match.
 
 #### Common mistakes
@@ -1037,9 +1040,9 @@ WebServerFactoryCustomizer<TomcatServletWebServerFactory> customizer() {
 
 #### Common interview questions
 - "What is the embedded server and why does it matter?" (The servlet container runs inside the application process, so the jar is self-contained and the runtime is identical everywhere.)
-- "Which servers can Spring Boot embed?" (Tomcat by default, plus Jetty and Undertow for servlet stacks, and Netty for WebFlux.)
+- "Which servers can Spring Boot embed?" (Tomcat by default, plus Jetty — and Undertow on Boot 3.x only — for servlet stacks, and Netty for WebFlux.)
 - "What is the concurrency model?" (Thread per request from a bounded pool — 200 threads by default in Tomcat — so each in-flight request holds a thread for its duration.)
-- "What happens when all threads are busy?" (Requests queue in the connector's accept queue, then connections are refused; latency rises sharply before any error appears.)
+- "What happens when all threads are busy?" (Accepted connections wait for a free thread; past `max-connections` — 8,192 by default — new connections wait in the OS backlog (`accept-count`, 100), and beyond that are refused. Latency rises sharply long before any error appears.)
 
 #### Follow-up questions
 - "How do you deploy as a WAR instead?" (Extend `SpringBootServletInitializer` and set the packaging to `war`; still supported but rarely needed.)
@@ -1058,7 +1061,7 @@ WebServerFactoryCustomizer<TomcatServletWebServerFactory> customizer() {
 
 #### Comparisons
 
-| | Tomcat | Undertow | Netty (WebFlux) |
+| | Tomcat | Undertow (Boot 3.x only) | Netty (WebFlux) |
 |---|---|---|---|
 | Model | Thread per request | Thread per request | Event loop |
 | Memory | Moderate | Lowest | Low |
@@ -1086,13 +1089,13 @@ Property values supplied from files, environment variables, command-line argumen
 Because an artifact rebuilt per environment is not the artifact you tested. Keeping environment-specific values outside the jar lets one build run everywhere — and since values can then come from several places, a fixed precedence order is needed so conflicts resolve predictably.
 
 #### Interview explanation
-Start from the goal — one artifact for every environment — which forces values to come from outside, from several sources. Then give the precedence order from highest to lowest — command line, environment variables, external profile file, external base file, packaged files — and mention relaxed binding, since environment-variable naming is what trips people up in containers.
+Start from the goal — one artifact for every environment — which forces values to come from outside, from several sources. Then give the precedence order from highest to lowest — command line, Java system properties, environment variables, external profile file, external base file, packaged files — and mention relaxed binding, since environment-variable naming is what trips people up in containers.
 
 #### Syntax
 ```bash
 --server.port=9090                     # command-line argument
 SPRING_DATASOURCE_URL=...              # environment variable (relaxed binding)
---spring.config.location=/etc/app/     # external configuration directory
+--spring.config.additional-location=/etc/app/   # add an external configuration directory
 --spring.config.import=optional:configserver:
 ```
 
@@ -1219,10 +1222,10 @@ Profiles as feature flags — different lifetimes and different risks.
 `@ConfigurationProperties` binds a prefixed group of properties onto a typed, optionally validated object, with automatic type conversion.
 
 #### Why it exists
-Because configuration is input typed by humans, and `@Value` injects it as scattered strings with no validation, so a mistake surfaces wherever and whenever it is first used. Binding it once into a validated object moves every such failure to startup, in one place, with the full configuration surface visible in one class.
+Because configuration is input typed by humans, and `@Value` injects it as scattered strings checked only for presence and type, so a value that converts but is wrong — a zero, a negative timeout — is accepted silently and surfaces wherever it is first used. Binding it once into a validated object moves every such failure to startup, in one place, with the full configuration surface visible in one class.
 
 #### Interview explanation
-Frame configuration as input that deserves parsing and validation, then contrast it with `@Value`: one typed object, validated at startup, with IDE metadata, versus individual strings whose typos surface at runtime. Mention constructor/record binding for immutability and `@Validated` for fail-fast behaviour.
+Frame configuration as input that deserves parsing and validation, then contrast it with `@Value`: one typed object, validated at startup, with IDE metadata, versus individual values checked only for presence and type. Mention constructor/record binding for immutability and `@Validated` for fail-fast behaviour.
 
 #### Syntax
 ```java
@@ -1254,7 +1257,7 @@ public class PaymentService {
 - "How do you test a properties class?" (Construct it directly, or use `ApplicationContextRunner` with `withPropertyValues` for binding tests.)
 
 #### Edge cases
-- Relaxed binding means a typo in a *similar* key may bind elsewhere rather than failing, because several spellings legitimately map to one property.
+- Unknown keys are ignored by default, so a misspelt key — `max-retry` for `max-retries` — silently leaves the field at its default; relaxed binding widens what counts as a match but does not catch typos.
 - Mutable setter-bound properties can be changed at runtime by any holder — a reason to prefer records.
 - Nested `Map` and `List` binding has specific syntax rules that differ between YAML and properties.
 
@@ -1327,7 +1330,7 @@ com.shop               ← @SpringBootApplication here
 
 #### Edge cases
 - A main class in `com.shop.app` will not scan `com.shop.order` — a frequent and confusing failure, because the two packages are siblings, not parent and child.
-- Multi-module builds need explicit `@ComponentScan` or auto-configuration to pick up beans from other modules.
+- Beans in other modules are scanned like any others when their packages sit beneath the main class's package; otherwise they need an explicit `@ComponentScan` or an auto-configuration.
 - Package-private beans are scanned fine; visibility affects your code, not Spring.
 
 #### Common mistakes
@@ -1445,7 +1448,7 @@ Start from the obstacle — the JDK cannot load nested jars — then explain the
 ```bash
 mvn clean package
 java -jar target/app.jar --server.port=9090
-java -Djarmode=layertools -jar app.jar list
+java -Djarmode=tools -jar app.jar list-layers
 mvn spring-boot:build-image            # OCI image via buildpacks, no Dockerfile
 ```
 
@@ -1460,13 +1463,13 @@ java -XX:MaxRAMPercentage=75 \
 #### Common interview questions
 - "What is a fat jar?" (An executable jar containing your classes plus all dependencies as nested jars, launched by Boot's `JarLauncher`.)
 - "Why use layered jars?" (They separate slow-changing dependencies from fast-changing application code, so container image layers cache well and rebuilds are small.)
-- "How do you build a container image?" (A Dockerfile using `layertools`, or `bootBuildImage` / `spring-boot:build-image` with Cloud Native Buildpacks.)
+- "How do you build a container image?" (A Dockerfile using the `tools` jar mode — formerly `layertools` — to extract the layers, or `bootBuildImage` / `spring-boot:build-image` with Cloud Native Buildpacks.)
 - "How should the JVM heap be sized in a container?" (With `-XX:MaxRAMPercentage` so the heap derives from the container limit, rather than a fixed `-Xmx` that may exceed it.)
 
 #### Follow-up questions
 - "Can you still produce a WAR?" (Yes — `war` packaging plus `SpringBootServletInitializer`, for deployment to an external container.)
 - "What do native images change?" (Startup drops to milliseconds and memory falls, at the cost of build time and extra configuration for reflection and proxies.)
-- "Why does unzipping the jar and running the classes fail?" (The nested-jar layout requires Boot's class loader; dependencies are not on the normal classpath.)
+- "Why does `java -cp app.jar com.example.App` fail?" (Your classes sit under `BOOT-INF/classes` and the libraries are nested jars that only Boot's launcher can read. Unzipped, the same files run with an ordinary classpath of `BOOT-INF/classes` plus `BOOT-INF/lib/*`.)
 
 #### Edge cases
 - `-Xmx` larger than the container limit leads to OOM kills with no JVM error, because the kernel kills the process before the JVM reaches its own limit.
@@ -1483,7 +1486,7 @@ java -XX:MaxRAMPercentage=75 \
 | | Fat jar | Layered jar | Native image |
 |---|---|---|---|
 | Startup | ~1–3 s | ~1–3 s | ~50 ms |
-| Image rebuild size | Whole jar | Changed layers | Whole image |
+| Image rebuild size | Whole jar | Changed layers | Whole binary |
 | Build complexity | Lowest | Low | Highest |
 
 #### Frequently confused with
@@ -1561,7 +1564,7 @@ ResponseEntity<OrderResponse> create(
 - "When would you choose gRPC or GraphQL instead?" (gRPC for high-throughput internal service-to-service calls with a schema; GraphQL when clients need to shape their own responses and over-fetching is the main problem.)
 
 #### Edge cases
-- `DELETE` on a missing resource is debatable: 404 is informative, 204 preserves idempotency — pick one and document it.
+- `DELETE` on a missing resource is debatable: 404 is informative, 204 makes a retry look identical to the first call. Both are idempotent — idempotency concerns the server's state, not the response code — so pick one and document it.
 - `GET` with a body is not forbidden but is widely unsupported by proxies and clients, because its meaning was never defined — intermediaries may drop it.
 - 201 responses should carry a `Location` header; many APIs omit it and clients then guess the URL.
 
@@ -1635,7 +1638,7 @@ class TenantArgumentResolver implements HandlerMethodArgumentResolver {
 - "What is the difference between WebMvc and WebFlux here?" (WebFlux replaces the servlet stack with a reactive `DispatcherHandler` on an event loop; the annotation model is similar, the threading model is not.)
 
 #### Edge cases
-- Two mappings that match equally produce an ambiguous-mapping error at startup, not at request time, because all mappings are registered and compared when the context starts.
+- Two identical mappings fail at startup with an ambiguous-mapping error; two *different* patterns that match a request equally well — `/{id}` and `/{code}` on one path — pass startup and fail on the first such request, because specificity can only be compared against a real URL.
 - An exception thrown inside a message converter happens after the status is chosen, so the response can be partially written.
 - Filters run for every request, matched or not; interceptors run only around a chosen handler — though in Boot an unmatched path usually falls through to the static-resource handler, so interceptors registered for all paths may still run there.
 
@@ -1671,7 +1674,7 @@ Front controller versus controller.
 `@RestController` classes expose handler methods mapped to HTTP method and path by `@RequestMapping` or its shortcuts, with optional header, parameter and media-type conditions.
 
 #### Why it exists
-Because a single dispatcher needs to know which method handles which request. Declaring the mapping on the method keeps each route visible beside the code it reaches — no separate routing file to drift out of sync — and lets every conflict be detected at startup.
+Because a single dispatcher needs to know which method handles which request. Declaring the mapping on the method keeps each route visible beside the code it reaches — no separate routing file to drift out of sync — and lets duplicate mappings be detected at startup.
 
 #### Interview explanation
 Cover the shortcut annotations, class-level prefixes, and `@RestController` as `@Controller` plus `@ResponseBody`. The current detail worth adding is the Spring 6 trailing-slash change, which breaks clients that previously worked.
@@ -1697,7 +1700,7 @@ OrderResponseV2 getV2(@PathVariable Long id) { ... }     // media-type versionin
 - "What is the difference between `@Controller` and `@RestController`?" (`@RestController` adds `@ResponseBody` to every method, so returns are serialised into the body rather than resolved as views.)
 - "How do you map an HTTP method to a handler?" (`@GetMapping`, `@PostMapping` and the rest, or `@RequestMapping(method = ...)`.)
 - "What changed about trailing slashes?" (Spring 6 no longer matches them by default, so `/orders/` returns 404 unless explicitly configured.)
-- "How do you avoid ambiguous mappings?" (Keep literal paths and path-variable patterns distinct, or add conditions such as `params` or `headers`.)
+- "How do you avoid ambiguous mappings?" (Never declare two mappings with the same path, method and conditions, and avoid two patterns of equal specificity, such as `/{id}` and `/{code}`, on one path. A literal beside a pattern is fine — the literal is more specific and wins.)
 
 #### Follow-up questions
 - "How do you version an API?" (URL path versioning is the most common and most debuggable; media-type versioning is cleaner but harder to inspect.)
@@ -1741,7 +1744,7 @@ Annotation-driven conversion of request parts — path segments, query parameter
 Because a request is text, while handlers want typed, validated values. Declaring on each parameter where its value comes from lets the framework do the cutting, converting and validating once — before business code runs.
 
 #### Interview explanation
-Map each annotation to its source, mention the `ConversionService` for types, and note that validation produces two different exceptions depending on where the constraint sits — a detail that matters when writing a global error handler.
+Map each annotation to its source, mention the `ConversionService` for types, and note that validation produces different exceptions depending on where the constraint sits — `MethodArgumentNotValidException` for a `@Valid` body, `HandlerMethodValidationException` (Spring 6.1+) for constraints on parameters — a detail that matters when writing a global error handler.
 
 #### Syntax
 ```java
@@ -1765,12 +1768,12 @@ Page<OrderSummary> list(@Valid OrderQuery query, Pageable pageable) {
 #### Common interview questions
 - "How do you read a query parameter versus a path variable?" (`@RequestParam` for the query string, `@PathVariable` for a URI template segment.)
 - "How do you validate a request body?" (`@Valid` on the `@RequestBody` parameter, with Bean Validation annotations on the DTO.)
-- "Which exception does a validation failure throw?" (`MethodArgumentNotValidException` for a `@Valid` body; `ConstraintViolationException` for constraints on method parameters.)
+- "Which exception does a validation failure throw?" (`MethodArgumentNotValidException` for a `@Valid` body; `HandlerMethodValidationException` for constraints declared directly on controller parameters, since Spring 6.1 — or `ConstraintViolationException` if the controller carries a class-level `@Validated`.)
 - "How are types converted?" (By the `ConversionService` — enums, numbers and dates work out of the box, and you can register custom converters.)
 
 #### Follow-up questions
 - "How do you bind many query parameters cleanly?" (A plain object or record parameter without `@RequestBody` binds field by field.)
-- "What does `-parameters` have to do with binding?" (Without it, parameter names are absent from the bytecode and name-based binding fails in the packaged jar.)
+- "What does `-parameters` have to do with binding?" (Without it, parameter names are absent from the bytecode, so a `@RequestParam` or `@PathVariable` that relies on the parameter name fails at runtime.)
 - "How do you handle a date format?" (`@DateTimeFormat`, or configure a global format; always state the expected format in the API documentation.)
 
 #### Edge cases
@@ -1781,7 +1784,7 @@ Page<OrderSummary> list(@Valid OrderQuery query, Pageable pageable) {
 #### Common mistakes
 - Required-by-default optional filters.
 - Forgetting `@Valid`, so constraints on the DTO are never checked.
-- Handling only one of the two validation exception types.
+- Handling only one of the validation exception types.
 
 #### Comparisons
 
@@ -1793,7 +1796,7 @@ Page<OrderSummary> list(@Valid OrderQuery query, Pageable pageable) {
 | `@RequestHeader` | Header | Yes |
 
 #### Frequently confused with
-`MethodArgumentNotValidException` versus `ConstraintViolationException`.
+`MethodArgumentNotValidException` versus `HandlerMethodValidationException` — and `ConstraintViolationException`, which comes from proxy-based validation outside the MVC pipeline.
 
 #### Important facts to remember
 - One annotation per request part — it names where the value comes from.
@@ -1843,7 +1846,7 @@ public class OrderNotFoundException extends RuntimeException {
 - "How do you set headers?" (Through `ResponseEntity`, or by injecting `HttpServletResponse` for special cases.)
 
 #### Edge cases
-- Returning `ResponseEntity<Void>` with a body is silently ignored.
+- `@ResponseStatus` on an exception class is ignored when an `@ExceptionHandler` handles that exception — the handler's response wins.
 - A status set after the response has started streaming cannot be changed, because the status line is the first thing written to the wire.
 - 204 responses must not include a body; some clients fail if one is sent.
 
@@ -2078,7 +2081,7 @@ Page<OrderSummary> list(@RequestParam(required = false) Status status,
 Servlet filters wrap the whole dispatch; Spring MVC interceptors wrap handler invocation and know which handler was chosen.
 
 #### Why it exists
-Because some work — correlation ids, logging, authentication, timing — applies to every request, and copying it into each handler guarantees it will be missing somewhere. Filters and interceptors place it around the request instead; the only difference is the layer — around the whole dispatcher, or around your handler.
+Because some work — correlation ids, logging, authentication, timing — applies to every request, and copying it into each handler guarantees it will be missing somewhere. Filters and interceptors place it around the request instead; the essential difference is the layer — around the whole dispatcher, or around your handler.
 
 #### Interview explanation
 Contrast the two by layer and capability, then give the MDC correlation-id filter as the canonical example and flag the cleanup requirement, since thread reuse makes a missing `finally` a real bug.
@@ -2111,12 +2114,12 @@ class WebConfig implements WebMvcConfigurer {
 - "What are the interceptor hooks?" (`preHandle` before the handler, `postHandle` after it, `afterCompletion` after the response — the last one runs even when an exception occurred.)
 
 #### Follow-up questions
-- "How do you log request bodies safely?" (`ContentCachingRequestWrapper` so the body can be read twice — accepting the memory cost and redacting sensitive fields.)
+- "How do you log request bodies safely?" (Wrap the request in `ContentCachingRequestWrapper` and log `getContentAsByteArray()` after `chain.doFilter` — it records what the controller read — accepting the memory cost and redacting sensitive fields.)
 - "How is ordering controlled?" (`@Order` on filters; registration order for interceptors.)
 - "Why can MDC leak between requests?" (Thread pools reuse threads, so values must be cleared in a `finally` block.)
 
 #### Edge cases
-- `postHandle` does not run when the handler throws; `afterCompletion` always does — which is why cleanup belongs in `afterCompletion`.
+- `postHandle` does not run when the handler throws; `afterCompletion` does, provided that interceptor's `preHandle` returned `true` — which is why cleanup belongs in `afterCompletion`.
 - Filters see requests that match no handler — useful for 404 logging.
 - Async requests run the handler on a different thread, so `ThreadLocal`-based context must be propagated explicitly.
 
@@ -2168,12 +2171,12 @@ interface OrderApi { @GetExchange("/{id}") Order get(@PathVariable Long id); }
 ```java
 @Bean
 RestClient inventoryClient(RestClient.Builder builder) {
+    var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+    var factory = new JdkClientHttpRequestFactory(http);
+    factory.setReadTimeout(Duration.ofSeconds(3));
     return builder
         .baseUrl("https://inventory.internal")
-        .requestFactory(ClientHttpRequestFactories.get(
-            ClientHttpRequestFactorySettings.DEFAULTS
-                .withConnectTimeout(Duration.ofSeconds(2))
-                .withReadTimeout(Duration.ofSeconds(3))))
+        .requestFactory(factory)
         .defaultStatusHandler(HttpStatusCode::is5xxServerError,
             (req, res) -> { throw new InventoryUnavailableException(); })
         .build();
@@ -2183,16 +2186,16 @@ RestClient inventoryClient(RestClient.Builder builder) {
 #### Common interview questions
 - "Which HTTP client should you use in Spring today?" (`RestClient` for synchronous code, `WebClient` for reactive; `RestTemplate` is in maintenance mode on Spring Framework 6 and deprecated from Spring Framework 7.)
 - "What must you configure on any HTTP client?" (Connect and read timeouts, error handling, and a shared instance so connections are pooled.)
-- "What happens without a read timeout?" (A thread blocks until the socket gives up — minutes — and under load this exhausts the server's thread pool.)
+- "What happens without a read timeout?" (The thread can block indefinitely — most clients' default read timeout is infinite — and under load this exhausts the server's thread pool.)
 - "What are declarative HTTP interfaces?" (`@HttpExchange` interfaces from which Spring generates a client, analogous to Feign.)
 
 #### Follow-up questions
-- "How do you add retries?" (Spring Retry or Resilience4j around the call, only for idempotent operations, with exponential back-off and a cap.)
+- "How do you add retries?" (Resilience4j, Spring Framework 7's built-in `@Retryable`, or Spring Retry on older versions — only for idempotent operations, with exponential back-off and a cap.)
 - "How do you propagate tracing?" (Micrometer Tracing instruments the clients, forwarding trace headers automatically when the client is a managed bean.)
 - "How do you test an outbound call?" (`MockRestServiceServer` for `RestClient`/`RestTemplate`, or WireMock for a realistic HTTP double.)
 
 #### Edge cases
-- `WebClient.block()` inside a reactive event loop thread can deadlock, because the thread it blocks is the one that would complete the response.
+- Calling `block()` on a reactive event-loop thread is refused — Reactor throws `IllegalStateException` — because blocking the thread that must complete the response would hang it.
 - A client created per request exhausts ephemeral ports under load, because each new client opens new connections instead of reusing pooled ones.
 - Connection-pool limits are a separate bound from timeouts and need sizing too.
 
@@ -2341,7 +2344,7 @@ void cancel(@PathVariable Long id) {
 - "What belongs in a controller?" (Request binding, validation triggering, DTO mapping, calling the service and choosing the status code — nothing else.)
 - "How do you test a controller?" (`@WebMvcTest` with `MockMvc` and a mocked service: it loads only the web layer, so tests are fast and focused.)
 - "How should a controller handle 'not found'?" (Let the service throw a domain exception and translate it centrally in `@RestControllerAdvice`.)
-- "Why not put `@Transactional` on a controller?" (The transaction would span binding and serialisation, holding a connection far longer than the business operation needs.)
+- "Why not put `@Transactional` on a controller?" (The transaction would span everything the handler does — mapping, response building, any remote call — holding a connection far longer than the business operation needs, in the wrong layer.)
 
 #### Follow-up questions
 - "How do you avoid duplicated mapping code?" (Static factories on DTOs or a mapper component, used consistently in one direction per boundary.)
@@ -2349,7 +2352,7 @@ void cancel(@PathVariable Long id) {
 - "Should controllers return `Optional`?" (No — translate absence to a 404 through an exception, so every endpoint behaves the same.)
 
 #### Edge cases
-- Returning an entity from a controller works and is the source of lazy-loading failures during serialisation, because serialisation happens after the service's transaction has closed.
+- Returning an entity from a controller works and is the source of lazy-loading trouble during serialisation — extra queries while `open-in-view` is on, `LazyInitializationException` once it is off — because serialisation happens after the service's transaction has closed.
 - `@WebMvcTest` does not load services or repositories, so collaborators must be mocked.
 - A controller method with no return and no `@ResponseStatus` silently returns 200.
 
@@ -2607,9 +2610,9 @@ record OrderResponse(Long id, String status) {
 
 #### Common interview questions
 - "How do you map between DTOs and entities?" (A static factory on the DTO, a dedicated mapper class, or a compile-time generator such as MapStruct.)
-- "Why avoid reflection-based mappers?" (They match by field name at runtime, so a rename produces silent nulls instead of a compile error — and they are slower.)
+- "Why avoid reflection-based mappers?" (They match by field name at runtime, so a rename produces silent nulls instead of a build-time report — and they are slower.)
 - "Where should mapping happen?" (At the boundary, once per direction: controller maps DTO to command, service works in domain terms.)
-- "What does MapStruct generate?" (Plain Java mapping code at compile time, so it is as fast as hand-written code and fails the build on mismatches.)
+- "What does MapStruct generate?" (Plain Java mapping code at compile time, so it is as fast as hand-written code and reports mismatches at build time — warnings by default, errors with `unmappedTargetPolicy = ERROR`.)
 
 #### Follow-up questions
 - "How do you handle a field that needs computing?" (`@Mapping(expression = ...)` in MapStruct, or a hand-written method where the logic is clearer.)
@@ -2618,7 +2621,7 @@ record OrderResponse(Long id, String status) {
 
 #### Edge cases
 - Bidirectional mapping of cyclic object graphs can recurse infinitely, because each side maps the other.
-- Generated mappers need the annotation processor configured, or they silently produce no implementation.
+- Generated mappers need the annotation processor configured, or no implementation is generated and the failure surfaces only as a missing bean at startup.
 - Mapping collections element by element can hide an N+1 query when the source is lazily loaded.
 
 #### Common mistakes
@@ -2653,7 +2656,7 @@ Jakarta Bean Validation: declarative constraints on fields and parameters, enfor
 Because every input from outside can be missing, too long or malformed, and hand-written checks in each method are repetitive and easy to forget. Declaring constraints on the fields keeps each rule next to the data it describes and enforces all of them before business code runs.
 
 #### Interview explanation
-Distinguish `@NotNull`, `@NotEmpty` and `@NotBlank` precisely — that trio is the most common question — and mention the two different exceptions produced depending on where the constraint sits.
+Distinguish `@NotNull`, `@NotEmpty` and `@NotBlank` precisely — that trio is the most common question — and mention that the exception depends on where the constraint sits — `MethodArgumentNotValidException` for a `@Valid` body, `HandlerMethodValidationException` for constraints on controller parameters.
 
 #### Syntax
 ```java
@@ -2679,22 +2682,22 @@ public @interface ValidSku {
 - "What is the difference between `@NotNull`, `@NotEmpty` and `@NotBlank`?" (`@NotNull` only rejects null; `@NotEmpty` also rejects empty strings and collections; `@NotBlank` additionally rejects whitespace-only strings.)
 - "How do you validate a request body?" (`@Valid` on the `@RequestBody` parameter, with constraints on the DTO.)
 - "How do you write a custom constraint?" (An annotation plus a `ConstraintValidator` implementation; register nothing else — Spring discovers it.)
-- "Which exceptions do validation failures throw?" (`MethodArgumentNotValidException` for `@Valid` bodies, `ConstraintViolationException` for method-parameter constraints.)
+- "Which exceptions do validation failures throw?" (In controllers, `MethodArgumentNotValidException` for `@Valid` bodies and `HandlerMethodValidationException` for constraints on parameters, since Spring 6.1. In other `@Validated` beans, `ConstraintViolationException`.)
 
 #### Follow-up questions
 - "How do you validate nested objects?" (`@Valid` on the field or on the collection's element type, which cascades.)
 - "What are validation groups?" (Named sets of constraints applied selectively — for example different rules on create and update.)
-- "Why not validate on entities?" (Entity constraints fire at flush time, deep inside persistence, producing a confusing error at the wrong layer.)
+- "Why not validate on entities?" (Entity constraints fire when the entity is persisted or flushed, deep inside persistence, producing a confusing error at the wrong layer.)
 
 #### Edge cases
-- `@Valid` on a `List<T>` parameter does not cascade; the element type needs the annotation, because the list object itself has no constrained properties.
+- Before Spring 6.1, `@Valid` on a `@RequestBody List<T>` checked nothing — the list itself has no constrained properties — and the usual workaround was a class-level `@Validated`. Since 6.1, built-in method validation handles `@Valid` on lists and maps and cascades into their elements.
 - Constraint messages are developer-facing by default and often unsuitable for end users.
 - Cross-field rules require a class-level custom constraint, not field annotations, because a field constraint sees only its own field.
 
 #### Common mistakes
 - `@NotNull` where `@NotBlank` was meant.
 - Validation only on entities.
-- Handling just one of the two validation exception types.
+- Handling just one of the validation exception types.
 
 #### Comparisons
 
@@ -2710,7 +2713,7 @@ The `@NotNull` / `@NotEmpty` / `@NotBlank` trio.
 #### Important facts to remember
 - `@NotBlank` for required strings — `@NotNull` accepts empty and whitespace-only values.
 - `@Valid` cascades — into nested objects that carry it.
-- Two exception types to handle — body failures versus parameter failures.
+- Several exception types to handle — body failures versus parameter failures.
 
 ---
 
@@ -2821,9 +2824,9 @@ public void addLine(Product product, int quantity) {
 - "Do you need full DDD?" (No — value objects and invariants in entities deliver most of the benefit without the full method and vocabulary.)
 
 #### Edge cases
-- Equality on entities should be by identity, not by all fields, or collections behave surprisingly after persistence, because the generated id and other fields change after the entity is saved — moving it to a different hash bucket.
+- Entity equality must not depend on values that change: a generated id goes from `null` to a value at persist time, which moves the entity to a different hash bucket in any `HashSet` already holding it. Compare by id only when it is set, with a constant `hashCode`, or use an immutable business key.
 - Hibernate requires a no-argument constructor, which can be `protected` to discourage misuse, because Hibernate instantiates entities reflectively before filling their fields.
-- Lazy proxies break `instanceof` and `getClass()` comparisons, because the object you hold is a generated subclass of the declared type rather than the actual class.
+- Lazy proxies break `getClass()` comparisons — and `instanceof` checks against subtypes, so a proxy for `Animal` is never an instance of `Dog` even when the row is one — because the object you hold is a generated subclass of the declared type, not the actual class.
 
 #### Common mistakes
 - Public setters on every field.
@@ -3183,7 +3186,7 @@ WHERE rn <= 3;
 - "What is the difference between `WHERE` and `HAVING`?" (`WHERE` filters rows before grouping; `HAVING` filters groups after aggregation.)
 - "What is the difference between `count(*)` and `count(column)`?" (`count(*)` counts rows; `count(column)` counts non-null values of that column.)
 - "What are window functions for?" (Computing an aggregate alongside each row — running totals, rankings, per-group sums — without collapsing the result.)
-- "Which columns can appear in a `SELECT` with `GROUP BY`?" (Only grouped columns and aggregates; anything else is an error in standard SQL.)
+- "Which columns can appear in a `SELECT` with `GROUP BY`?" (Grouped columns, aggregates, and — in SQL:1999 and PostgreSQL — columns functionally dependent on a grouped key such as the primary key; anything else is an error.)
 
 #### Follow-up questions
 - "Why is `COUNT(DISTINCT x)` slow?" (It must deduplicate, usually via a sort or hash of all values, rather than counting rows.)
@@ -3193,7 +3196,7 @@ WHERE rn <= 3;
 #### Edge cases
 - `GROUP BY` on a nullable column groups all nulls together as one group — the one place SQL treats nulls as equal.
 - `avg` on integers truncates in some engines and not others — cast explicitly.
-- Filtering with `HAVING` on a non-aggregate works but should have been `WHERE`, and is slower.
+- Filtering with `HAVING` on a non-aggregate works but should have been `WHERE` — and is slower wherever the planner does not move it to `WHERE` itself, as PostgreSQL's does.
 
 #### Common mistakes
 - Counting in application code.
@@ -3255,7 +3258,7 @@ SELECT * FROM tree;
 #### Common interview questions
 - "What is a correlated subquery?" (One that references the outer query's row, so it is logically evaluated per row — often rewritten as a join by the optimiser, but not always.)
 - "`IN` or `EXISTS`?" (`EXISTS` stops at the first match and handles nulls predictably; `NOT IN` with a null in the subquery returns no rows.)
-- "What is a CTE and is it a temporary table?" (A named subquery; whether it is materialised depends on the engine and version — PostgreSQL inlines by default since 12.)
+- "What is a CTE and is it a temporary table?" (A named subquery; whether it is materialised depends on the engine and version — since 12, PostgreSQL inlines a side-effect-free CTE referenced once.)
 - "What is a recursive CTE for?" (Hierarchies and graph traversal — category trees, org charts, bill of materials.)
 
 #### Follow-up questions
@@ -3306,7 +3309,7 @@ Explain B-tree lookup cost, then the leftmost-prefix rule for composite indexes 
 ```sql
 CREATE INDEX idx_orders_customer_status ON orders (customer_id, status);
 CREATE UNIQUE INDEX idx_orders_reference ON orders (reference);
-CREATE INDEX CONCURRENTLY idx_big ON big_table (col);     -- no write lock, PostgreSQL
+CREATE INDEX CONCURRENTLY idx_big ON big_table (col);     -- does not block writes, PostgreSQL
 CREATE INDEX idx_open ON orders (created_at) WHERE status = 'OPEN';   -- partial
 ```
 
@@ -3315,12 +3318,12 @@ CREATE INDEX idx_open ON orders (created_at) WHERE status = 'OPEN';   -- partial
 -- Index (customer_id, status) serves:
 WHERE customer_id = 1                         -- yes, leftmost prefix
 WHERE customer_id = 1 AND status = 'OPEN'     -- yes, both columns
-WHERE status = 'OPEN'                         -- no, status is not leftmost
+WHERE status = 'OPEN'                         -- not efficiently: status is not leftmost
 ```
 
 #### Common interview questions
 - "How does an index speed up a query?" (It is a sorted structure allowing O(log n) lookup instead of an O(n) scan, and it supports range scans and ordering.)
-- "Why does column order matter in a composite index?" (Leftmost-prefix: the index is sorted by the first column, then the second, so a predicate on a later column alone cannot use it.)
+- "Why does column order matter in a composite index?" (Leftmost-prefix: the index is sorted by the first column, then the second, so a predicate on a later column alone cannot use it efficiently — some engines can skip-scan when the first column has few distinct values.)
 - "What does an index cost?" (Storage, plus maintenance on every insert, update and delete touching the indexed columns.)
 - "What is a covering index?" (One containing every column the query needs, allowing an index-only scan with no table access.)
 
@@ -3331,7 +3334,7 @@ WHERE status = 'OPEN'                         -- no, status is not leftmost
 
 #### Edge cases
 - An index on a low-cardinality column (a two-value status) is often useless alone, because it narrows the search only to half the table, but valuable as part of a composite.
-- Adding an index blocks writes to the table unless created `CONCURRENTLY`, because the build needs a stable snapshot of the table.
+- On PostgreSQL, adding an index blocks writes to the table unless created `CONCURRENTLY`, because the build needs a stable snapshot of the table.
 - Over-indexing degrades write throughput and bloats storage, especially on write-heavy tables.
 
 #### Common mistakes
@@ -3397,7 +3400,7 @@ Seq Scan on orders  (cost=0.00..21000.00 rows=1 width=64)
 #### Follow-up questions
 - "How are statistics maintained?" (Autovacuum and `ANALYZE` sample the data; bulk loads should be followed by an explicit analyse.)
 - "What does `BUFFERS` add?" (Pages read from cache versus disk — the difference between a slow query and a slow disk.)
-- "Can you force a plan?" (PostgreSQL deliberately offers no hints; you influence plans through indexes, statistics and query shape.)
+- "Can you force a plan?" (Core PostgreSQL deliberately offers no hints — the `pg_hint_plan` extension exists — so you influence plans through indexes, statistics and query shape.)
 
 #### Edge cases
 - `EXPLAIN ANALYZE` actually executes the query, including writes — wrap data-modifying statements in a transaction you roll back.
@@ -3597,14 +3600,15 @@ spring:
 ```sql
 -- Expand: add nullable, write to both, backfill, then make it NOT NULL in a later release
 ALTER TABLE orders ADD COLUMN reference TEXT;
+-- in its own migration: CONCURRENTLY cannot run inside a transaction
 CREATE UNIQUE INDEX CONCURRENTLY idx_orders_reference ON orders (reference);
 ```
 
 #### Common interview questions
 - "Why not use `ddl-auto=update`?" (It cannot express data changes or safe renames, is not reviewable, behaves differently across versions, and will eventually damage production data. Use `validate` with migrations.)
-- "How do you rename a column with zero downtime?" (Expand and contract: add the new column and write to both, backfill, switch reads, then drop the old one in a later release.)
+- "How do you rename a column with zero downtime?" (Expand and contract: add the new column and write to both, backfill, switch reads, stop writing the old column, and drop it in a release after that — each step must work alongside the release before it.)
 - "How do migration tools prevent concurrent application?" (A lock on the schema-history table, so only one instance applies a given migration.)
-- "What is the risk of an `ALTER TABLE` in a deployment?" (It can take an exclusive lock and block all writes for the duration — on a large table, that is an outage.)
+- "What is the risk of an `ALTER TABLE` in a deployment?" (Most forms take an `ACCESS EXCLUSIVE` lock that blocks reads and writes for the duration — and while it waits behind a long transaction, every other query queues behind it. On a large or busy table, that is an outage.)
 
 #### Follow-up questions
 - "How do you handle rollbacks?" (In practice, roll forward: write a new migration. Down-scripts are rarely tested and often unsafe against real data.)
@@ -3612,7 +3616,7 @@ CREATE UNIQUE INDEX CONCURRENTLY idx_orders_reference ON orders (reference);
 - "Flyway or Liquibase?" (Flyway for plain SQL and simplicity; Liquibase for database-agnostic changelogs and richer rollback support.)
 
 #### Edge cases
-- A failed migration can leave the history table marked failed and block startup until repaired, because the tool cannot know how far the failed script got.
+- On a database without transactional DDL, such as MySQL, a failed migration leaves the history table marked failed and blocks startup until repaired, because the tool cannot know how far the script got. PostgreSQL rolls the whole migration back instead.
 - `CREATE INDEX CONCURRENTLY` cannot run inside a transaction, so it needs its own migration — Flyway will not mix it with transactional statements by default.
 - Checksums on applied migrations mean editing a committed file breaks every environment that already ran it, because the recorded history no longer matches the file.
 
@@ -3707,7 +3711,7 @@ logging:
 
 #### Edge cases
 - Hibernate-specific features used through JPA annotations make switching implementations harder than the specification implies, because the specification covers only the common subset.
-- Entities are not DTOs; serialising them directly causes lazy-loading failures, because serialisation happens after the transaction has closed.
+- Entities are not DTOs; serialising them directly causes lazy-loading trouble — failures, or hidden extra queries while `open-in-view` is on — because serialisation happens after the transaction has closed.
 - Second-level caching and statistics are Hibernate features, not JPA ones.
 
 #### Common mistakes
@@ -3742,7 +3746,7 @@ Classes annotated `@Entity` whose fields map to table columns, with `@Table`, `@
 Because automatic conversion requires the framework to know which class maps to which table and which field to which column. Declaring that mapping lets the object model and the schema each follow their own conventions while remaining connected.
 
 #### Interview explanation
-Cover the structural requirements Hibernate imposes — no-arg constructor, non-final class and fields — and why: it subclasses entities to create lazy proxies. Then raise `EnumType.STRING` as the mapping mistake with permanent consequences.
+Cover the structural requirements JPA imposes — no-arg constructor, non-final class and fields — and the reason behind the non-final class: Hibernate subclasses entities to create lazy proxies. Then raise `EnumType.STRING` as the mapping mistake with permanent consequences.
 
 #### Syntax
 ```java
@@ -3835,7 +3839,7 @@ spring:
     properties:
       hibernate:
         jdbc:
-          batch_size: 50              # only effective with SEQUENCE
+          batch_size: 50              # inserts batch only when ids are known first — not with IDENTITY
         order_inserts: true
         order_updates: true
 ```
@@ -3852,9 +3856,9 @@ spring:
 - "Can you assign ids yourself?" (Yes, with `@Id` and no `@GeneratedValue` — common with UUIDs generated in the application.)
 
 #### Edge cases
-- Mismatched `allocationSize` and sequence increment causes duplicate keys under concurrency, because instances reserve overlapping blocks of ids; recent Hibernate versions check the increment at startup by default.
+- Mismatched `allocationSize` and sequence increment causes duplicate keys — even from a single instance — because the blocks of ids Hibernate hands out overlap; recent Hibernate versions check the increment at startup by default.
 - Changing strategy after data exists requires a migration and careful sequence alignment.
-- `AUTO` picks per dialect, so the same code batches on PostgreSQL and does not on MySQL, which has no sequences and falls back to identity-style generation.
+- `AUTO` resolves per dialect: a sequence on PostgreSQL, but on MySQL — which has no sequences — Hibernate emulates one with a table, which is slow and contended, so MySQL projects usually choose `IDENTITY` explicitly and give up insert batching.
 
 #### Common mistakes
 - Expecting batching with `IDENTITY`.
@@ -3906,14 +3910,14 @@ State the rule — the side with the foreign key owns it, and `mappedBy` marks t
 ```java
 public void addLine(OrderLine line) {
     lines.add(line);
-    line.setOrder(this);        // the owning side — without this, nothing is persisted
+    line.setOrder(this);        // the owning side — without this, the foreign key is never written
 }
 ```
 
 #### Common interview questions
-- "What is the owning side of a relationship?" (The side holding the foreign key — for `@ManyToOne`/`@OneToMany`, always the many side. Hibernate writes based on it alone.)
+- "What is the owning side of a relationship?" (The side holding the foreign key — in a bidirectional `@ManyToOne`/`@OneToMany` pair, the many side. Hibernate writes based on it alone.)
 - "What does `mappedBy` mean?" (This side is the inverse; the named field on the other entity owns the relationship.)
-- "Why did my child row not get saved?" (Only the inverse collection was updated; the owning reference was never set.)
+- "Why is my child row not linked to its parent?" (Only the inverse collection was updated; the owning reference was never set, so the foreign key was never written — the row is orphaned, rejected by a `NOT NULL` column, or, without a cascade, never inserted.)
 - "What does `orphanRemoval` do?" (Deletes a child removed from the parent's collection — appropriate only when the child cannot exist independently.)
 
 #### Follow-up questions
@@ -3952,7 +3956,7 @@ Which side owns a relationship.
 ### 6.5 The Persistence Context
 
 #### Definition
-A transaction-scoped first-level cache and change tracker that holds one instance per database row and snapshots their loaded state.
+A first-level cache and change tracker — scoped to a transaction, or to the whole request while `open-in-view` is on — that holds one instance per database row and snapshots their loaded state.
 
 #### Why it exists
 Because two objects for the same row in one unit of work, changed differently, would make "what should be saved?" unanswerable. One instance per row guarantees identity, avoids repeated reads, and lets changes be collected and written in one batch.
@@ -3984,8 +3988,8 @@ public void batchProcess(List<Long> ids) {
 ```
 
 #### Common interview questions
-- "What is the persistence context?" (Hibernate's transaction-scoped working set: a first-level cache guaranteeing one instance per row, plus snapshots for dirty checking.)
-- "What is `open-in-view` and should it be enabled?" (It keeps the persistence context open for the whole HTTP request; it should generally be disabled, because it holds a connection for the request and allows lazy loading during serialisation.)
+- "What is the persistence context?" (Hibernate's working set for one unit of work — normally a transaction: a first-level cache guaranteeing one instance per row, plus snapshots for dirty checking.)
+- "What is `open-in-view` and should it be enabled?" (It keeps the persistence context open for the whole HTTP request; it should generally be disabled, because it holds a connection from the first query to the end of the request and allows lazy loading during serialisation.)
 - "Why does loading the same entity twice issue only one query?" (The second lookup hits the first-level cache and returns the same instance.)
 - "How do you keep memory bounded in a batch job?" (Flush and clear the context periodically, or use a stateless session.)
 
@@ -4008,7 +4012,7 @@ public void batchProcess(List<Long> ids) {
 
 | | First-level cache | Second-level cache |
 |---|---|---|
-| Scope | One transaction | Whole application |
+| Scope | One persistence context (normally a transaction) | Whole application |
 | Enabled | Always | Opt-in |
 | Invalidation | Not needed | The hard part |
 
@@ -4019,8 +4023,8 @@ Dirty checking is proportional to managed entities × fields at every flush.
 The persistence context versus the second-level cache.
 
 #### Important facts to remember
-- One instance per row, per transaction — so `==` works inside a transaction only.
-- Disable `open-in-view` deliberately — otherwise a connection is held for the whole request.
+- One instance per row, per persistence context — so `==` works only within one.
+- Disable `open-in-view` deliberately — otherwise a connection is held until the request ends.
 - Clear the context in batch loops — every loaded entity and its snapshot stay in memory.
 
 ---
@@ -4060,7 +4064,7 @@ detachedOrder.setStatus(CANCELLED);                // silently lost
 
 #### Follow-up questions
 - "What does `save()` do in Spring Data?" (It calls `persist` for a new entity and `merge` for one with an id, which is why the return value matters.)
-- "What is a removed entity?" (Scheduled for deletion; the row is deleted at flush, and the object becomes transient afterwards.)
+- "What is a removed entity?" (Scheduled for deletion; the row is deleted at flush, and afterwards the object is no longer managed.)
 - "Can a detached entity be reattached?" (Through `merge`, which produces a managed copy — the original stays detached.)
 
 #### Edge cases
@@ -4071,7 +4075,7 @@ detachedOrder.setStatus(CANCELLED);                // silently lost
 #### Common mistakes
 - Using the argument to `merge` instead of its result.
 - Expecting changes outside a transaction to persist.
-- Calling `save()` unnecessarily inside a transaction, adding a select.
+- Calling `save()` on an already-managed entity — harmless, but a sign that dirty checking is misunderstood.
 
 #### Comparisons
 
@@ -4097,7 +4101,7 @@ detachedOrder.setStatus(CANCELLED);                // silently lost
 Hibernate compares managed entities against their load-time snapshots and issues the resulting SQL at flush — automatically at commit, before affected queries, or on demand.
 
 #### Why it exists
-Because writing an `UPDATE` by hand for each changed field is tedious and error-prone, while the information needed is already available if the original state is remembered. Comparing against a snapshot lets the application simply modify objects while the framework works out the minimal statements and their order.
+Because writing an `UPDATE` by hand for each changed field is tedious and error-prone, while the information needed is already available if the original state is remembered. Comparing against a snapshot lets the application simply modify objects while the framework works out which statements are needed and their order.
 
 #### Interview explanation
 Explain the snapshot comparison and write-behind batching, then make the memorable point: inside a transaction, changing a managed entity persists the change whether or not you intended it.
@@ -4140,7 +4144,7 @@ public BigDecimal preview(Long id) {
 #### Edge cases
 - `FlushModeType.COMMIT` means a query may not see your own uncommitted changes, because nothing is sent to the database until commit.
 - Entities modified during flush callbacks can trigger additional flushes.
-- Bulk `@Modifying` queries bypass dirty checking entirely and can be overwritten by it, because the stale entities still in the context are flushed afterwards.
+- Bulk `@Modifying` queries bypass dirty checking entirely and can be overwritten by it: a stale entity still in the context that is modified afterwards is flushed with all its columns, old values included.
 
 #### Common mistakes
 - Mutating managed entities for temporary calculations.
@@ -4203,8 +4207,8 @@ Optional<Order> findById(Long id);     // no lines — lighter for the common ca
 - "Why is EAGER harmful as a default?" (It loads associations for every query, including those that never touch them, and nested eager mappings multiply the data fetched.)
 
 #### Follow-up questions
-- "What is a lazy proxy?" (A generated subclass holding only the id; any other property access triggers the load.)
-- "How do proxies affect `equals` and `instanceof`?" (The runtime class is the proxy, not the entity, so `getClass()` comparisons fail; use `instanceof` or Hibernate's unproxy helper.)
+- "What is a lazy proxy?" (For a to-one association, a generated subclass holding only the id; touching any other property triggers the load. Lazy collections use a Hibernate collection wrapper instead.)
+- "How do proxies affect `equals` and `instanceof`?" (The runtime class is the proxy, not the entity, so `getClass()` comparisons fail, and so does `instanceof` against a subtype; compare with `instanceof` on the declared type, or use Hibernate's unproxy helper.)
 - "What is `@BatchSize`?" (It loads lazy associations in batches rather than one per entity, turning N+1 into N/batch+1.)
 
 #### Edge cases
@@ -4341,7 +4345,7 @@ List<OrderSummary> summaries(Status s);
 
 #### Common interview questions
 - "What is JPQL?" (A query language over entities and their fields, translated by the provider into SQL.)
-- "When would you use a native query?" (Database-specific features — window functions, full-text search, upserts — or bulk operations where JPQL is insufficient.)
+- "When would you use a native query?" (Vendor-specific syntax such as full-text search operators, SQL the provider cannot express, or bulk operations where JPQL is insufficient. Hibernate 6's HQL reaches further than standard JPQL — window functions and CTEs included.)
 - "What is a projection and why use it?" (A partial view of an entity, so the query selects fewer columns and no entities are managed — the standard fix for heavy list endpoints.)
 - "What does `@Modifying` do?" (Marks an update or delete query; it executes directly in the database and bypasses the persistence context, so loaded entities can become stale.)
 
@@ -4352,7 +4356,7 @@ List<OrderSummary> summaries(Status s);
 
 #### Edge cases
 - Native queries returning entities require correct column aliasing or an explicit result-set mapping.
-- `@Modifying` without `clearAutomatically` leaves stale managed entities that can overwrite the bulk change, because dirty checking flushes them afterwards.
+- `@Modifying` without `clearAutomatically` leaves stale managed entities that can overwrite the bulk change: modify one afterwards and dirty checking writes all its columns back.
 - Pagination over a join-fetched collection may be performed in memory, which Hibernate warns about.
 
 #### Common mistakes
@@ -4384,7 +4388,7 @@ JPQL versus SQL — JPQL names entities and fields, not tables and columns.
 ### 6.11 Hibernate Caching
 
 #### Definition
-A mandatory per-transaction first-level cache (the persistence context), an optional application-wide second-level cache, and an optional query cache built on it.
+A mandatory first-level cache per persistence context (normally one transaction), an optional application-wide second-level cache, and an optional query cache built on it.
 
 #### Why it exists
 Because the same rows are read repeatedly, within a transaction and across many, and every re-read repeats work whose answer has not changed. Within a transaction that cache is free and safe; across transactions it is a real cache with real staleness risk, so it is opt-in.
@@ -4418,9 +4422,9 @@ spring:
 ```
 
 #### Common interview questions
-- "What is the difference between first- and second-level caching?" (First level is the persistence context — mandatory, per transaction. Second level is optional, shared across transactions, and configured per entity.)
+- "What is the difference between first- and second-level caching?" (First level is the persistence context — mandatory, scoped to that context. Second level is optional, shared across transactions, and configured per entity.)
 - "When should you enable the second-level cache?" (For read-mostly reference data; it rarely helps write-heavy entities, where invalidation costs more than it saves.)
-- "What is the risk?" (Stale data when something outside Hibernate writes — another service, a migration, a native bulk update — because those writes do not invalidate entries.)
+- "What is the risk?" (Stale data when something outside Hibernate writes — another service, a migration, a SQL script — because those writes do not invalidate entries.)
 - "What is the query cache and why is it risky?" (It caches query results and is invalidated by any write to the involved tables, so on write-heavy tables it can be slower than not caching.)
 
 #### Follow-up questions
@@ -4430,7 +4434,7 @@ spring:
 
 #### Edge cases
 - Collections need their own cache configuration; caching the entity does not cache its associations.
-- Native queries bypass the caches entirely and do not invalidate them, because Hibernate cannot tell which entities raw SQL touched.
+- A native update run *through* Hibernate is the opposite extreme: it cannot tell which entities raw SQL touched, so it evicts every second-level cache region — unless the affected entities are declared as query spaces.
 - A clustered cache adds network latency that can exceed the database lookup it replaces.
 
 #### Common mistakes
@@ -4442,7 +4446,7 @@ spring:
 
 | | First level | Second level | Spring Cache |
 |---|---|---|---|
-| Scope | Transaction | Application | Method results |
+| Scope | Persistence context | Application | Method results |
 | Configuration | None | Per entity | Per method |
 | Visibility | Implicit | Implicit | Explicit |
 
@@ -4453,7 +4457,7 @@ Cache hits avoid a query; misses add lookup overhead; invalidation cost scales w
 The persistence context being called "a cache" in the same sense as the second level.
 
 #### Important facts to remember
-- First level is always on, per transaction — it is the persistence context.
+- First level is always on, per persistence context — it *is* the persistence context.
 - Second level suits read-mostly data — invalidation costs outweigh hits on busy data.
 - External writes do not invalidate it — Hibernate only knows about its own writes.
 
@@ -4510,7 +4514,7 @@ public void transfer(Long from, Long to, long cents) {
 ```
 
 #### Common interview questions
-- "What does ACID stand for?" (Atomicity — all or nothing; consistency — constraints hold; isolation — concurrent transactions do not see partial work; durability — committed data survives a crash.)
+- "What does ACID stand for?" (Atomicity — all or nothing; consistency — constraints hold; isolation — concurrent transactions are kept from interfering, as strictly as the isolation level says; durability — committed data survives a crash.)
 - "How does a database guarantee atomicity and durability?" (A write-ahead log records changes before the data pages, so after a crash committed work can be replayed and uncommitted work undone.)
 - "Does ACID guarantee my application is correct?" (No — it guarantees the database keeps its promises; a transaction that commits wrong values commits them reliably.)
 - "Why not wrap everything in one big transaction?" (It holds locks and a connection for the duration and makes a single failure roll back all prior work.)
@@ -4584,22 +4588,22 @@ public class InvoiceService {
 #### Common interview questions
 - "How does `@Transactional` work?" (A proxy intercepts the call, obtains a connection, begins a transaction, invokes the method, and commits or rolls back depending on the outcome.)
 - "Why does `@Transactional` not work on a method called from the same class?" (The internal call bypasses the proxy, so no interceptor runs.)
-- "What does `readOnly = true` do?" (It lets Hibernate skip dirty checking and can route to a replica; it does not enforce read-only access at the database.)
+- "What does `readOnly = true` do?" (It lets Hibernate skip dirty checking and marks the connection read-only, which can route to a replica. Whether the database then refuses writes depends on the driver — PostgreSQL's does — so treat it as an optimisation, not access control.)
 - "Where should the annotation go?" (On service methods that define a business operation — not on controllers, and not on individual repository calls of a multi-step operation.)
 
 #### Follow-up questions
 - "Can you put it on a class?" (Yes — it applies to every public method, with method-level annotations overriding it.)
 - "What about private methods?" (They are not intercepted; the annotation is ignored.)
-- "What does `timeout` do?" (Marks the transaction for rollback if it runs longer than the limit — useful against runaway operations.)
+- "What does `timeout` do?" (It applies the remaining time as a timeout to the queries the transaction runs, so a slow query — or one issued after the deadline — fails and the transaction rolls back. It does not interrupt Java code running between queries.)
 
 #### Edge cases
-- Annotating an interface method works with JDK proxies but not reliably with CGLIB; annotate the implementation.
+- Annotating an interface method works for JDK and CGLIB proxies since Spring 5.0, but not in AspectJ mode, because Java annotations are not inherited from interfaces — annotate the implementation.
 - `@Transactional` on a test method rolls back after the test by default — Spring's test support assumes a test should leave no data behind.
 - Two transaction managers in one application need `transactionManager = "..."` to choose.
 
 #### Common mistakes
 - Self-invocation expecting a transaction.
-- `readOnly` assumed to block writes.
+- `readOnly` relied on to block writes.
 - Annotating controllers.
 
 #### Comparisons
@@ -4616,7 +4620,7 @@ public class InvoiceService {
 #### Important facts to remember
 - Proxy-based — through another bean only.
 - Never on `private`, `static` or `final` methods — the proxy cannot override them; public is the portable choice.
-- `readOnly` is a hint — it optimises; it does not forbid writes.
+- `readOnly` is an optimisation — whether writes are refused depends on the driver, so never rely on it for safety.
 
 ---
 
@@ -4661,7 +4665,7 @@ public void placeOrder(Order order) {
 #### Follow-up questions
 - "What does `REQUIRES_NEW` cost?" (A second connection while the outer one is suspended — under load this can exhaust the pool and deadlock.)
 - "When is `MANDATORY` useful?" (To assert that a method must only be called within an existing transaction, failing fast if misused.)
-- "Is `NESTED` always supported?" (No — it needs savepoint support from the driver and transaction manager; JPA's manager does not support it.)
+- "Is `NESTED` always supported?" (No — it needs savepoint support from the driver and the transaction manager. `JpaTransactionManager` disallows it by default, because a savepoint rolls back the SQL but not the entities already changed in the persistence context.)
 
 #### Edge cases
 - `REQUIRES_NEW` called through self-invocation does nothing — the proxy is still required.
@@ -4670,7 +4674,7 @@ public void placeOrder(Order order) {
 
 #### Common mistakes
 - Expecting a caught inner exception to save the outer transaction.
-- `REQUIRES_NEW` in loops, exhausting connections.
+- `REQUIRES_NEW` under concurrency with a small pool, deadlocking it.
 - Using `NESTED` with JPA.
 
 #### Comparisons
@@ -4711,7 +4715,7 @@ Define the three anomalies concretely, map them to levels in a table, and mentio
 
 #### Example
 ```java
-@Retryable(retryFor = CannotAcquireLockException.class, maxAttempts = 3)
+@Retryable(retryFor = ConcurrencyFailureException.class, maxAttempts = 3)   // serialisation failures arrive as subclasses
 @Transactional(isolation = Isolation.SERIALIZABLE)
 public void allocateSeat(Long flightId, Long passengerId) { ... }
 ```
@@ -4795,11 +4799,11 @@ public void checkout(Cart cart) throws PaymentException {
 #### Follow-up questions
 - "Why is the default this way?" (It mirrors EJB's convention that checked exceptions are application outcomes, not system failures — a convention most teams now disagree with.)
 - "What happens if the commit itself fails?" (An exception is thrown from the proxy after the method returned — the caller sees a failure even though the method body completed.)
-- "Can you set the rule globally?" (Through a custom annotation meta-annotated with `@Transactional(rollbackFor = Exception.class)`, used project-wide.)
+- "Can you set the rule globally?" (Since Spring Framework 6.2, `@EnableTransactionManagement(rollbackOn = ALL_EXCEPTIONS)` rolls back on every exception. Before that, a custom annotation meta-annotated with `@Transactional(rollbackFor = Exception.class)`, used project-wide.)
 
 #### Edge cases
 - `noRollbackFor` on an inner `REQUIRED` method does not stop an outer method's own rollback rule from applying.
-- Kotlin has no checked exceptions, so everything thrown rolls back by default there.
+- Kotlin does not enforce checked exceptions, so a Kotlin method can throw a checked exception type without anyone noticing — and Spring still commits on it. Spring's documentation recommends `rollbackOn = ALL_EXCEPTIONS` for Kotlin applications.
 - Exceptions thrown from `@TransactionalEventListener(AFTER_COMMIT)` cannot roll back the already-committed transaction.
 
 #### Common mistakes
@@ -4821,7 +4825,7 @@ public void checkout(Cart cart) throws PaymentException {
 #### Important facts to remember
 - Checked exceptions commit by default — they are treated as planned outcomes.
 - `rollbackFor` to change it.
-- Caught exceptions do not roll back — the interceptor never sees them.
+- Caught exceptions do not roll back — the interceptor never sees them, unless they already crossed a transactional proxy and marked the transaction rollback-only.
 
 ---
 
@@ -4861,7 +4865,7 @@ public void reprice(List<Long> ids) {
 
 #### Follow-up questions
 - "How do you keep side effects consistent with the commit?" (Publish them after commit with `@TransactionalEventListener(AFTER_COMMIT)` or the outbox pattern.)
-- "What about `open-in-view`?" (It extends the persistence context, not the transaction, but still holds a connection for the request — disable it.)
+- "What about `open-in-view`?" (It extends the persistence context, not the transaction, but still holds a connection from its first query to the end of the request — disable it.)
 - "How long is too long for a transaction?" (Anything that includes waiting on something other than the database; in absolute terms, seconds rather than milliseconds is a warning sign.)
 
 #### Edge cases
@@ -4971,7 +4975,7 @@ Show `@Lock(PESSIMISTIC_WRITE)` and explain the two operational requirements: a 
 #### Syntax
 ```java
 @Lock(LockModeType.PESSIMISTIC_WRITE)
-@QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
+@QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))   // honoured where the dialect supports it
 Optional<Stock> findBySku(String sku);
 ```
 
@@ -5070,7 +5074,7 @@ PostgreSQL max_connections = 100
 #### Edge cases
 - `REQUIRES_NEW` needs a second connection while the first is held, so nested usage can deadlock a small pool.
 - Autoscaling multiplies total connections, which can exceed the database limit suddenly.
-- Transaction-mode external poolers break session-level features such as prepared statements and advisory locks, because consecutive transactions may run on different server connections.
+- Transaction-mode external poolers break session-level features — session advisory locks, `SET` parameters, and (before PgBouncer 1.21) prepared statements — because consecutive transactions may run on different server connections.
 
 #### Common mistakes
 - Raising the pool size to fix timeouts.
@@ -5373,7 +5377,7 @@ http.authorizeHttpRequests(auth -> auth
 - "Why end with `anyRequest().authenticated()`?" (Deny by default — any endpoint not explicitly opened requires authentication.)
 
 #### Follow-up questions
-- "What replaced `antMatchers`?" (`requestMatchers`, which picks an MVC-aware matcher when Spring MVC is present.)
+- "What replaced `antMatchers`?" (`requestMatchers`, which picks a matcher consistent with Spring MVC's own path matching.)
 - "How do you secure Actuator?" (A dedicated chain or rules for `/actuator/**`, exposing health publicly and everything else to an admin role or the internal network only.)
 - "How do you test the configuration?" (`@WebMvcTest` with `MockMvc`, `@WithMockUser` or JWT post-processors, asserting 401/403/200 per endpoint and role.)
 
@@ -5638,7 +5642,10 @@ jwt.getSubject(); jwt.getClaimAsStringList("roles"); jwt.getExpiresAt();
 @Bean
 JwtDecoder jwtDecoder(@Value("${jwt.public-key}") RSAPublicKey key) {
     var decoder = NimbusJwtDecoder.withPublicKey(key).signatureAlgorithm(SignatureAlgorithm.RS256).build();
-    decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer("https://auth.shop.example"));
+    var issuer = JwtValidators.createDefaultWithIssuer("https://auth.shop.example");   // also checks exp, nbf
+    var audience = new JwtClaimValidator<List<String>>(JwtClaimNames.AUD,
+        aud -> aud != null && aud.contains("shop-api"));
+    decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(issuer, audience));
     return decoder;
 }
 ```
@@ -5676,7 +5683,7 @@ JwtDecoder jwtDecoder(@Value("${jwt.public-key}") RSAPublicKey key) {
 JWS (signed) versus JWE (encrypted).
 
 #### Important facts to remember
-- Signed, not encrypted — anyone can read it; nobody can alter it undetected.
+- A signed JWT is not encrypted — anyone can read it; nobody can alter it undetected.
 - Pin the algorithm; check `iss`, `aud`, `exp`.
 - Asymmetric keys for many verifiers — verifiers hold only the public key, so none can mint tokens.
 
@@ -5759,7 +5766,7 @@ Annotation-driven authorisation on methods — `@PreAuthorize`, `@PostAuthorize`
 Because a URL rule protects one entry point while an operation can be reached through several, and because rules such as "only the owner" depend on data no URL contains. Attaching the rule to the method protects the operation wherever it is invoked.
 
 #### Interview explanation
-Show an ownership check through a bean reference, note that `@EnableMethodSecurity` replaced `@EnableGlobalMethodSecurity` in Spring Security 6, and mention the proxy limitation — self-invocation skips the check.
+Show an ownership check through a bean reference, note that `@EnableMethodSecurity` (added in Spring Security 5.6, standard in 6) replaces the deprecated `@EnableGlobalMethodSecurity`, and mention the proxy limitation — self-invocation skips the check.
 
 #### Syntax
 ```java
@@ -5806,7 +5813,7 @@ public OrderDetail detail(Long orderId) { ... }
 | Proxy limitations | No | Yes |
 
 #### Frequently confused with
-`@EnableMethodSecurity` versus the removed `@EnableGlobalMethodSecurity`.
+`@EnableMethodSecurity` versus the deprecated `@EnableGlobalMethodSecurity`.
 
 #### Important facts to remember
 - Guards the operation, not the URL — every entry point gets the check.
@@ -5903,7 +5910,7 @@ Separate them clearly — CORS controls reading, CSRF controls forging — and t
 http.cors(Customizer.withDefaults())      // uses a CorsConfigurationSource bean
     .csrf(c -> c.disable());              // only for header-authenticated stateless APIs
 
-http.csrf(c -> c.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()));  // SPA + cookies
+http.csrf(c -> c.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()));  // SPA + cookies; since Spring Security 6 also needs a SPA-aware token request handler
 ```
 
 #### Example
@@ -6087,7 +6094,7 @@ class DiscountPolicyTest {
 
 #### Edge cases
 - JUnit 5 creates a new test instance per method by default; `@TestInstance(PER_CLASS)` changes that and makes shared state possible — and risky.
-- Test execution order is deliberately unspecified; tests relying on it fail intermittently — which surfaces hidden dependencies between tests instead of hiding them.
+- Test execution order is deterministic but deliberately non-obvious, so tests relying on it break when methods are added or renamed — which surfaces hidden dependencies between tests instead of hiding them.
 - `assertThrows` returns the exception, which should be asserted further rather than ignored.
 
 #### Common mistakes
@@ -6222,7 +6229,7 @@ class OrderResponseJsonTest {
 
 #### Common interview questions
 - "What is a test slice?" (A Spring Boot test annotation that loads only the components and auto-configuration for one layer.)
-- "What does `@WebMvcTest` load?" (Controllers, `@ControllerAdvice`, filters, `WebMvcConfigurer`s, Jackson and security configuration — not services or repositories.)
+- "What does `@WebMvcTest` load?" (Controllers, `@ControllerAdvice`, filters, `WebMvcConfigurer`s, Jackson and Spring Security's auto-configuration — but not your own `@Configuration` classes, so a custom `SecurityFilterChain` must be imported — and not services or repositories.)
 - "What replaced `@MockBean`?" (`@MockitoBean` from Spring Framework 6.2; Boot 3.4 deprecated `@MockBean` and `@SpyBean`.)
 - "Why can many test classes slow a suite dramatically?" (Each distinct context configuration — including different mock sets — creates a new context instead of reusing a cached one.)
 
@@ -6358,7 +6365,7 @@ em.persistAndFlush(entity); em.clear();
 void enforcesUniqueReference() {
     em.persistAndFlush(OrderFixtures.withReference("ORD-1"));
     assertThatThrownBy(() -> em.persistAndFlush(OrderFixtures.withReference("ORD-1")))
-        .isInstanceOf(ConstraintViolationException.class);
+        .isInstanceOf(PersistenceException.class);      // the unique constraint, surfaced by Hibernate
 }
 ```
 
@@ -6806,7 +6813,7 @@ public Product update(Product product) { ... }
 #### Follow-up questions
 - "How are keys generated by default?" (`SimpleKeyGenerator` combines all arguments; explicit SpEL keys are clearer and safer.)
 - "Can you cache conditionally?" (Yes — `condition` decides whether to use the cache at all, `unless` whether to store the result.)
-- "Is `@Cacheable` transactional?" (No — caching happens outside transactional semantics, so a rolled-back transaction can leave a cached value behind unless eviction is after commit.)
+- "Is `@Cacheable` transactional?" (Not by default — a rolled-back transaction can leave a cached value behind. A transaction-aware cache manager, such as `RedisCacheManager` built with `transactionAware()`, defers puts and evictions until the commit.)
 
 #### Edge cases
 - Caching mutable objects with an in-process provider shares the instance across callers, so one caller's change alters what every later caller receives.
@@ -6901,7 +6908,7 @@ Redis as a database versus as a cache — same software, different durability ex
 
 #### Important facts to remember
 - In memory, single-threaded execution — every command atomic; one slow command blocks all.
-- Set `maxmemory` and an eviction policy — otherwise memory fills and writes fail.
+- Set `maxmemory` and an eviction policy — with no limit Redis grows until the host runs out of memory; with a limit but `noeviction`, writes fail.
 - Serialise as JSON — readable, and independent of Java class changes.
 
 ---
@@ -7407,7 +7414,7 @@ spring:
 
 #### Common interview questions
 - "What is a dead-letter topic?" (A topic receiving records that could not be processed after retries, with failure details in headers, so they can be inspected and replayed.)
-- "What is a poison pill?" (A record that always fails — often undeserialisable — blocking its partition forever without proper error handling.)
+- "What is a poison pill?" (A record that always fails — often undeserialisable — which can block its partition indefinitely without proper error handling.)
 - "What is the difference between blocking and non-blocking retries?" (Blocking retries hold the partition and preserve order; non-blocking retries via retry topics free the partition but break per-key ordering.)
 - "Which failures should not be retried?" (Permanent ones — validation errors, deserialisation failures, business rule violations — which go straight to the dead-letter topic.)
 
@@ -7588,7 +7595,7 @@ public class TestOrdersApplication {
 #### Common interview questions
 - "How do you run a Spring Boot app locally with its dependencies?" (Docker Compose support with a `compose.yaml`, or Testcontainers through a test-scoped `main` method — both create service connections automatically.)
 - "How does Boot know how to connect to the containers?" (It recognises well-known images and creates `ConnectionDetails` beans with the mapped host and port, which take precedence over connection properties.)
-- "Should Compose support be in the production jar?" (No — declare it optional or `developmentOnly` so it is not packaged.)
+- "Should Compose support be in the production jar?" (No — declare it optional or `developmentOnly` so it is not packaged; the Maven plugin also excludes it by default.)
 - "Why pin image versions?" (So every developer and CI run the same versions, matching production as closely as possible.)
 
 #### Follow-up questions
@@ -7872,7 +7879,7 @@ logging:
     com.example: INFO
   structured:
     format:
-      console: logstash      # ecs, logstash or gelf (Boot 3.4+)
+      console: ecs           # ecs, logstash or gelf (Boot 3.4+)
 ```
 
 #### Example
@@ -7975,7 +7982,7 @@ class FeatureFlagsEndpoint {
 
 #### Edge cases
 - The `shutdown` endpoint exists but is disabled by default.
-- A separate management port means a separate embedded server, which the main `SecurityFilterChain` may not cover.
+- A separate management port means a separate embedded server; Boot applies the same Spring Security filter chain to it, so actuator rules still belong in a `SecurityFilterChain`, matched with `EndpointRequest`.
 - Some endpoints, such as `httpexchanges`, need an extra bean before they return anything.
 
 #### Common mistakes
@@ -8022,7 +8029,7 @@ management:
         add-additional-paths: true     # /livez and /readyz on the main port
       group:
         readiness:
-          include: readinessState, db
+          include: readinessState, db   # a deliberate choice — see the edge cases below
 ```
 ```java
 @Component
@@ -8483,8 +8490,8 @@ Start with timeouts, since every remote call needs one and the defaults are ofte
 
 #### Syntax
 ```java
-@CircuitBreaker(name = "payments", fallbackMethod = "fallback")
-@Retry(name = "payments")
+@Retry(name = "payments", fallbackMethod = "fallback")   // fallback on the outermost layer
+@CircuitBreaker(name = "payments")
 @Bulkhead(name = "payments")
 public PaymentResult authorise(PaymentRequest request) { ... }
 ```
@@ -8520,6 +8527,7 @@ Timeout 2 s: threads freed quickly, but every request still waits 2 s and fails.
 - A read timeout after the server has acted means the outcome is unknown, so only idempotent requests are safe to retry.
 - A breaker with too small a minimum number of calls opens on a handful of errors at low traffic.
 - `@TimeLimiter` in Resilience4j only applies to asynchronous return types.
+- A fallback on the inner `@CircuitBreaker` turns every failure into a normal return, so the outer `@Retry` never fires — put the fallback on the outermost annotation.
 
 #### Common mistakes
 - No timeout on HTTP clients or database queries.
@@ -8631,7 +8639,7 @@ APIs where repeating a request produces the same effect as a single request, ach
 Because clients cannot distinguish "the request failed" from "the response was lost", so safe retries require the server to recognise repeats.
 
 #### Interview explanation
-Start from HTTP semantics — `GET`, `PUT` and `DELETE` are idempotent by definition, `POST` is not. Then describe the idempotency-key protocol: client-generated key per operation, stored server-side with a request hash and response, unique constraint to resolve races, same transaction as the effect, `409` for in-progress repeats, and expiry after a retention window.
+Start from HTTP semantics — `GET`, `PUT` and `DELETE` are idempotent by definition, `POST` is not required to be. Then describe the idempotency-key protocol: client-generated key per operation, stored server-side with a request hash and response, unique constraint to resolve races, same transaction as the effect, `409` for in-progress repeats, and expiry after a retention window.
 
 #### Syntax
 ```http

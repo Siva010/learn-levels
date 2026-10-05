@@ -91,7 +91,7 @@ A **bean** is simply an object the container manages. The word means nothing mor
 
 Since Spring creates the object, it controls every moment of its life: it instantiates it, injects its dependencies, runs initialisation callbacks, hands it out for use, and at shutdown runs destruction callbacks.
 
-Those fixed moments are what let the framework act without your code asking — open a connection pool once its settings are injected, close it before the JVM exits, or swap the finished object for a wrapper. Because the stages always run in the same order, what the framework does to a bean is predictable.
+Those fixed moments are what let the framework act without your code asking — open a connection pool once its settings are injected, close it before the JVM exits, or swap the object for a wrapper before anyone receives it. Because the stages always run in the same order, what the framework does to a bean is predictable.
 
 ---
 
@@ -114,7 +114,7 @@ public class OrderService { }
 
 Spring can hand an object its dependencies at three moments: while constructing it (**constructor** injection), after construction through **setters**, or by writing directly into **fields**.
 
-The moment decides everything. With constructor injection the object cannot exist without its dependencies, so it is fully built the moment it exists, its dependencies are visible in one place, its fields can be `final`, and a test can simply call the constructor. With setter or field injection the object exists first and is filled in afterwards — so for a while it is incomplete. Field injection also hides the dependencies and cannot be done at all without the container's reflection.
+The moment decides everything. With constructor injection the object cannot exist without its dependencies, so it is fully built the moment it exists, its dependencies are visible in one place, its fields can be `final`, and a test can simply call the constructor. With setter or field injection the object exists first and is filled in afterwards — so for a while it is incomplete. Field injection also hides the dependencies, and a field can be filled only through reflection — so a test cannot simply pass them in.
 
 That is why constructor injection is the recommended default.
 
@@ -133,7 +133,7 @@ public class OrderService {
 
 ### 1.7 Configuration Classes and @Bean
 
-Scanning only works for classes you can annotate. A `RestClient` from a library, an object that needs a URL and timeouts to build, a choice between two implementations made at startup — you cannot put `@Component` on code you do not own, and an annotation cannot make decisions.
+Scanning only works for classes you can annotate. A `RestClient` from a library, an object that needs a URL and timeouts to build, a choice between two implementations made at startup — you cannot put `@Component` on code you do not own, and an annotation cannot hold the code that builds an object.
 
 So Spring lets you write the construction in Java. A `@Configuration` class contains `@Bean` methods; each returns an object the container should manage, named after the method.
 
@@ -165,9 +165,9 @@ The rule follows directly: a singleton is used by every request at once, so it m
 
 ### 1.9 Qualifiers and Ambiguity
 
-Spring finds a dependency by its type: "this service needs a `PaymentGateway`". That works until there are two — a real gateway and a sandbox one, two data sources, two caches — a perfectly normal situation. The type no longer identifies one bean, and the framework refuses to guess: startup fails.
+Spring finds a dependency by its type: "this service needs a `PaymentGateway`". That works until there are two — a real gateway and a sandbox one, two data sources, two caches — a perfectly normal situation. The type no longer identifies one bean, and the framework refuses to guess: unless you have said which one, startup fails.
 
-So you supply the missing information. `@Qualifier("name")` lets an injection point ask for a specific bean; `@Primary` marks one bean as the default for everyone who did not ask.
+So you supply the missing information. `@Qualifier("name")` lets an injection point ask for a specific bean; `@Primary` marks one bean as the default for everyone who did not ask. A constructor parameter named exactly like one of the beans also settles it — but a rename silently breaks that, so say it explicitly.
 
 The failure happens at startup rather than on some later request for the same reason as every other wiring error: the container builds everything before the first request arrives, so an ambiguity is found immediately.
 
@@ -221,7 +221,7 @@ Nothing is hidden permanently: every default Boot applies can be overridden by d
 
 Even one job needs a dozen libraries — serving HTTP needs a web framework, a JSON library, validation and a server — and only certain versions of them work together. Choosing compatible versions by hand is tedious and error-prone, and a wrong choice compiles fine and fails at runtime.
 
-A **starter** solves the *which libraries* half: a dependency that pulls in a coherent set of libraries for one job. Adding `spring-boot-starter-web` brings Spring MVC, Jackson, validation and an embedded Tomcat, all at versions known to work together.
+A **starter** solves the *which libraries* half: a dependency that pulls in a coherent set of libraries for one job. Adding `spring-boot-starter-web` brings Spring MVC, Jackson and an embedded Tomcat, all at versions known to work together. Validation has its own starter, `spring-boot-starter-validation`, and Spring Boot 4 renames the web starter `spring-boot-starter-webmvc`.
 
 Spring Boot's parent POM or BOM solves the *which versions* half: it manages those versions, so your build file lists what you need, not which version of it.
 
@@ -286,9 +286,9 @@ So each environment's differences live in one place, and the code itself is iden
 
 ### 2.7 Type-Safe Configuration Properties
 
-`@Value("${some.property}")` on individual fields has no structure, no validation and no discoverability — a typo produces a runtime failure at the moment the field is first used, if at all. Yet configuration is input typed by humans, and deserves the same checking as any other input.
+`@Value("${some.property}")` on individual fields has no structure, no validation and no discoverability. Spring checks only that each key exists and its value converts: nothing says a timeout must be positive, and related keys are scattered across classes as repeated strings. Yet configuration is input typed by humans, and deserves the same checking as any other input.
 
-`@ConfigurationProperties` exists to give it that: it binds a group of properties onto a typed object, so configuration arrives as a validated Java class rather than as scattered strings — checked once, at startup.
+`@ConfigurationProperties` exists to give it that: it binds a group of properties onto a typed object, so configuration arrives as a typed Java class rather than as scattered strings — and, with `@Validated`, checked once, at startup.
 
 ```java
 @ConfigurationProperties("payment")
@@ -303,7 +303,7 @@ Component scanning starts at the application class's package, so where that clas
 
 That is why the conventional layout puts the application class in the root package, with `controller`, `service`, `repository`, `domain` and `config` packages beneath it.
 
-Maven and Gradle both work; Maven's `spring-boot-starter-parent` and Gradle's Spring Boot plugin each supply dependency management and the packaging task.
+Maven and Gradle both work. In Maven, `spring-boot-starter-parent` manages versions and `spring-boot-maven-plugin` builds the executable jar; in Gradle, the Spring Boot plugin builds the jar and the Boot BOM — usually applied through the `io.spring.dependency-management` plugin — manages versions.
 
 The structure exists as a convention rather than a requirement, but following it means scanning, testing and tooling all work without configuration.
 
@@ -325,9 +325,9 @@ Deploying used to mean installing a server and copying an archive into it. Once 
 
 `mvn package` produces an executable jar containing your classes, your dependencies and a small launcher. `java -jar app.jar` runs it; no server installation is involved.
 
-Boot can also build a **layered** jar, which separates rarely-changing dependencies from your frequently-changing code so container image layers can be cached effectively — a rebuild then ships only the part that changed.
+The jar is also **layered** by default: it records which parts are rarely-changing dependencies and which are your frequently-changing code, so a container image can put them in separate layers and a rebuild ships only the part that changed.
 
-> ⚠️ **Common misconception:** A Spring Boot jar is not an ordinary jar. It has its own internal layout and launcher, which is why unzipping one and running the classes directly does not work.
+> ⚠️ **Common misconception:** A Spring Boot jar is not an ordinary jar. Your classes sit under `BOOT-INF/classes` and the libraries are nested jars under `BOOT-INF/lib`, which only Boot's launcher knows how to read — so `java -cp app.jar com.example.App` does not work.
 
 ---
 
@@ -453,7 +453,7 @@ Some work applies to every request — logging, correlation ids, security checks
 
 A **filter** is a servlet-level component that sees every request before Spring MVC does — used for logging, correlation IDs, security and compression. An **interceptor** is a Spring MVC component that runs around handler methods and knows which handler was selected.
 
-They exist so cross-cutting request concerns live in one place rather than at the top of every controller method. The only real difference between the two is *where* they sit: a filter wraps the whole dispatcher, an interceptor wraps your handler.
+They exist so cross-cutting request concerns live in one place rather than at the top of every controller method. The difference that explains all the others is *where* they sit: a filter wraps the whole dispatcher, an interceptor wraps your handler.
 
 ---
 
@@ -689,7 +689,7 @@ So summaries are computed where the data lives: one query, one small answer.
 
 ### 5.5 Subqueries and CTEs
 
-Some questions need the answer to another question first — "customers who spent more than *their own average*" needs each customer's average before it can compare.
+Some questions need the answer to another question first — "orders larger than *that customer's* average order" needs each customer's average before it can compare.
 
 A **subquery** is a query inside another query. A **common table expression** (`WITH ... AS`) names a subquery so it can be referenced and read more easily.
 
@@ -824,7 +824,7 @@ Identifiers exist because the persistence context tracks entities by identity. T
 
 In the database a relationship is one foreign-key column. In Java it can be *two* references — `order.getLines()` and `line.getOrder()` — and they can disagree.
 
-Relationships are mapped with `@OneToMany`, `@ManyToOne`, `@OneToOne` and `@ManyToMany`. One side **owns** the relationship — it holds the foreign key and controls what is written — and the other side is the inverse, marked with `mappedBy`.
+Relationships are mapped with `@OneToMany`, `@ManyToOne`, `@OneToOne` and `@ManyToMany`. One side **owns** the relationship — it maps the foreign key (or, for many-to-many, the join table) and controls what is written — and the other side is the inverse, marked with `mappedBy`.
 
 Something must decide which side the database follows — that is all ownership is.
 
@@ -834,7 +834,7 @@ Something must decide which side the database follows — that is all ownership 
 
 If every `findById` went to the database and returned a new object, one transaction could hold two different objects for the same row, changed in two different ways — which one should be saved?
 
-The persistence context is Hibernate's working memory for one transaction. Every entity it loads or saves is kept there, and asking for the same row twice returns the same object.
+The persistence context is Hibernate's working memory for one unit of work — in Spring, one transaction, or the whole web request while `open-in-view` is on, as it is by default. Every entity it loads or saves is kept there, and asking for the same row twice returns the same object.
 
 It exists so that within one unit of work there is exactly one in-memory representation of each row, and so changes can be collected and written efficiently at the end.
 
@@ -844,7 +844,7 @@ It exists so that within one unit of work there is exactly one in-memory represe
 
 The same `Order` object can be watched by Hibernate in one moment and ignored in the next — so "what happens when I change it?" has no single answer.
 
-An entity is in one of four states: **transient** (new, unknown to Hibernate), **managed** (tracked by a persistence context), **detached** (was managed, but the context has closed) and **removed** (scheduled for deletion).
+An entity is in one of four states: **transient** (new, unknown to Hibernate), **managed** (tracked by a persistence context), **detached** (was managed, but its context has closed or let it go) and **removed** (scheduled for deletion).
 
 The states exist because what happens when you change an object depends entirely on whether anyone is watching. A change to a managed entity is saved automatically; the same change to a detached one is not.
 
@@ -854,9 +854,9 @@ The states exist because what happens when you change an object depends entirely
 
 Writing an `UPDATE` for every field you change is tedious and error-prone. If Hibernate remembers what an entity looked like when it was loaded, it can work out the updates by itself.
 
-**Dirty checking** is Hibernate comparing a managed entity against the snapshot it took when loading it, and issuing an `UPDATE` for whatever changed. **Flushing** is the moment it sends those statements to the database.
+**Dirty checking** is Hibernate comparing a managed entity against the snapshot it took when loading it, and issuing an `UPDATE` for each entity that changed. **Flushing** is the moment it sends those statements to the database.
 
-They exist so you modify objects rather than writing update statements. The surprise is that you never call `save()` for an entity that is already managed — the change is detected and written anyway.
+They exist so you modify objects rather than writing update statements. The surprise is that an entity that is already managed needs no `save()` call — the change is detected and written anyway.
 
 ---
 
@@ -896,7 +896,7 @@ They exist so queries can be written in the domain's vocabulary, stay portable a
 
 Some rows are read again and again — the same customer in one transaction, the same list of countries in every request. Reading them from the database each time repeats work whose answer has not changed.
 
-Hibernate has two caches. The **first-level cache** is the persistence context itself — always on, scoped to one transaction. The **second-level cache** is optional, shared across transactions, and must be configured deliberately.
+Hibernate has two caches. The **first-level cache** is the persistence context itself — always on, and gone when that context closes. The **second-level cache** is optional, shared across transactions, and must be configured deliberately.
 
 They exist to avoid re-reading the same row. The first level is what makes repeated lookups within a transaction free; the second is a genuine cache with all the invalidation problems that implies.
 
@@ -933,7 +933,7 @@ So databases offer the **transaction**: a group of operations that either all ta
 ```text
 A — atomicity:   all or nothing
 C — consistency: constraints hold before and after
-I — isolation:   concurrent transactions do not see each other's partial work
+I — isolation:   concurrent transactions are kept from interfering — how strictly is the isolation level
 D — durability:  once committed, it survives a crash
 ```
 
@@ -1122,7 +1122,7 @@ Hashing exists so a database leak does not leak passwords. Slowness is the point
 
 Users might live in a database, an LDAP directory or an external system, and credentials might be passwords, tokens or certificates. Hard-wiring one combination into the login code would make every change a rewrite.
 
-A `UserDetailsService` loads a user by username — from a database, a directory, anywhere. An `AuthenticationProvider` uses it to verify credentials, and the `AuthenticationManager` coordinates the providers.
+A `UserDetailsService` loads a user by username — from a database, a directory, anywhere. A password-checking `AuthenticationProvider` (`DaoAuthenticationProvider`) uses it to verify credentials, and the `AuthenticationManager` coordinates the providers.
 
 They exist so where users live and how credentials are checked are both replaceable without touching the rest of the security configuration.
 
@@ -1144,7 +1144,7 @@ A token carried by the client must prove two things to whichever server receives
 
 A **JWT** is a compact, signed token containing claims — who the user is, what they may do, when the token expires. The signature lets any server verify the token was issued by a trusted party and not altered.
 
-JWTs exist to carry identity between systems without a shared session store. They are signed, not encrypted: anyone holding one can read its contents.
+JWTs exist to carry identity between systems without a shared session store. The usual kind is signed, not encrypted: anyone holding one can read its contents.
 
 ```text
 header.payload.signature
@@ -1177,7 +1177,7 @@ So the rule travels with the operation: a service method called from several pla
 
 If every application implements its own login, every application stores passwords, handles resets, adds MFA and issues tokens — each getting it slightly wrong in its own way.
 
-**OAuth2** is a standard for delegating authorisation: an **authorisation server** (Keycloak, Okta, Auth0, Google) issues tokens, and your API — a **resource server** — validates them. Spring Security supports both roles.
+**OAuth2** is a standard for delegating authorisation: an **authorisation server** (Keycloak, Okta, Auth0, Google) issues tokens, and your API — a **resource server** — validates them. Spring Security implements the resource server; since Spring Security 7 (Spring Boot 4) it also contains the authorisation server, previously the separate Spring Authorization Server project.
 
 One trusted service does it, and every API simply trusts its tokens.
 
@@ -1470,9 +1470,9 @@ Because duplicates happen, consumers must be **idempotent**: processing the same
 
 ### 10.11 Retries and Dead-Letter Topics
 
-Kafka delivers a partition's messages strictly in order. So if one message keeps failing, every message behind it waits — possibly forever.
+Kafka delivers a partition's messages strictly in order. So if one message keeps failing and the consumer keeps retrying it, every message behind it waits.
 
-When a message fails to process, the consumer can retry it. If it keeps failing, it is moved to a **dead-letter topic** for inspection instead of blocking the partition forever.
+When a message fails to process, the consumer can retry it. If it keeps failing, it can be moved to a **dead-letter topic** for inspection instead of blocking the partition — something you configure; Spring Kafka's default after ten attempts is merely to log the message and skip it.
 
 So one bad message — a malformed payload, a bug for one specific case — no longer stops every message behind it in the same partition.
 
@@ -1708,7 +1708,7 @@ It is better to say "not now" quickly to some requests than to fail all of them 
 
 Networks fail after the server has acted but before the client hears back. From the client's side, "the request failed" and "the response was lost" look identical — so it must retry, and the server must not charge the customer twice.
 
-An operation is **idempotent** if performing it several times has the same effect as performing it once. `GET`, `PUT` and `DELETE` are idempotent by definition; `POST` is not. An **idempotency key** — a unique value the client sends with a request — lets the server recognise a retry and return the original result instead of acting again.
+An operation is **idempotent** if performing it several times has the same effect as performing it once. `GET`, `PUT` and `DELETE` are idempotent by definition; `POST` is not required to be. An **idempotency key** — a unique value the client sends with a request — lets the server recognise a retry and return the original result instead of acting again.
 
 So retries become safe: the client can repeat a request as often as it needs, and the effect happens once.
 
