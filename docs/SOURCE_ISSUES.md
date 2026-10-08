@@ -45,6 +45,11 @@ concept numbers to each level's source number. Both Foundation concepts resolve 
 Interview/Production section; those level views are flagged `viaAlias` with the source title so the UI
 says the concepts are covered together at that level. The validator reports 18 aliased level views.
 
+**Resolved (October 2026):** the Fundamentals rebuild (`docs/java-fundamentals-audit.md`) split the
+merged sections and renumbered Interview and Production to match Foundation, so all four files now
+have the same 12 concepts. Java's alias table was removed; the alias mechanism stays for other
+languages.
+
 ---
 
 ### 3. Foundation has no labelled sections

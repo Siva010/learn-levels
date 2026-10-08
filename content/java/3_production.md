@@ -26,46 +26,71 @@
 ## 1. Java Fundamentals & Syntax
 
 ### Table of Contents (this group)
-- [[#1.1 JVM / JRE / JDK in Production]]
-- [[#1.2 Bytecode & Platform Considerations]]
-- [[#1.3 Variables and Data Types]]
-- [[#1.4 Operators]]
-- [[#1.5 Control Flow]]
-- [[#1.6 Arrays]]
-- [[#1.7 Methods]]
-- [[#1.8 Packages and Imports]]
+- [[#1.1 What is Java?]]
+- [[#1.2 JVM, JRE, and JDK]]
+- [[#1.3 Platform Independence & Bytecode]]
+- [[#1.4 Variables and Data Types]]
+- [[#1.5 Primitive Types and Literals]]
+- [[#1.6 Type Conversion, Casting and Boxing]]
+- [[#1.7 Operators]]
+- [[#1.8 Control Flow Statements]]
+- [[#1.9 Arrays]]
+- [[#1.10 Strings]]
+- [[#1.11 Methods]]
+- [[#1.12 Packages and Imports]]
 
 ---
 
-### 1.1 JVM / JRE / JDK in Production
+### 1.1 What is Java?
 
 **Best practices:**
-- Use a minimal, custom runtime image via `jlink` for containerized deployments instead of shipping a full JDK — dramatically reduces image size and attack surface.
+- Play to the platform's strengths. The JVM shines in long-running services, where the JIT compiler has time to optimise hot paths and the garbage collector amortises its work. For short-lived processes — CLI tools, functions invoked once per request — measure startup, and consider class-data sharing, the JDK 24+ AOT cache, or a GraalVM native image.
+- Write against specifications, not one implementation. Code that relies on HotSpot internals (`sun.misc` classes, object sizes, JIT timing) breaks on upgrades and other JVMs; the JLS and the Java SE API are the contract.
+- Pick an OpenJDK distribution deliberately — Eclipse Temurin, Amazon Corretto, Azul Zulu, Oracle and others build from the same source, but differ in support length, licensing and platform coverage.
+
+**Real-world use case:** Because Kotlin, Scala and Groovy compile to the same bytecode, a single service can mix them and share every Java library; the JVM sees only class files.
+
+**Debugging tips:** The JDK ships production-grade diagnostics: Java Flight Recorder (`jcmd <pid> JFR.start`) records CPU, allocation and GC events with low overhead, and `jcmd`, `jstack` and `jmap` inspect a running JVM. Learn them before an incident, not during one (JVM Internals group).
+
+**Common production bugs:** Assuming dev-machine behaviour holds in production — a laptop JDK with a different default GC, heap size or charset than the container image. Pin the runtime and print `java -XshowSettings:vm -version` in startup logs so the difference is visible.
+
+---
+
+### 1.2 JVM, JRE, and JDK
+
+**Best practices:**
+- Use a minimal, custom runtime image via `jlink` for containerized deployments instead of shipping a full JDK — dramatically reduces image size and attack surface. `jdeps --print-module-deps` lists the modules to include.
 - Pin your JDK **distribution and exact version** in CI/CD (e.g., Eclipse Temurin 21.0.3) — silent minor-version drift between dev and prod has caused real production incidents (subtle GC or TLS behavior changes).
 - Use LTS versions (8, 11, 17, 21, 25) for production systems unless you have a strong reason and a fast upgrade cadence; non-LTS releases get only 6 months of support.
 
-> ✅ **Best Practice:** In Docker images, use official slim JRE base images (e.g., `eclipse-temurin:21-jre-jammy`) for the runtime stage of a multi-stage build, and the full JDK only in the build stage.
+> ✅ **Best Practice:** In Docker images, use official slim JRE base images (e.g., `eclipse-temurin:21-jre-jammy`) or a `jlink` runtime for the runtime stage of a multi-stage build, and the full JDK only in the build stage.
 
 **Performance considerations:**
-- Startup time matters in serverless/Kubernetes autoscaling contexts — consider **CDS (Class Data Sharing)** or **AppCDS** to reduce JVM startup latency, or GraalVM native-image for extreme cold-start requirements.
-- JIT warm-up means the first few seconds/minutes of a JVM's life run slower than steady-state — factor this into load-testing and readiness-probe design (don't route production traffic before warm-up, or use tiered compilation flags to warm up faster).
+- Startup time matters in serverless/Kubernetes autoscaling contexts — consider **CDS (Class Data Sharing)** or **AppCDS** to reduce JVM startup latency, the AOT cache introduced in JDK 24 (Project Leyden), or GraalVM native-image for extreme cold-start requirements.
+- JIT warm-up means the first few seconds/minutes of a JVM's life run slower than steady-state — factor this into load-testing and readiness-probe design (don't route full production traffic before warm-up; send synthetic warm-up requests or use an AOT cache).
 
 **Scalability concerns:**
-- Container CPU/memory limits must align with JVM flags (`-XX:MaxRAMPercentage`, container-aware ergonomics since JDK 10+) — otherwise the JVM may size its heap based on host resources instead of container limits, causing OOM-kills.
+- Container CPU/memory limits must align with JVM flags (`-XX:MaxRAMPercentage`, container-aware ergonomics since JDK 10 and backported to 8u191) — otherwise the JVM may size its heap based on host resources instead of container limits, causing OOM-kills.
 
 **Common production bugs:**
 - `UnsupportedClassVersionError` from deploying bytecode compiled with a newer JDK than the target runtime uses — enforce `--release` flag in your build (not just `-source`/`-target`) to guarantee API-level compatibility, not just bytecode version.
 - JVM silently using default (non-container-aware) memory limits on older JDK versions inside Kubernetes pods, leading to OOM-killed containers under load.
+- A `jlink` runtime missing a module the application loads only on some code path (`java.naming` for JNDI lookups, `java.management` for JMX) — the service starts fine and fails later. Run integration tests against the same image you deploy.
 
 > ⚠️ **Warning:** Don't assume "it compiles" means "it will run in production." A build pipeline that compiles with JDK 21 but deploys to a JDK 17 runtime will fail at class-loading time, not compile time — always match the `--release` flag to your actual production runtime.
 
-**Modern recommendations:** Adopt JDK 21+ (or latest LTS) for new services to get virtual threads, generational ZGC, and pattern matching improvements — all covered in later groups but decided here, at the runtime-selection stage.
+**Modern recommendations:** Adopt the latest LTS — JDK 25 since September 2025, or at least JDK 21 — for new services to get virtual threads, generational ZGC, and pattern matching improvements — all covered in later groups but decided here, at the runtime-selection stage.
 
 **Deprecated approaches to avoid:** Manually shipping a bespoke JRE-only zip pulled apart from a full JDK install (a common pre-`jlink` hack) — use `jlink` instead, which produces a properly linked, minimal, supported runtime image.
 
 ---
 
-### 1.2 Bytecode & Platform Considerations
+### 1.3 Platform Independence & Bytecode
+
+**Best practices:**
+- Build with `--release N`, where N is the oldest Java version you deploy to, so the compiler checks both the bytecode version and the API you call.
+- Keep code platform-neutral where it touches the OS: build paths with `Path.of(dir, file)` rather than string concatenation with `/` or `\`; pass charsets explicitly (`Files.readString(path, StandardCharsets.UTF_8)`) rather than relying on defaults; use `System.lineSeparator()` or `%n` when line endings matter.
+- Build container images for each CPU architecture you run on (`linux/amd64`, `linux/arm64`). The bytecode is portable; the JVM inside the image, and any native libraries your dependencies bundle, are not.
 
 **Real-world use case:** Frameworks like Spring and Hibernate generate bytecode at runtime (via CGLIB or ByteBuddy) to create dynamic proxies for AOP (transactions, security) and lazy-loading entities. Understanding that bytecode can be generated, not just compiled from source, explains why some Spring beans behave unexpectedly with `final` classes/methods (proxies can't subclass them).
 
@@ -73,47 +98,93 @@
 
 **Debugging tips:**
 - `javap -c -p MyClass.class` to inspect actual bytecode when diagnosing subtle behavior differences between Java versions or JIT-related bugs.
-- Use `-XX:+PrintCompilation` to see which methods the JIT has compiled, useful when diagnosing why a hot loop still runs slowly (it may not have been JIT-compiled yet, or it's been de-optimized).
+- Use HotSpot's `-XX:+PrintCompilation` to see which methods the JIT has compiled, useful when diagnosing why a hot loop still runs slowly (it may not have been JIT-compiled yet, or it's been de-optimized).
+- `javap -v MyClass.class | grep major` shows which Java version a class was compiled for — the quickest check behind an `UnsupportedClassVersionError`.
+
+**Common production bugs:**
+- Code that worked on a developer's Windows laptop and fails on Linux servers: hard-coded `\` separators, file names whose case differs (`Config.yaml` vs `config.yaml` — Linux file systems are case-sensitive), or a native library bundled for x86 only.
+- After upgrading from JDK 17 to 18+, text files written with the old platform default (often Windows-1252 on Windows) read back garbled, because the default became UTF-8 (JEP 400).
 
 **Security implications:**
 - Bytecode is trivially decompilable — never rely on it to "hide" business logic or secrets (API keys, license logic). Use proper secret management (vaults, environment injection) instead.
 
-**Testing advice:** When testing across JDK versions (e.g., validating a library supports both JDK 17 and 21), use CI matrix builds compiling and running against each target version explicitly, rather than assuming forward/backward compatibility.
+**Testing advice:** When testing across JDK versions (e.g., validating a library supports both JDK 17 and 21), use CI matrix builds compiling and running against each target version explicitly, rather than assuming forward/backward compatibility. Run the test suite on every operating system you ship to if your code touches files, processes or native libraries.
 
 ---
 
-### 1.3 Variables and Data Types
+### 1.4 Variables and Data Types
 
 **Best practices:**
-- Prefer primitives over boxed wrapper types in performance-sensitive code (tight loops, high-throughput services) to avoid autoboxing overhead and unnecessary heap allocation/GC pressure.
-- Use `BigDecimal` — never `float`/`double` — for monetary calculations. Binary floating-point cannot represent many decimal fractions exactly, and this has caused real financial-calculation bugs.
-
-> ⚠️ **Warning:** `0.1 + 0.2 == 0.3` is `false` in Java (as in virtually every language using IEEE 754 floating point). For currency, always use `BigDecimal` with explicit `RoundingMode`, never raw `double`.
-
-**Memory considerations:**
-- Autoboxing in collections (e.g., `List<Integer>` vs. a primitive-based structure) has real memory overhead — each boxed `Integer` carries an object header (~16 bytes on typical JVMs) versus 4 bytes for a raw `int`. For very large numeric datasets, consider primitive-specialized libraries (Eclipse Collections, fastutil) or arrays directly.
+- Declare variables in the narrowest scope, at the point of first use, and initialize them there. A variable declared at the top of a long method invites stale values and accidental reuse (Effective Java, Item 57).
+- Name variables for what they hold, with units where it matters: `timeoutMillis`, `priceInCents`, `retryCount` — not `t`, `p`, `n`. Many production incidents are a seconds-vs-milliseconds mix-up.
+- Use `var` where the type is obvious from the right-hand side (`var orders = new ArrayList<Order>();`) and spell the type out where it isn't (`Order order = repository.find(id);` reads better than `var order = repository.find(id);`).
+- Prefer one assignment per variable; mark fields `final` (2.18). A variable that changes meaning halfway through a method is a refactoring waiting to happen.
 
 **Common production bugs:**
-- `NullPointerException` from unboxing a `null` wrapper (`Integer count = null; int x = count;` throws NPE at unboxing).
-- Using `==` on boxed `Long`/`Integer` values outside the small-integer cache range, causing subtle bugs that pass in dev testing (small test values fall in cache range) but fail in production with real, larger values.
-
-**Anti-pattern:** Using `double` for money math in an order/billing service. This is a well-known, recurring real-world bug pattern — always flag it in code review.
-
-> ✅ **Best Practice:** For high-frequency numeric processing (e.g., trading systems, JPMorgan-style low-latency services), evaluate the cost of boxing carefully; primitive collections libraries or manual array-based structures can meaningfully reduce GC pauses under load.
+- A mutable `static` field used as if it were per-request — shared across all threads (2.4).
+- A field relied on for its default (`0`, `null`) where "not set" and "zero" mean different things — a discount of 0 vs. no discount configured. Use a wrapper type or `Optional` only where absence is a real state, and say so.
 
 **Logging:** Never log raw sensitive numeric identifiers (account numbers, SSNs represented as `long`/`String`) without masking — this is a data-classification/PII concern independent of the Java type system itself.
 
+**Maintainability:** Methods with a dozen local variables usually do several jobs; extracting a method shrinks each variable's scope, which is the cheapest way to make code easier to reason about.
+
 ---
 
-### 1.4 Operators
+### 1.5 Primitive Types and Literals
+
+**Best practices:**
+- Use `BigDecimal` — never `float`/`double` — for monetary calculations. Binary floating-point cannot represent many decimal fractions exactly, and this has caused real financial-calculation bugs. Where performance matters more than flexibility, `long` amounts in the smallest currency unit (cents) are also exact.
+- Default to `int` and `double`; use `long` for anything that can grow without bound — counters, database IDs, epoch milliseconds, file sizes. `byte` and `short` are for binary formats and large arrays, not for "saving memory" on single variables.
+- Use `Math.addExact`, `multiplyExact` and `toIntExact` where silent wraparound would corrupt data.
+
+> ⚠️ **Warning:** `0.1 + 0.2 == 0.3` is `false` in Java (as in virtually every language using IEEE 754 floating point). For currency, always use `BigDecimal` with explicit `RoundingMode`, never raw `double`.
+
+**Anti-pattern:** Using `double` for money math in an order/billing service. This is a well-known, recurring real-world bug pattern — always flag it in code review.
+
+**Common production bugs:**
+- Epoch milliseconds or file sizes stored in an `int`, overflowing years after the code shipped (milliseconds exceed `Integer.MAX_VALUE` after about 24.8 days).
+- `int` arithmetic assigned to a `long` — `long bytes = megabytes * 1024 * 1024;` with `int megabytes` overflows above 2047 MB.
+- Text truncated with `substring(0, n)` splitting an emoji's surrogate pair, producing invalid characters in a database column or JSON payload. Truncate by code points, or check `Character.isHighSurrogate` at the cut.
+- Comparing computed `double` values with `==`, or `NaN` silently propagating through a calculation until it reaches a report.
+
+**Testing advice:** Test arithmetic at the boundaries — `Integer.MAX_VALUE`, `Long.MIN_VALUE`, zero, negative values — and test text handling with non-ASCII input including an emoji. Both classes of bug pass every "happy path" test.
+
+---
+
+### 1.6 Type Conversion, Casting and Boxing
+
+**Best practices:**
+- Prefer primitives over boxed wrapper types in performance-sensitive code (tight loops, high-throughput services) to avoid autoboxing overhead and unnecessary heap allocation/GC pressure. Use a wrapper only where `null` is a meaningful state or an object is required.
+- Compare wrappers with `equals` (or `Objects.equals` when either may be `null`), or unbox deliberately — never with `==`.
+- Replace silent narrowing casts with checked ones where a wrong value would matter: `Math.toIntExact(longValue)` instead of `(int) longValue`.
+- Handle absent values before unboxing: `map.getOrDefault(key, 0)` instead of `int n = map.get(key);`.
+
+**Memory considerations:**
+- Autoboxing in collections (e.g., `List<Integer>` vs. a primitive-based structure) has real memory overhead — in HotSpot a boxed `Integer` is typically a 16-byte object (12-byte header plus the 4-byte value), reached through a 4- or 8-byte reference, versus 4 bytes for a raw `int`. For very large numeric datasets, consider primitive-specialized libraries (Eclipse Collections, fastutil) or arrays directly.
+
+**Common production bugs:**
+- `NullPointerException` from unboxing a `null` wrapper (`Integer count = null; int x = count;` throws NPE at unboxing) — typically a missing map entry, a nullable database column mapped to `Integer`, or an optional JSON field.
+- Using `==` on boxed `Long`/`Integer` values outside the small-integer cache range, causing subtle bugs that pass in dev testing (small test values fall in cache range) but fail in production with real, larger values. Entity IDs typed as `Long` are the classic case: `order.getCustomerId() == customer.getId()` works for the first 127 customers.
+- A `(int)` cast on a `long` ID or byte count that silently wraps once values pass 2³¹.
+
+> ✅ **Best Practice:** For high-frequency numeric processing (e.g., trading systems, JPMorgan-style low-latency services), evaluate the cost of boxing carefully; primitive collections libraries or manual array-based structures can meaningfully reduce GC pauses under load.
+
+**Testing advice:** Use IDs and amounts above 127 — and above `Integer.MAX_VALUE` where types are `long` — in test data. Small values hide both the `==`-on-wrappers bug and narrowing overflow.
+
+---
+
+### 1.7 Operators
 
 **Best practices:**
 - Use `Math.addExact()`, `Math.multiplyExact()`, `Math.subtractExact()` in financial or safety-critical arithmetic to fail fast on overflow instead of silently wrapping — this has prevented real production incidents where silent integer overflow corrupted downstream calculations.
 - Avoid deeply nested ternary expressions in production code — they hurt readability; prefer well-named methods or `if/else` for anything beyond a single simple condition.
+- Keep side effects out of larger expressions: `count++` on its own line, not inside an index or a method argument. Add parentheses wherever a reader might have to recall precedence (mixing `&&` with `||`, or shifts with arithmetic).
+- For a value that must be non-negative after `%`, use `Math.floorMod(a, n)`: `-1 % 10` is `-1`, but `Math.floorMod(-1, 10)` is `9` — the usual fix for negative hash codes picking a bucket.
 
 **Common production bugs:**
 - Silent integer overflow in ID generation, counters, or aggregation logic that only surfaces at scale (e.g., after millions of operations push a counter past `Integer.MAX_VALUE`).
 - Bitwise `&`/`|` accidentally used instead of `&&`/`||` in a boolean guard, causing a null-check guard to fail to short-circuit and throwing an unexpected `NullPointerException` in production.
+- `Math.abs(hashCode()) % n` used to pick a shard: `Math.abs(Integer.MIN_VALUE)` is negative, so one key in four billion produces a negative index.
 
 > ⚠️ **Warning:** In distributed/high-scale systems, "unlikely" overflow scenarios *do* happen over time (auto-incrementing counters, hash accumulation, timestamp math). Prefer `long` over `int` for anything that could plausibly grow unbounded, and use exact-arithmetic methods where correctness matters more than raw speed.
 
@@ -121,10 +192,11 @@
 
 ---
 
-### 1.5 Control Flow
+### 1.8 Control Flow Statements
 
 **Best practices:**
-- Prefer the modern `switch` expression (`->` syntax) over the classic `switch` statement in new code — it eliminates fall-through bugs entirely and is now idiomatic in modern Java codebases (17+).
+- Prefer arrow-label `switch` — usually as a switch expression — over the classic colon form in new code. It eliminates fall-through bugs entirely and is now idiomatic in modern Java codebases (17+).
+- For a switch over an enum, leave out `default` when every constant has a meaningful case. The compiler then forces an update everywhere when someone adds a constant, instead of letting it fall into a catch-all.
 - Avoid deeply nested `if/else` chains (>3 levels) — refactor into guard clauses (early returns) or extract into well-named private methods for readability and testability.
 
 > ✅ **Best Practice:** Guard clauses over nested conditionals:
@@ -149,19 +221,23 @@ public void process(Order order) {
 }
 ```
 
-**Maintainability:** Classic `switch` statements missing a `break` are a top-tier real-world bug source in large, long-maintained codebases where a new `case` gets added years later by someone unfamiliar with the fall-through risk. Static analysis tools (SonarQube, SpotBugs, error-prone) should be configured to flag missing `break`s or, better, the team should migrate to switch expressions entirely.
+**Maintainability:** Classic `switch` statements missing a `break` are a top-tier real-world bug source in large, long-maintained codebases where a new `case` gets added years later by someone unfamiliar with the fall-through risk. Static analysis tools (SonarQube, SpotBugs, error-prone) should be configured to flag missing `break`s or, better, the team should migrate to arrow-label switches entirely. Labeled `break`/`continue` deep inside nested loops usually signals a method that should be extracted.
 
-**Common production bugs:** Off-by-one loop bounds causing `ArrayIndexOutOfBoundsException` or skipped/duplicated processing of the last element in a batch job — a frequent source of data-completeness bugs in ETL/batch pipelines.
+**Common production bugs:**
+- Off-by-one loop bounds causing `ArrayIndexOutOfBoundsException` or skipped/duplicated processing of the last element in a batch job — a frequent source of data-completeness bugs in ETL/batch pipelines.
+- A `while` loop whose retry counter is incremented after a `continue`, so a failing call is retried forever.
+- A `switch` on a value read from a database or request, without handling an unexpected value — a `default` that silently does nothing hides corrupt data. Throw an `IllegalStateException` naming the value instead.
 
 **Debugging tips:** For complex nested loop/condition logic causing production issues, add structured logging (not just `System.out.println`) at key branch points with correlation IDs, so you can trace exactly which path execution took in a specific failing request.
 
 ---
 
-### 1.6 Arrays
+### 1.9 Arrays
 
 **Best practices:**
 - Prefer collections (`ArrayList`, etc. — full detail in the Collections group) over raw arrays in application/business logic; reserve raw arrays for performance-critical code, fixed-size data (like cryptographic byte buffers), or interop with APIs that require them.
 - Always use `Arrays.equals()` / `Arrays.deepEquals()` to compare array contents — never `==` (reference comparison) or the default `.equals()` (also reference-based for arrays, a very common bug).
+- Return an empty array, not `null`, when there are no elements (Effective Java, Item 54).
 
 > ⚠️ **Warning:** `array1.equals(array2)` on two arrays with identical contents returns `false` unless they're the *same object reference* — arrays don't override `equals()`. This is a genuinely common production bug, especially in tests that silently pass/fail incorrectly.
 
@@ -170,8 +246,10 @@ public void process(Order order) {
 **Common production bugs:**
 - Using `==` or default `.equals()` to compare array contents (see warning above).
 - `NullPointerException` from iterating over an array field that was never initialized (defensive null-checks or initializing to an empty array by default avoids this).
+- Using an array as a `HashMap` key or putting arrays in a `HashSet`: their identity-based `equals`/`hashCode` mean a lookup with an equal-content array never matches. Wrap the data in a `List` or a record.
+- Changing an array after wrapping it with `Arrays.asList` — or calling `add` on that list — without realizing the list and the array share the same storage.
 
-**Anti-pattern:** Returning a mutable internal array directly from a getter — callers can mutate your object's internal state without going through any validation. Return a defensive copy (`Arrays.copyOf()`) or an unmodifiable view instead.
+**Anti-pattern:** Returning a mutable internal array directly from a getter — callers can mutate your object's internal state without going through any validation. Return a defensive copy (`Arrays.copyOf()`) or an unmodifiable `List` (`List.of(values)` for object arrays) instead.
 
 ```java
 // Anti-pattern: exposes internal mutable state
@@ -181,18 +259,47 @@ public int[] getScores() { return this.scores; }
 public int[] getScores() { return Arrays.copyOf(this.scores, this.scores.length); }
 ```
 
-**Real-world use case:** Byte arrays (`byte[]`) are the standard representation for cryptographic keys, hashes, and network payloads throughout the JDK's security and I/O APIs — understanding raw array semantics is unavoidable when working with `MessageDigest`, `Cipher`, or NIO buffers.
+**Real-world use case:** Byte arrays (`byte[]`) are the standard representation for cryptographic keys, hashes, and network payloads throughout the JDK's security and I/O APIs — understanding raw array semantics is unavoidable when working with `MessageDigest`, `Cipher`, or NIO buffers. Compare secrets such as MAC values with `MessageDigest.isEqual`, which takes time independent of where the arrays first differ, rather than `Arrays.equals`.
 
 ---
 
-### 1.7 Methods
+### 1.10 Strings
+
+**Best practices:**
+- Build text in loops with a `StringBuilder` (or `String.join`, `Collectors.joining`), not repeated `+=`.
+- Compare with `equals`; put the known non-null value first (`"ACTIVE".equals(status)`) or use `Objects.equals(a, b)` when either side may be `null`.
+- Pass a charset whenever converting between bytes and text: `new String(bytes, StandardCharsets.UTF_8)`, `s.getBytes(StandardCharsets.UTF_8)`.
+- Use `Locale.ROOT` for case conversion of identifiers, protocol values and keys (`code.toUpperCase(Locale.ROOT)`); keep the user's locale for text shown to users.
+- Use parameterized logging (`log.debug("Loaded {} orders for {}", count, customerId)`) so the message string is never built when the level is disabled.
+
+**Performance considerations:** A single `+` expression is cheap; the costs come from `+=` in loops, `String.format` in hot paths (it parses the format string every call), and `split` with a complex regular expression. Since JDK 9, HotSpot stores Latin-1-only strings in one byte per character (compact strings), so ASCII-heavy data uses about half the memory it once did.
+
+**Security implications:** APIs that handle passwords — `Console.readPassword`, `KeyStore`, `PBEKeySpec` — use `char[]` so the caller can overwrite the secret when done; a `String` can't be wiped and may stay in memory until garbage collected. Never log secrets, and never build SQL by concatenating strings — use parameterized queries.
+
+**Common production bugs:**
+- `==` used to compare strings that came from a request, a file or a database: works in a unit test with literals, fails in production.
+- Default-locale case conversion breaking matching on servers running a Turkish locale (`"FILE".toLowerCase()` contains a dotless `ı`).
+- Truncating user-provided text with `substring` in a way that cuts an emoji's surrogate pair, producing an invalid string that a database or JSON encoder rejects.
+- Garbled text because bytes were decoded with the platform default charset (before JDK 18) or with the wrong explicit one.
+
+**Maintainability:** Prefer text blocks (Java 15+) for multi-line SQL, JSON and HTML in code — they keep line breaks and indentation readable without `\n` and `+` chains (Modern Features group).
+
+---
+
+### 1.11 Methods
 
 **Best practices:**
 - Keep methods short and single-purpose (a widely cited guideline: aim for a method to fit on one screen, roughly 20-30 lines) — long methods are harder to test, review, and reason about under production incident pressure.
 - Avoid overloading methods in ways that create ambiguity with autoboxing or varargs — prefer distinct, clearly-named methods over clever overload resolution that future maintainers must mentally trace.
 - Never mutate a mutable parameter as a side effect unless that's the *explicit, documented contract* of the method — hidden mutation is a classic source of hard-to-trace production bugs (especially with shared mutable objects like `StringBuilder`, `List`, or custom DTOs passed between service layers).
+- Keep parameter lists short. Several parameters of the same type (`transfer(long from, long to, long amount)`) are easy to pass in the wrong order; a small record or builder makes call sites self-describing. Replace `boolean` flag parameters with two methods or an enum — `send(msg, true)` says nothing at the call site.
+- Validate arguments at public boundaries (`Objects.requireNonNull(order, "order")`) so a bad value fails where it enters, not three calls deeper.
 
 > ⚠️ **Warning:** Passing mutable objects (like a shared `List` or `Map`) into methods across service/module boundaries without clear ownership semantics is a common cause of subtle state-corruption bugs, especially under concurrent access — always document (or better, enforce via immutability) whether a method mutates its inputs.
+
+**Common production bugs:**
+- Recursion over input whose depth an attacker or a large customer controls — deeply nested JSON, a long chain of parent references — ending in `StackOverflowError` in production. Use an explicit stack or loop for data of unbounded depth.
+- A method returning `null` for "no results" where callers expected an empty collection, crashing the one caller that forgot to check.
 
 **Testing advice:** Unit test the boundary between "reassignment inside method doesn't propagate" and "mutation inside method does propagate" explicitly if your team is newer to Java — it's a genuine source of production defects when developers coming from pass-by-reference languages assume reassignment inside a method will be visible to the caller.
 
@@ -200,21 +307,24 @@ public int[] getScores() { return Arrays.copyOf(this.scores, this.scores.length)
 
 **Framework relevance:** Spring dependency injection relies heavily on method conventions — constructor injection (preferred, enables immutability and easier testing) vs. setter injection (mutable, allows optional dependencies) is fundamentally a "methods" design decision with real production testability and thread-safety implications.
 
-> ✅ **Best Practice:** Prefer constructor injection over field/setter injection in Spring beans — it allows fields to be `final`, makes dependencies explicit and required at construction time, and makes unit testing far simpler (no reflection-based mocking needed).
+> ✅ **Best Practice:** Prefer constructor injection over field/setter injection in Spring beans — it allows fields to be `final`, makes dependencies explicit and required at construction time, and makes unit testing far simpler: a test passes collaborators (real, fake or mock) straight to the constructor, with no reflection-based injection.
 
 ---
 
-### 1.8 Packages and Imports
+### 1.12 Packages and Imports
 
 **Best practices:**
-- Structure packages by *feature/domain* (`com.company.orders`, `com.company.payments`) rather than purely by *layer* (`com.company.controllers`, `com.company.services`) for medium-to-large codebases — this improves cohesion and makes it easier to eventually extract a package into its own microservice/module if needed.
+- Structure packages by *feature/domain* (`com.company.orders`, `com.company.payments`) rather than purely by *layer* (`com.company.controllers`, `com.company.services`) for medium-to-large codebases — this improves cohesion and makes it easier to eventually extract a package into its own microservice/module if needed. It also lets most classes in a feature stay package-private.
 - Avoid wildcard imports (`import java.util.*`) in production code style guides — most enterprise style guides (including Google's) prefer explicit imports for clarity and to avoid accidental symbol collisions when refactoring; IDEs auto-manage this anyway.
+- Never put production code in the unnamed package — nothing outside it can import those classes.
 
 **Maintainability:** Circular package dependencies (`package.a` depends on `package.b` which depends back on `package.a`) are a common architectural smell that build tools like `jdeps` or ArchUnit can detect and enforce against in CI.
 
 **Real-world use case:** The Java Platform Module System (JPMS, `module-info.java`) builds directly on the package system to enforce strong encapsulation between modules in large applications — covered in full in the JPMS group, but it's worth knowing here that packages are the foundational unit that JPMS controls visibility over (`exports`, `opens` directives operate at the package level).
 
-**Common production bugs:** Classpath conflicts ("JAR hell") where two dependencies pull in different versions of the same package/class, causing unpredictable `NoSuchMethodError` or `ClassNotFoundException` at runtime despite a successful compile — build tools (Maven/Gradle) dependency resolution and tools like `mvn dependency:tree` are the standard way to diagnose this.
+**Common production bugs:**
+- Classpath conflicts ("JAR hell") where two dependencies pull in different versions of the same package/class, causing unpredictable `NoSuchMethodError` or `ClassNotFoundException` at runtime despite a successful compile — build tools (Maven/Gradle) dependency resolution and tools like `mvn dependency:tree` are the standard way to diagnose this.
+- A *split package* — the same package name in two JARs — works on the classpath (whichever JAR comes first wins for each class) but is rejected outright on the module path, which surprises teams moving to modules.
 
 > ⚠️ **Warning:** A successful `mvn compile` does not guarantee a successful runtime — classpath/dependency version conflicts are a purely runtime phenomenon (`NoSuchMethodError`, `ClassNotFoundException`) that the compiler cannot catch, since compilation only sees the dependency versions resolved for compile scope, which may differ from what's actually on the runtime classpath.
 

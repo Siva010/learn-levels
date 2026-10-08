@@ -30,29 +30,42 @@
 - [[#1.2 JVM, JRE, and JDK]]
 - [[#1.3 Platform Independence & Bytecode]]
 - [[#1.4 Variables and Data Types]]
-- [[#1.5 Operators]]
-- [[#1.6 Control Flow Statements]]
-- [[#1.7 Arrays]]
-- [[#1.8 Methods]]
-- [[#1.9 Packages and Imports]]
+- [[#1.5 Primitive Types and Literals]]
+- [[#1.6 Type Conversion, Casting and Boxing]]
+- [[#1.7 Operators]]
+- [[#1.8 Control Flow Statements]]
+- [[#1.9 Arrays]]
+- [[#1.10 Strings]]
+- [[#1.11 Methods]]
+- [[#1.12 Packages and Imports]]
 
 ---
 
 ### 1.1 What is Java?
 
-Java is a general-purpose, object-oriented programming language. Code you write is compiled into an intermediate form called **bytecode**, which can run on any machine that has a Java Virtual Machine (JVM).
+Java is a general-purpose, statically typed, class-based object-oriented programming language. Code you write is compiled into an intermediate form called **bytecode**, which can run on any machine that has a Java Virtual Machine (JVM).
 
-It exists because early languages compiled directly to machine code, which meant a program built for one operating system wouldn't run on another. Java solved this by adding a translation layer (the JVM) between your code and the machine.
+It exists because programs compiled directly to machine code run only on the kind of machine and operating system they were built for. Java solved this by adding a translation layer (the JVM) between your code and the machine: you compile once to bytecode, and a JVM built for each platform runs it.
 
-> 💡 **Tip:** Java's famous slogan is "Write Once, Run Anywhere" (WORA). That's the problem it was built to solve.
+> 💡 **Tip:** Java's famous slogan is "Write Once, Run Anywhere" (WORA). That's the problem it was built to solve — though details such as file paths and native libraries can still differ between platforms (1.3).
+
+```java
+public class Hello {
+    public static void main(String[] args) {
+        System.out.println("Hello, Java");
+    }
+}
+// javac Hello.java   → produces Hello.class (bytecode)
+// java Hello         → a JVM loads and runs that bytecode
+```
 
 ---
 
 ### 1.2 JVM, JRE, and JDK
 
-These three terms are easy to confuse but represent three different things:
+Running a Java program and building one need different things — a server only runs code, a developer also compiles it. These three terms are easy to confuse but represent three different things:
 
-- **JVM (Java Virtual Machine):** The engine that actually runs your bytecode. It's what makes Java platform-independent.
+- **JVM (Java Virtual Machine):** The engine that actually runs your bytecode — it loads classes, checks them, executes them and frees memory you no longer use. It's what makes Java platform-independent.
 - **JRE (Java Runtime Environment):** The JVM plus the standard libraries needed to *run* Java programs.
 - **JDK (Java Development Kit):** The JRE plus tools needed to *build* Java programs (compiler, debugger, etc.).
 
@@ -63,74 +76,218 @@ JDK  ⊃  JRE  ⊃  JVM
 (build)  (run)  (execute)
 ```
 
+This nesting is a conceptual model. Modern JDKs (9 and later) are built from modules, many vendors no longer ship a separate JRE download, and you can create a trimmed runtime containing only the modules your application uses with the JDK's `jlink` tool.
+
 ---
 
 ### 1.3 Platform Independence & Bytecode
 
-When you compile a `.java` file, the compiler (`javac`) doesn't produce machine code — it produces `.class` files containing **bytecode**, a set of instructions understood only by the JVM.
+When you compile a `.java` file, the compiler (`javac`) doesn't produce machine code — it produces `.class` files containing **bytecode**, a compact set of instructions designed for the JVM rather than for any real processor.
 
-This exists to solve the "compile once per OS" problem. The JVM for Windows, Mac, or Linux each know how to translate the same bytecode into instructions their own machine understands.
+This exists to solve the "compile once per OS" problem. The JVM for Windows, Mac, or Linux each knows how to run the same bytecode on its own machine — interpreting it, or compiling it to that machine's native instructions as the program runs.
 
-> 📝 **Note:** This is the core reason Java is called "platform-independent" — the *bytecode* is portable, even though the JVM itself is platform-specific.
+> 📝 **Note:** This is the core reason Java is called "platform-independent" — the *bytecode* is portable, even though the JVM itself is platform-specific. Your program can still depend on the platform through the things it touches: file paths, line endings, native libraries.
+
+```
+Hello.java  --javac-->  Hello.class (bytecode)  --JVM on Windows / macOS / Linux-->  runs
+```
 
 ---
 
 ### 1.4 Variables and Data Types
 
-A variable is a named container for a value. Java is **statically typed** — every variable has a fixed type decided at compile time.
+Programs need to remember values — a count, a name, a price — and refer to them by name. A variable is a named storage location that holds one value of a fixed type. Java is **statically typed** — every variable has a fixed type decided at compile time, and the compiler rejects code that puts the wrong kind of value in it.
 
 Java splits types into two families:
-- **Primitive types** (`int`, `double`, `boolean`, `char`, etc.) — hold raw values directly.
-- **Reference types** (`String`, arrays, objects) — hold a reference (pointer) to an object elsewhere in memory.
+- **Primitive types** (`int`, `double`, `boolean`, `char`, and four more — 1.5) — the variable holds the value itself.
+- **Reference types** (classes such as `String`, interfaces, arrays) — the variable holds a *reference*: a value that identifies an object, or `null` for no object. Two variables can hold references to the same object.
 
 This split exists for performance: primitives are small, fixed-size, and fast, while reference types support the rich, extensible object model Java needs.
 
----
-
-### 1.5 Operators
-
-Operators are symbols that perform operations on values: arithmetic (`+ - * / %`), relational (`== != > <`), logical (`&& || !`), assignment (`= += -=`), and others.
-
-They exist simply because every language needs a compact way to express computation and comparisons — writing `a + b` is far more usable than calling a function for every addition.
-
----
-
-### 1.6 Control Flow Statements
-
-Control flow statements decide *which* code runs and *how many times*. Java provides:
-- **Conditional:** `if / else`, `switch`
-- **Looping:** `for`, `while`, `do-while`
-
-They exist because real programs aren't a straight line of instructions — they need to branch based on data and repeat work without rewriting code.
-
----
-
-### 1.7 Arrays
-
-An array is a fixed-size, ordered collection of elements of the same type, stored in one contiguous memory block.
-
-Arrays exist to let you group related values together and access any one of them instantly using an index, instead of creating a separate variable for each value.
+Variables come in four kinds: **local variables** inside methods, **parameters**, **instance fields** (one per object) and **static fields** (one per class). Fields get a default value (`0`, `false`, `null`) if you don't set one; a local variable must be assigned before it is read, or the code doesn't compile.
 
 ```java
-int[] scores = {90, 85, 77};
-System.out.println(scores[1]); // 85
+int count = 3;          // primitive: the variable holds the number 3
+String name = "Ada";    // reference: the variable holds a reference to a String object
+String same = name;     // copies the reference — still one String object
+String none = null;     // a reference variable can refer to no object; an int can't be null
 ```
 
 ---
 
-### 1.8 Methods
+### 1.5 Primitive Types and Literals
 
-A method is a named, reusable block of code that performs a task, optionally taking inputs (parameters) and producing an output (return value).
+Numbers, characters and true/false values are so common that Java builds them into the language instead of making them objects. Java has exactly eight **primitive types**: four whole-number types (`byte`, `short`, `int`, `long`), two floating-point types (`float`, `double`), `char` for a single 16-bit UTF-16 code unit, and `boolean` for `true`/`false`. Each has a fixed size and range on every platform. A **literal** is a value written directly in code — `42`, `3.14`, `'A'`, `true`.
 
-Methods exist to avoid repeating the same logic everywhere it's needed — you write the logic once and *call* it wherever required.
+They exist so arithmetic and comparisons are fast and predictable everywhere. Two behaviours surprise beginners: whole-number arithmetic that goes past the type's range *wraps around* instead of failing, and floating-point numbers are binary approximations, so `0.1 + 0.2` is not exactly `0.3`.
+
+```java
+int count = 42;                 // whole numbers default to int
+long population = 8_000_000_000L; // L suffix for long; _ for readability
+double price = 19.99;           // decimals default to double
+float ratio = 0.5f;             // f suffix for float
+char letter = 'A';              // one character in single quotes
+boolean done = false;           // only true or false
+
+int max = Integer.MAX_VALUE;
+max++;                          // wraps around to -2147483648
+```
 
 ---
 
-### 1.9 Packages and Imports
+### 1.6 Type Conversion, Casting and Boxing
 
-A package is a namespace that groups related classes together (e.g., `java.util`). An `import` statement lets a file use classes from another package without writing their full name every time.
+Values often need to move between types — an `int` count into a `long` total, a `double` average into an `int` score, a number into a collection that only holds objects. Java converts automatically when nothing can be lost (**widening**: `int` → `long`), and makes you write an explicit **cast** when information might be lost (**narrowing**: `(int) 3.9` is `3`). In arithmetic, smaller types are first promoted: `byte + byte` gives an `int`.
 
-Packages exist to avoid naming collisions (two classes named `List` from different libraries) and to organize large codebases logically.
+**Boxing** converts a primitive to its wrapper object (`int` → `Integer`) and **unboxing** converts back; Java does both automatically. It exists because collections and generics work only with objects. Two consequences: unboxing `null` throws `NullPointerException`, and `==` on two wrapper objects compares references, not numbers — use `equals()`.
+
+```java
+int count = 10;
+long total = count;          // widening: automatic
+double avg = 7.8;
+int score = (int) avg;       // narrowing: explicit cast, gives 7 (truncates)
+
+byte a = 10, b = 20;
+int sum = a + b;             // byte + byte is an int
+// byte s = a + b;           // compile error: possible lossy conversion from int to byte
+
+Integer boxed = count;       // boxing
+int back = boxed;            // unboxing
+Integer missing = null;
+// int n = missing;          // compiles, but throws NullPointerException
+```
+
+---
+
+### 1.7 Operators
+
+Operators are symbols that perform operations on values: arithmetic (`+ - * / %`), relational (`== != > < >= <=`), logical (`&& || !`), assignment (`= += -=`), increment and decrement (`++ --`), the ternary `?:`, bitwise and shift operators, and others. Combined with values they form *expressions*, which Java evaluates left to right.
+
+They exist simply because every language needs a compact way to express computation and comparisons — writing `a + b` is far more usable than calling a function for every addition. Two rules catch beginners: dividing two integers drops the remainder (`5 / 2` is `2`), and `&&`/`||` stop as soon as the answer is known, so the right-hand side may never run.
+
+```java
+int a = 7, b = 2;
+System.out.println(a / b);     // 3   — integer division
+System.out.println(a % b);     // 1   — remainder
+System.out.println(a / 2.0);   // 3.5 — one double operand makes it floating point
+
+int count = 5;
+count++;                       // count is now 6
+String label = count > 3 ? "many" : "few";   // ternary: "many"
+
+String name = null;
+if (name != null && name.length() > 3) { }   // safe: length() is never called when name is null
+```
+
+---
+
+### 1.8 Control Flow Statements
+
+Control flow statements decide *which* code runs and *how many times*. Java provides:
+- **Conditional:** `if / else if / else`, and `switch` — as a statement, or as an expression that produces a value
+- **Looping:** `for`, `while`, `do-while`, and the enhanced `for` that walks through every element of an array or collection
+- **Jumping:** `break` (leave a loop or switch), `continue` (skip to the next iteration), `return` (leave the method)
+
+They exist because real programs aren't a straight line of instructions — they need to branch based on data and repeat work without rewriting code.
+
+```java
+int[] scores = {72, 95, 48};
+for (int s : scores) {                       // enhanced for: each element in turn
+    if (s >= 90) System.out.println("A");
+    else if (s >= 60) System.out.println("Pass");
+    else System.out.println("Fail");
+}
+
+String size = switch (scores.length) {       // switch expression: produces a value
+    case 0 -> "empty";
+    case 1, 2, 3 -> "small";
+    default -> "large";
+};
+```
+
+---
+
+### 1.9 Arrays
+
+An array is a fixed-size, ordered collection of elements of the same type. In Java an array is an object: it is created with `new` (or an initializer), it knows its own `length`, and its elements are numbered from `0` to `length - 1`.
+
+Arrays exist to let you group related values together and access any one of them instantly using an index, instead of creating a separate variable for each value. The size is fixed when the array is created; elements start at default values (`0`, `false`, `null`) until you set them.
+
+```java
+int[] scores = {90, 85, 77};
+System.out.println(scores[1]);       // 85
+System.out.println(scores.length);   // 3 — a field, not a method
+
+String[] names = new String[2];      // elements start as null
+names[0] = "Ada";
+
+int[][] grid = new int[2][3];        // an array of 2 arrays, each holding 3 ints
+grid[1][2] = 7;
+```
+
+---
+
+### 1.10 Strings
+
+Almost every program handles text — names, messages, JSON, SQL. In Java, text is a `String`: an object (a reference type, not a primitive) holding a sequence of `char`s. Strings are **immutable** — once created, a `String` never changes; methods such as `toUpperCase()` or `replace()` return a *new* string. String literals in double quotes (`"hello"`) are shared: every identical literal refers to the same `String` object.
+
+It exists as a built-in, immutable type so text can be shared safely between any parts of a program, used as a map key, and passed around without copying. Compare strings with `equals()`, never `==`, which only checks whether two references point to the same object. To build a string piece by piece, use a `StringBuilder`.
+
+```java
+String greeting = "Hello";
+String name = "Ada";
+String message = greeting + ", " + name + "!";   // + concatenates: "Hello, Ada!"
+System.out.println(message.length());            // 11
+
+String upper = name.toUpperCase();               // "ADA" — name itself is unchanged
+System.out.println(name.equals("Ada"));          // true — compare content with equals
+
+StringBuilder sb = new StringBuilder();
+for (int i = 1; i <= 3; i++) sb.append(i).append(' ');
+System.out.println(sb.toString());               // "1 2 3 "
+```
+
+---
+
+### 1.11 Methods
+
+A method is a named, reusable block of code that performs a task, optionally taking inputs (parameters) and producing an output (return value). The values a caller passes in are *arguments*; the method receives copies of them in its *parameters*. A method that returns nothing is declared `void`.
+
+Methods exist to avoid repeating the same logic everywhere it's needed — you write the logic once and *call* it wherever required. Java always passes arguments **by value**: the method gets a copy of each value — and for an object, that value is a copy of the *reference*, so the method can change the object but not which object the caller's variable refers to.
+
+```java
+static int add(int a, int b) {        // name, parameters, return type
+    return a + b;
+}
+
+static void greet(String name) {      // void: returns nothing
+    System.out.println("Hello, " + name);
+}
+
+int sum = add(2, 3);                  // arguments 2 and 3 → sum is 5
+greet("Ada");                         // prints Hello, Ada
+```
+
+---
+
+### 1.12 Packages and Imports
+
+A package is a namespace that groups related classes together (e.g., `java.util`). An `import` statement lets a file use classes from another package without writing their full name every time. Importing doesn't download, load or run anything — it only lets you write `List` instead of `java.util.List`. Classes in `java.lang` (`String`, `System`, `Math`) are available everywhere without an import.
+
+Packages exist to avoid naming collisions (two classes named `List` from different libraries) and to organize large codebases logically. A class's full name includes its package — `java.util.List` — and package-private members are visible only inside their package (2.7).
+
+```java
+package com.shop.orders;                 // this file's classes belong to com.shop.orders
+
+import java.util.List;                   // now "List" means java.util.List in this file
+import java.time.LocalDate;
+
+public class OrderService {
+    List<String> ids = List.of("A1");
+    LocalDate today = LocalDate.now();
+    java.util.Map<String, Integer> stock; // or use the fully qualified name, no import needed
+}
+```
 
 ---
 

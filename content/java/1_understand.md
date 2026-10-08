@@ -30,29 +30,47 @@
 - [[#1.2 JVM, JRE, and JDK]]
 - [[#1.3 Platform Independence & Bytecode]]
 - [[#1.4 Variables and Data Types]]
-- [[#1.5 Operators]]
-- [[#1.6 Control Flow Statements]]
-- [[#1.7 Arrays]]
-- [[#1.8 Methods]]
-- [[#1.9 Packages and Imports]]
+- [[#1.5 Primitive Types and Literals]]
+- [[#1.6 Type Conversion, Casting and Boxing]]
+- [[#1.7 Operators]]
+- [[#1.8 Control Flow Statements]]
+- [[#1.9 Arrays]]
+- [[#1.10 Strings]]
+- [[#1.11 Methods]]
+- [[#1.12 Packages and Imports]]
 
 ---
 
 ### 1.1 What is Java?
 
-Java is a **compiled, statically-typed, object-oriented language** that runs on a virtual machine rather than directly on hardware.
+**The problem:** A program compiled to native machine code runs only on the processor and operating system it was built for, so shipping to Windows, macOS and Linux on x86 and ARM means a build per platform. Languages that leave memory management to the programmer add a second cost: leaks and use-after-free bugs. Java was designed to remove both.
+
+**How it works:** So Java is a **compiled, statically-typed, object-oriented language** that runs on a virtual machine rather than directly on hardware. The compiler checks types and produces platform-neutral bytecode; a JVM built for each platform loads that bytecode, checks it, runs it and reclaims unused memory automatically.
 
 **How it works end-to-end:**
 
 ```mermaid
 flowchart LR
     A[.java source file] -->|javac compiler| B[.class bytecode]
-    B -->|JVM class loader| C[Loaded classes in memory]
-    C -->|Interpreter / JIT| D[Native machine instructions]
+    B -->|JVM loads, links, initializes| C[Classes ready in the JVM]
+    C -->|interpreted, hot code JIT-compiled| D[Machine instructions run on the CPU]
     D --> E[Program executes]
 ```
 
-**Relationships with other concepts:** Java's design (bytecode + JVM) is *why* concepts like garbage collection, JIT compilation, and cross-platform libraries are possible at all — they all live inside the JVM layer.
+**Language, platform and implementation:** "Java" names several layers, and keeping them apart prevents most wrong mental models in this group.
+
+| Layer | Defined by | Decides |
+|---|---|---|
+| The Java language | The Java Language Specification (JLS) | Syntax, types, what a program means — e.g. that `int` is 32-bit and overflow wraps |
+| The JVM | The Java Virtual Machine Specification (JVMS) | The `.class` format, bytecode instructions, loading and linking rules |
+| The Java SE API | Javadoc of the platform modules (`java.base`, …) | What `String`, `List` or `Math` promise |
+| An implementation | Its vendor — HotSpot in OpenJDK builds, Eclipse OpenJ9, GraalVM | How it is done: interpreter vs. JIT, garbage collector, memory layout |
+
+When this curriculum says "the JVM does X", check which layer it is: a specification guarantee holds on every Java platform; an implementation technique (a JIT compiler, a particular heap layout) is how HotSpot happens to do it.
+
+**Running a program:** The classic entry point is `public static void main(String[] args)`. Since JDK 11, `java Hello.java` compiles a single source file in memory and runs it, with no separate `javac` step. Since JDK 25 (JEP 512), a *compact source file* may omit the class declaration and use an instance `main` with no parameters — `void main() { IO.println("Hello"); }` — which makes first programs shorter without changing how larger programs are written.
+
+**Relationships with other concepts:** Java's design (bytecode + JVM) is where concepts like garbage collection, JIT compilation, class loading and the standard library live — Groups 8 (JVM Internals) and 12 (Modules) build on the picture introduced here.
 
 **Advantages:**
 - Portable across operating systems without recompiling
@@ -60,41 +78,71 @@ flowchart LR
 - Huge mature ecosystem (Spring, Kafka clients, build tools)
 
 **Disadvantages:**
-- Historically slower startup than natively-compiled languages (improving with tools like GraalVM/AOT)
+- Historically slower startup than natively-compiled languages (improving with class-data sharing, ahead-of-time caches and GraalVM native images)
 - More verbose syntax than some modern languages (though this has improved with `var`, records, etc.)
 
-> ⚠️ **Common misconception:** "Java is interpreted, so it's slow." In reality, the JVM uses a **JIT (Just-In-Time) compiler** that turns hot bytecode paths into native machine code at runtime, often matching or approaching C++ performance for long-running processes.
+> ⚠️ **Common misconception:** "Java is interpreted, so it's slow." Mainstream JVMs such as HotSpot and OpenJ9 use a **JIT (Just-In-Time) compiler** that turns hot bytecode paths into native machine code at runtime, often matching or approaching C++ performance for long-running processes. The JVM specification doesn't require a JIT; it's how the major implementations get their speed.
+
+**Common mistake:** Treating HotSpot's behaviour as "what Java does". Which garbage collector runs, when code gets compiled and how objects are laid out in memory are implementation choices; code should rely only on what the language and API specifications promise.
+
+**Predict it:** You compile `Hello.java` on a Windows laptop with JDK 21 and copy `Hello.class` to a Linux ARM server that has a Java 25 runtime. Does it run without recompiling?
+
+**Yes.** The class file contains bytecode, not x86 or Windows instructions, and the Linux JVM understands it. The one constraint is version: a JVM can run class files from its own release or older ones, so the same file would *not* run on a Java 17 runtime (1.3).
 
 **Best intuition:** Think of Java source code as a recipe written in a universal recipe language. The JVM is a chef in every country who can read that exact recipe and cook it using local kitchen equipment (the OS/hardware).
+
+**Terminology:** *Bytecode*, *JVM*, *Java Language Specification (JLS)*, *Java Virtual Machine Specification (JVMS)*, *Java SE*, *OpenJDK* (the open-source reference implementation), *HotSpot* (its JVM), *compact source file*.
 
 ---
 
 ### 1.2 JVM, JRE, and JDK
 
-**How they relate (nesting):**
+**The problem:** "Install Java" can mean three different needs: execute bytecode, run an application with its standard library, or compile and package code. Shipping everything to every machine wastes space and enlarges the attack surface of servers; shipping too little makes an application fail at startup.
+
+**How they relate (nesting):** So the platform is described in layers, each adding to the one below.
 
 ```mermaid
 graph TD
     JDK[JDK: Development Kit] --> JRE[JRE: Runtime Environment]
     JRE --> JVM[JVM: Virtual Machine]
-    JDK -.contains.-> Tools[javac, javadoc, jdb, jar]
+    JDK -.contains.-> Tools[javac, javadoc, jdb, jar, jlink, jshell]
     JRE -.contains.-> Libs[Standard Class Libraries]
-    JVM -.contains.-> Engine[Class Loader, Bytecode Verifier, Execution Engine]
+    JVM -.contains.-> Engine[Class Loader, Bytecode Verifier, Execution Engine, Memory Manager]
 ```
 
-- **JVM** = the execution engine only (class loader + bytecode verifier + interpreter/JIT + garbage collector).
+- **JVM** = the execution engine only: it loads classes, verifies and links them, executes bytecode and reclaims unreachable objects with a garbage collector. *How* it executes is up to the implementation — HotSpot interprets first and JIT-compiles hot code.
 - **JRE** = JVM + core libraries (`java.lang`, `java.util`, etc.) needed to *run* compiled programs.
 - **JDK** = JRE + development tools (`javac`, `javadoc`, `jar`, debuggers) needed to *write and build* programs.
 
-> 📝 **Important terminology:** Since Java 11, Oracle no longer ships a separate "JRE-only" download for most use cases — the JDK is the standard distribution developers install. But the *conceptual* JVM/JRE/JDK layering still matters for understanding what runs where (e.g., a production server may only need a JRE-equivalent runtime, not full dev tools).
+**What the JVM does with a class:** Every class goes through the same steps, defined by the JVM specification (8.2 covers them in depth):
+1. **Loading** — a class loader finds the class's bytes (in a JAR, a directory, the runtime image) and creates the class. It happens lazily, the first time the class is needed.
+2. **Linking** — *verification* checks the bytecode is type-safe and well-formed; *preparation* allocates static fields with default values; *resolution* turns symbolic references to other classes and members into direct ones (lazily, in HotSpot).
+3. **Initialization** — static initializers run, once, just before the class's first active use (2.22).
+4. **Execution** — the bytecode runs. The specification defines what each instruction does, not whether it is interpreted or compiled; HotSpot uses an interpreter plus two JIT compilers (8.12).
+
+Memory management runs throughout: the heap is reclaimed by automatic storage management — a garbage collector — which the specification requires but doesn't prescribe (8.7).
+
+> 📝 **Important terminology:** Since Java 11, Oracle no longer ships a separate "JRE-only" download for most use cases — the JDK is the standard distribution developers install. Since JDK 9, the JDK itself is a modular *runtime image* with no separate `jre/` directory inside, and `jlink` builds custom runtimes containing only the modules an application needs. Some vendors (Eclipse Temurin, for example) still publish JRE builds. But the *conceptual* JVM/JRE/JDK layering still matters for understanding what runs where (e.g., a production server may only need a JRE-equivalent runtime, not full dev tools).
 
 **Common mistake:** Assuming you need the full JDK to *run* a compiled Java application in production — a minimal runtime (or a custom-built one via `jlink`) is often more efficient at scale.
+
+> ⚠️ **Common misconception:** "The JVM converts the whole program to machine code before running it." Loading and compilation are lazy: classes load when first used, and HotSpot compiles only code that proves hot. A class that is never used is never loaded.
+
+**Predict it:** A container image has a `jlink`-built runtime with `java.base` and `java.sql` only. Which of these work: `java -jar app.jar`, `javac Main.java`, `jshell`?
+
+**Only `java -jar app.jar`** — and only if the application needs no other modules. `javac` and `jshell` are JDK tools that were not linked into the image. A runtime contains the `java` launcher, the JVM and the chosen modules — nothing else.
+
+**Best intuition:** The JVM is an engine, the JRE is the engine plus fuel and parts to drive, and the JDK is the whole garage with tools to build cars. `jlink` lets you ship a car with exactly the parts it uses.
+
+**Terminology:** *Class loader*, *bytecode verifier*, *execution engine*, *JIT compiler*, *garbage collector*, *runtime image*, *`jlink`*, *loading / linking / initialization*.
 
 ---
 
 ### 1.3 Platform Independence & Bytecode
 
-**Internal mechanism:** `javac` compiles source into class files containing bytecode — a compact instruction set (opcodes) designed to be interpreted or JIT-compiled by *any* conforming JVM, regardless of underlying CPU architecture.
+**The problem:** Native compilers emit instructions for one CPU and calling conventions for one operating system, so the compiled file is tied to that platform. To ship one artifact everywhere, the compiler's output has to target something that is the same everywhere.
+
+**Internal mechanism:** So `javac` compiles source into class files containing bytecode — a compact instruction set (opcodes) designed to be interpreted or JIT-compiled by *any* conforming JVM, regardless of underlying CPU architecture. The class-file format and every instruction's meaning are fixed by the JVM specification; that shared definition is what makes the file portable.
 
 ```mermaid
 flowchart TD
@@ -105,69 +153,232 @@ flowchart TD
     Bytecode --> JVM_Linux[JVM on Linux]
 ```
 
+**What javac does — and doesn't:** It parses the source, resolves names and imports, type-checks every expression, checks definite assignment and access rules, chooses overloads (2.9), folds constant expressions (`2 + 3` becomes `5`), and writes one `.class` file per class, nested classes included. It does almost no optimisation — that is left to the JIT at runtime, which knows how the code is actually used.
+
+**Inside a class file:** a version number, a *constant pool* of names and literals, the class's fields and methods, and each method's bytecode. Bytecode is a stack machine: `iload_1` pushes a local variable, `iadd` pops two ints and pushes their sum. `javap -c` shows it.
+
+**Versions:** Every class file records the release it targets — major version 52 for Java 8, 61 for 17, 65 for 21, 69 for 25. A JVM runs its own version and older ones; a newer class file fails with `UnsupportedClassVersionError`. `javac --release 17` compiles for Java 17's language level, bytecode version *and* API, so it also rejects calls to methods that don't exist in 17.
+
+**Verification:** Before linking a class, the JVM's verifier checks that its bytecode is type-safe — no `int` used as a reference, no operand-stack overflow or underflow within a method, every jump landing on a valid instruction. Bytecode can come from any compiler or be generated at runtime, so the JVM doesn't trust it blindly.
+
 **Why this matters:** The JVM itself is *not* portable — each OS/architecture needs its own JVM binary. What's portable is the bytecode. This is a subtle but important distinction.
 
-> ⚠️ **Common misconception:** "Java code runs anywhere without any platform-specific concerns." In practice, things like file path separators, line endings, native library bindings (JNI), and default character encodings can still differ across platforms — bytecode portability doesn't mean *zero* platform sensitivity.
+> ⚠️ **Common misconception:** "Java code runs anywhere without any platform-specific concerns." In practice, things like file path separators, line endings, case-sensitivity of file systems, native library bindings (JNI) and environment variables can still differ across platforms — bytecode portability doesn't mean *zero* platform sensitivity. Default character encodings used to differ too; since JDK 18 (JEP 400) the default charset is UTF-8 everywhere, except for console I/O.
+
+**Common mistake:** Using `-source`/`-target` instead of `--release` to build for an older Java. Those flags set the language level and class-file version but still compile against the newer JDK's API, so code calling a newer method compiles and then fails with `NoSuchMethodError` on the older runtime.
+
+**Predict it:** `int result = 2 + 3;` — which instructions does `javap -c` show for it?
+
+**`iconst_5` then `istore_1`.** `2 + 3` is a constant expression, so `javac` computes it at compile time; there is no `iadd`. With variables — `int c = a + b;` — you'd see `iload`, `iload`, `iadd`, `istore`.
 
 **Best intuition:** Bytecode is like a shipping container — a standardized format any port (JVM) in the world knows how to unload, regardless of what's inside or where it's headed.
+
+**Terminology:** *Bytecode*, *class file*, *constant pool*, *opcode*, *major version*, *`--release`*, *bytecode verifier*, *constant folding*.
 
 ---
 
 ### 1.4 Variables and Data Types
 
-**The full primitive type table:**
+**The problem:** A value needs a name, a type the compiler can check, a region of code where the name is usable, and a lifetime during which the storage exists. Languages that leave any of these vague let programs read garbage memory or mix up numbers and objects. Java pins all four down.
 
-| Type | Size | Default | Range (approx.) |
-|---|---|---|---|
-| `byte` | 8-bit | 0 | -128 to 127 |
-| `short` | 16-bit | 0 | -32,768 to 32,767 |
-| `int` | 32-bit | 0 | ~-2.1B to 2.1B |
-| `long` | 64-bit | 0L | ~-9.2×10¹⁸ to 9.2×10¹⁸ |
-| `float` | 32-bit | 0.0f | ~7 decimal digits precision |
-| `double` | 64-bit | 0.0d | ~15 decimal digits precision |
-| `char` | 16-bit | '\u0000' | single Unicode character |
-| `boolean` | JVM-dependent | false | true / false |
+**How it works:** So every variable is *declared* with a type (`int total;`), *initialized* with a first value (`int total = 0;`, or later), and may be *assigned* new values afterwards unless it is `final` (2.18). Since Java 10, `var total = 0;` lets the compiler infer the type of a local variable from its initializer — the variable is still statically typed, just not spelled out (10.2).
 
-**How it works:** Primitives are stored directly in the location they're declared (stack for local variables). Reference types store a *reference* to the object, which itself lives on the heap.
+**Four kinds of variables:**
+
+| Kind | Declared | Default value? | Scope (where the name works) | Lifetime (how long the storage exists) |
+|---|---|---|---|---|
+| Local variable | Inside a method or block | No — must be assigned before use | From its declaration to the end of its block | Until the block finishes |
+| Parameter | In a method or constructor header | Set by the caller's argument | The whole method body | Until the call returns |
+| Instance field | In a class, without `static` | Yes | The class body (with access rules, 2.7) | As long as the object is reachable |
+| Static field | In a class, with `static` | Yes | The class body (with access rules) | From when the class is linked until it is unloaded — usually the whole run |
+
+Array elements also get default values when the array is created.
+
+**Scope vs. lifetime:** *Scope* is compile-time and textual — the region of source code where a name can be used. *Lifetime* is runtime — how long the storage exists. They differ: an object created inside a method can outlive that method if a reference to it is returned or stored, even though the local variable that first held it went out of scope.
+
+**Default values vs. definite assignment:** Fields and array elements start at `0`, `0.0`, `'\u0000'`, `false` or `null` automatically. Local variables never do: the compiler proves every local is assigned on every path before it is read, and rejects `int x; System.out.println(x);` with "variable x might not have been initialized". This catches bugs that default values would hide.
+
+**What a variable holds:**
+- A **primitive** variable holds the value itself — `int x = 5` holds 5.
+- A **reference** variable holds a *reference value* that identifies an object, or `null`. Assigning one reference variable to another copies the reference, so both identify the same object.
+
+A Java reference is not a C pointer. The language gives you no address to read, no arithmetic on references and no way to point into the middle of an object; you can only compare references (`==`), follow them to an object's members, or set them to `null`. How a JVM represents a reference internally — a compressed address, an offset, a handle — is its own business.
+
+**Where values live — a JVM model, not a language rule:** The language specifies what variables *hold*, not where in memory they are. In the JVM specification's model, each method call gets a stack frame holding its local variables and parameters, and objects — with all their fields, primitives included — are allocated on the heap.
 
 ```mermaid
 flowchart LR
-    subgraph Stack
+    subgraph Frame["Stack frame of main() — JVM model"]
     a["int x = 5"]
-    b["String s = ref→"]
+    b["String s → (reference)"]
     end
-    subgraph Heap
+    subgraph Heap["Heap — JVM model"]
     obj["String object: 'hello'"]
     end
     b --> obj
 ```
 
+So "primitives live on the stack" is wrong as a rule — an `int` field lives inside its object on the heap — and implementations may go further: HotSpot's escape analysis can avoid allocating an object that never leaves its method. None of this changes what your program can observe; reason about values and references, not placement.
+
 **Common mistake:** Assuming `==` compares *values* for reference types the way it does for primitives. For objects, `==` compares references — whether both sides refer to the same object — not content; that's what `.equals()` is for. (Covered in depth in the OOP group, 2.20.)
 
-**Autoboxing:** Java automatically converts between primitives and their wrapper classes (`int` ↔ `Integer`) when needed — this is convenient but has a performance cost in tight loops, since it creates objects on the heap.
+> ⚠️ **Common misconception:** "Java passes objects around by pointer, like C." Java copies *reference values*. You can't do pointer arithmetic, read an address or get a reference to a variable — which is also why Java is always pass-by-value (1.11).
+
+**Predict it:** Does this compile? `int x = 1; { int x = 2; }` — and this? `for (int i = 0; i < 3; i++) { } System.out.println(i);`
+
+**Neither does.** Java forbids a local variable in a nested block from reusing the name of a local still in scope ("variable x is already defined"), and the loop variable `i` is out of scope after the loop ("cannot find symbol"). Scope is checked entirely at compile time.
+
+**Best intuition:** A primitive variable is a box with the value inside. A reference variable is a box holding a ticket that identifies an object stored elsewhere; copying the variable copies the ticket, not the object.
+
+**Terminology:** *Declaration*, *initialization*, *assignment*, *scope*, *lifetime*, *definite assignment*, *default value*, *reference value*, *`null`*, *local variable type inference* (`var`).
 
 ---
 
-### 1.5 Operators
+### 1.5 Primitive Types and Literals
+
+**The problem:** In C, the size of an `int` depends on the compiler and CPU, so the same arithmetic can give different answers on different machines. A language that promises "run anywhere" has to fix the size, range and arithmetic of its basic types once, for every platform.
+
+**How it works:** So the Java Language Specification defines eight primitive types with exact sizes and semantics. Integer types are two's-complement signed; `char` is an unsigned 16-bit UTF-16 code unit; `float` and `double` are IEEE 754 binary floating point.
+
+**The full primitive type table:**
+
+| Type | Size | Default | Range | Literal examples |
+|---|---|---|---|---|
+| `byte` | 8-bit | 0 | -128 to 127 | `(byte) 10` — no byte literal syntax |
+| `short` | 16-bit | 0 | -32,768 to 32,767 | `(short) 10` |
+| `int` | 32-bit | 0 | ~-2.1B to 2.1B (`Integer.MIN_VALUE` … `MAX_VALUE`) | `42`, `0x2A`, `0b101010`, `052` (octal!), `1_000_000` |
+| `long` | 64-bit | 0L | ~-9.2×10¹⁸ to 9.2×10¹⁸ | `42L` |
+| `float` | 32-bit | 0.0f | ±~3.4×10³⁸, ~6–7 significant decimal digits | `3.14f`, `1e3f` |
+| `double` | 64-bit | 0.0d | ±~1.8×10³⁰⁸, ~15–16 significant decimal digits | `3.14`, `1e3`, `2d` |
+| `char` | 16-bit | '\u0000' | 0 to 65,535 — one UTF-16 code unit | `'A'`, `'\n'`, `'é'` |
+| `boolean` | not specified by the language | false | `true` / `false` | `true` |
+
+**Integer literals:** A whole-number literal is an `int` unless it ends in `L` (use the capital — `l` looks like `1`). `3_000_000_000` doesn't compile ("integer number too large"); `3_000_000_000L` does. Prefixes choose the base — `0x` hex, `0b` binary, and a leading `0` means *octal*, so `010` is 8. Underscores (Java 7+) may separate digits but not start or end a number.
+
+**Floating-point literals:** A decimal literal is a `double` unless it ends in `f`/`F`; `float f = 3.14;` doesn't compile because `3.14` is a `double`. Exponents (`1.5e-3`) work for both.
+
+**Character literals and escapes:** `'A'` is a `char`. Escapes: `\n` newline, `\t` tab, `\r` carriage return, `\'`, `\"`, `\\`, `\s` space (Java 15+), and `\uXXXX` for a UTF-16 code unit in hex. Because `char` is numeric, `'A' + 1` is the `int` 66.
+
+**Integer overflow wraps:** Integer arithmetic is exact modulo 2ⁿ: when a result doesn't fit, the JLS keeps its low-order bits, so `Integer.MAX_VALUE + 1` is `Integer.MIN_VALUE`. No exception, and no automatic switch to a bigger type — the operation's type is decided by its operands, so `int * int` overflows *before* the result is assigned to a `long`. `Math.addExact`, `multiplyExact` and `toIntExact` throw `ArithmeticException` instead. Integer division by zero, and `%` by zero, throw `ArithmeticException`.
+
+**Floating point is binary approximation:** `float` and `double` follow IEEE 754 — and since Java 17 every floating-point operation is strictly IEEE 754 on every platform (JEP 306). Most decimal fractions have no exact binary form, so `0.1 + 0.2` is `0.30000000000000004`. Division by zero doesn't throw: `1.0 / 0` is `Infinity`, `-1.0 / 0` is `-Infinity`, `0.0 / 0` is `NaN` ("not a number"). `NaN` is unequal to everything, itself included — test with `Double.isNaN(x)`. There are two zeros: `0.0 == -0.0` is true, but `1 / -0.0` is `-Infinity`.
+
+**char is a UTF-16 code unit, not a "character":** Unicode has more than 65,536 code points, so characters outside the Basic Multilingual Plane — most emoji, some CJK ideographs — take *two* `char`s, a surrogate pair. `"😀".length()` is 2. Code that must handle any text works with *code points*: `codePointAt`, `codePoints()`, `Character.toChars` (1.10).
+
+**boolean is only true or false:** It doesn't convert to or from numbers — `if (1)` and `boolean b = 0;` don't compile. The language doesn't define its size; the JVM specification represents `boolean` values as `int`s in bytecode and, in Oracle's implementation, `boolean` arrays as byte arrays. That representation never changes what a `boolean` means.
+
+**Signedness:** `byte`, `short`, `int` and `long` are signed; only `char` is unsigned. For unsigned interpretation use helpers such as `Byte.toUnsignedInt(b)`, `Integer.toUnsignedString(i)` and `Integer.compareUnsigned`, and `>>>` for an unsigned shift (1.7).
+
+> ⚠️ **Common misconception:** "`char` stores a Unicode character." It stores one UTF-16 code unit. Most everyday characters fit in one, but an emoji needs two, so code that indexes or truncates by `char` can split a character in half.
+
+> ⚠️ **Common misconception:** "`boolean` is JVM-dependent." Its *values* are fixed by the language — `true` and `false` — and behave identically everywhere. Only its internal representation is left to the JVM.
+
+**Common mistake:** Computing with `int` and assigning to `long`, expecting no overflow: `long micros = 24 * 60 * 60 * 1000 * 1000;` gives 500654080, because the multiplication is done in `int`. Make the first operand a `long`: `24L * 60 * …`.
+
+**Predict it:** `int x = Integer.MAX_VALUE; x++;` — what is `x`? And what does `System.out.println(0.1 + 0.2 == 0.3)` print?
+
+**`-2147483648`, and `false`.** The increment keeps only the low 32 bits of the true result, wrapping to `Integer.MIN_VALUE` — no exception. `0.1` and `0.2` are stored as the nearest binary fractions, and their sum is `0.30000000000000004`, a different `double` from the nearest one to `0.3`.
+
+**Best intuition:** Integer types are odometers — roll past the top and they show the bottom. Floating-point types are scientific notation in binary — enormous range, limited significant digits, and most decimals only approximately.
+
+**Terminology:** *Primitive type*, *literal*, *two's complement*, *overflow*, *IEEE 754*, *NaN*, *UTF-16 code unit*, *code point*, *surrogate pair*.
+
+---
+
+### 1.6 Type Conversion, Casting and Boxing
+
+**The problem:** Arithmetic constantly mixes types — an `int` index with a `long` offset, a `char` with a number — and generic collections hold only objects. If every mix needed an explicit conversion, code would drown in casts; if every conversion were silent, data would vanish unnoticed. Java has to decide which conversions are safe to do quietly.
+
+**How it works:** So Java applies conversions automatically only where no magnitude can be lost, and demands an explicit cast where it can.
+
+**Widening primitive conversions (implicit):**
+`byte → short → int → long → float → double`, and `char → int` (and onward). These never lose the *magnitude* of a value, but `int → float`, `long → float` and `long → double` can lose *precision*: `float f = 16_777_217;` stores `1.6777216E7`. `short` and `char` don't widen to each other — both are 16-bit, but one is signed and one isn't.
+
+**Narrowing primitive conversions (explicit cast):**
+- Integer to smaller integer keeps the low-order bits: `(byte) 200` is `-56`, `(short) 70_000` is `4464`.
+- Floating point to integer rounds toward zero: `(int) 3.99` is `3`, `(int) -3.99` is `-3`. For `int` and `long` targets, out-of-range values clamp to the minimum or maximum (`(int) 1e20` is `Integer.MAX_VALUE`) and `NaN` becomes `0`. For `byte`, `short` and `char`, the value is first converted to `int` and then loses its high bits, so `(byte) 1e10` is `-1`.
+- A cast never throws; `Math.toIntExact(long)` is the checked alternative that throws `ArithmeticException` when the value doesn't fit.
+
+**Numeric promotion:** Before arithmetic, operands are promoted. If either operand is `double`, both become `double`; otherwise if either is `float`, `float`; otherwise if either is `long`, `long`; otherwise *both become `int`* — even two `byte`s, `short`s or `char`s. So `byte + byte` is `int`, `char + 1` is `int`, and `int + long` is `long`. Unary `-x` and `~x` also promote `byte`, `short` and `char` to `int`.
+
+**Exceptions that make code readable:**
+- **Constant narrowing:** `byte b = 10;` compiles although `10` is an `int` — an assignment of a *constant* that fits is allowed. `final byte x = 10, y = 20; byte z = x + y;` also compiles, because `x + y` is a constant expression. This applies to assignments only: calling `f(byte b)` as `f(10)` doesn't compile.
+- **Compound assignment casts:** `b += 5` means `b = (byte) (b + 5)`, so it compiles where `b = b + 5` doesn't — and it can silently overflow or truncate (`int i = 10; i += 3.7;` makes `i` 13).
+
+**Boxing and unboxing:** Each primitive has a wrapper class — `Integer`, `Long`, `Double`, `Character`, `Boolean`, … Boxing converts a primitive to its wrapper; unboxing goes back. The compiler inserts them where needed: assigning `int` to `Integer`, adding an `int` to a `List<Integer>`, doing arithmetic on wrappers.
+- Boxing calls `Integer.valueOf(…)`, which may return a *cached* instance. The Java SE API guarantees caching for integral values in `-128` to `127` (and `true`/`false`, and `char`s up to `\u007f`); it may cache more — HotSpot's `-XX:AutoBoxCacheMax` widens the `Integer` range. So boxing doesn't always allocate, and when it does, the JIT can sometimes eliminate the allocation.
+- `==` on two wrappers compares *references*: `Integer a = 127, b = 127;` gives `a == b` true (cached), `128` usually gives false. Comparing a wrapper with a primitive (`a == 128`) unboxes and compares values. Use `equals()` or unbox explicitly.
+- Unboxing `null` throws `NullPointerException` — often far from where the `null` came from, such as `int n = map.get(key);` for a missing key.
+- Boxing only goes to the matching wrapper: `Long l = 5;` doesn't compile (`5` is an `int`), and `Integer.equals(Long)` is always `false`.
+
+**Autoboxing:** Java automatically converts between primitives and their wrapper classes (`int` ↔ `Integer`) when needed — this is convenient but has a cost in tight loops: values outside the cache range usually need a new object per boxing, adding allocation and GC work unless the JIT can remove it.
+
+> ⚠️ **Common misconception:** "Boxing always creates a new object on the heap." `Integer.valueOf` returns cached instances for small values, and the JIT can eliminate allocations it proves unnecessary. What you *can't* rely on is identity: whether two boxes are the same object.
+
+> ⚠️ **Common misconception:** "Widening never loses information." It never loses magnitude, but `int` → `float` and `long` → `double` can lose low-order digits, silently.
+
+**Common mistake:** `long total = a * b;` with `int a, b` — the multiplication is done in `int` and overflows *before* the widening to `long`. Cast an operand first: `(long) a * b`.
+
+**Predict it:** `byte a = 10, b = 20; var c = a + b;` — what is the type of `c`? And does `Integer x = 128, y = 128; System.out.println(x == y);` print `true`?
+
+**`int`, and normally `false`.** Binary numeric promotion turns both `byte`s into `int`s before the addition, so `var` infers `int`. Boxing 128 is outside the guaranteed cache range, so on a default JVM each boxing produces a separate object and `==` compares two different references.
+
+**Best intuition:** Widening pours a small cup into a big one; narrowing pours a big cup into a small one, and you must say "I know it may spill". Boxing puts a number in an envelope — two envelopes can hold the same number and still be two envelopes.
+
+**Terminology:** *Widening/narrowing primitive conversion*, *cast*, *numeric promotion*, *constant expression*, *compound assignment*, *boxing/unboxing*, *wrapper class*, *integer cache*.
+
+---
+
+### 1.7 Operators
+
+**The problem:** An expression like `a + b * c++` packs several operations, conversions and side effects into one line. Unless the language fixes which operation binds tighter, in what order operands are evaluated, and when a side effect happens, the same line could mean different things on different compilers — as it famously can in C.
+
+**How it works:** So Java defines precedence, associativity *and* evaluation order. Operands are evaluated left to right, each fully before the operation that uses it, and the operands of arithmetic are promoted to a common type first (1.6).
 
 **Categories and key nuances:**
 
 | Category | Examples | Notes |
 |---|---|---|
-| Arithmetic | `+ - * / %` | Integer division truncates; watch for overflow |
+| Arithmetic | `+ - * / %` | Integer division truncates toward zero; `%` takes the sign of the left operand; watch for overflow |
+| Increment / decrement | `++x  x++  --x  x--` | Prefix changes the variable, then yields the new value; postfix yields the old value, then changes it |
 | Relational | `== != > < >= <=` | `==` on objects compares references, not content |
 | Logical | `&& \|\| !` | Short-circuit: right side not evaluated if left decides the result |
-| Bitwise | `& \| ^ ~ << >> >>>` | Operate on raw bits; `>>>` is unsigned right shift |
+| Bitwise | `& \| ^ ~` | Operate on raw bits; on `boolean`s `&`, `\|` and `^` are logical operators that do *not* short-circuit |
+| Shift | `<< >> >>>` | `>>` keeps the sign bit; `>>>` is unsigned right shift (fills with zeros) |
 | Assignment | `= += -= *= /=` | Compound assignment includes an implicit cast |
-| Ternary | `condition ? a : b` | Compact if-else expression |
+| Ternary | `condition ? a : b` | Compact if-else expression; its type follows from both branches |
+| Type test | `instanceof` | `x instanceof Dog d` tests and binds (2.13) |
+| String concatenation | `+` with a `String` operand | Converts the other operand to text (1.10) |
+
+**Pre- and post-increment:** `++x` adds one and the expression's value is the *new* value; `x++` adds one and the value is the *old* one. In `int y = x++;` with `x = 5`, `y` is 5 and `x` is 6. Since the variable changes as a side effect, use these as statements on their own line unless the old/new distinction is the point.
+
+**Evaluation order is defined:** Java evaluates the left operand before the right, and arguments left to right, so `int x = 5; int y = x++ + ++x;` is fully defined: `x++` yields 5 (x becomes 6), then `++x` makes x 7 and yields 7, so `y` is 12. Precedence decides how the expression is *grouped* (`*` before `+`); evaluation order decides when each operand runs. When in doubt, add parentheses — they cost nothing.
 
 > ⚠️ **Common mistake:** `5 / 2` evaluates to `2`, not `2.5`, because both operands are `int` — integer division truncates. You must cast at least one operand to `double` to get a decimal result.
 
-**Short-circuit evaluation intuition:** `a() && b()` — if `a()` returns `false`, `b()` is never called at all. This isn't just an optimization; it's often relied upon to avoid null-pointer errors, e.g. `if (obj != null && obj.isValid())`.
+**Short-circuit evaluation intuition:** `a() && b()` — if `a()` returns `false`, `b()` is never called at all. This isn't just an optimization; it's often relied upon to avoid null-pointer errors, e.g. `if (obj != null && obj.isValid())`. `||` stops as soon as the left side is `true`. With `false && someMethod()`, `someMethod()` never runs.
+
+**Shifts mask their distance:** For an `int`, only the low 5 bits of the shift distance are used (6 for a `long`), so `1 << 32` is `1`, not `0`; use `1L << 32` for a 64-bit result.
+
+**Ternary typing:** The two branches are converted to a common type. `true ? 1 : 2.0` evaluates to `1.0`, and `flag ? someInteger : 0` unboxes `someInteger` — throwing `NullPointerException` if it's `null`.
+
+> ⚠️ **Common misconception:** "`i = i++` increments `i`." It doesn't: `i++` yields the old value, the increment happens, and then the assignment stores the old value back. `i` is unchanged.
+
+**Predict it:** `int x = 5; int y = x++ + ++x;` — what are `x` and `y`?
+
+**`x` is 7, `y` is 12.** The left operand `x++` is evaluated first: it yields 5 and makes `x` 6. Then `++x` makes `x` 7 and yields 7. 5 + 7 = 12. Java guarantees this left-to-right order, so the result is the same on every JVM.
+
+**Best intuition:** Precedence draws the brackets, left-to-right evaluation walks through them, and promotion decides the type before each operation runs.
+
+**Terminology:** *Precedence*, *associativity*, *evaluation order*, *short-circuit evaluation*, *side effect*, *prefix/postfix*, *compound assignment*, *unsigned shift*.
 
 ---
 
-### 1.6 Control Flow Statements
+### 1.8 Control Flow Statements
+
+**The problem:** Programs must choose between paths, repeat work a known or unknown number of times, and escape early. The classic C-style `switch` added a famous hazard — forgetting `break` silently runs the next case — and it couldn't produce a value, so assigning a variable from a multi-way choice needed a mutable variable and a `break` per case.
+
+**How it works:** So Java keeps the familiar statements and, since Java 14, adds a safer `switch` form that never falls through and can be used as an expression.
 
 **Loop comparison:**
 
@@ -176,7 +387,9 @@ flowchart LR
 | `for` | Known iteration count | No |
 | `while` | Unknown iteration count, condition checked first | No |
 | `do-while` | Must run at least once | Yes |
-| enhanced `for` (for-each) | Iterating collections/arrays | No |
+| enhanced `for` (for-each) | Iterating arrays and anything `Iterable` | No |
+
+The enhanced `for` gives you each element but no index, and you can't remove elements from a collection while iterating it this way (Collections group).
 
 **Switch statement vs switch expression (Java 14+):**
 
@@ -198,13 +411,74 @@ String result = switch (day) {
 };
 ```
 
-> ⚠️ **Common mistake:** Forgetting `break` in a traditional `switch` statement causes **fall-through** — execution continues into the next case. This is one of the most classic Java bugs. The modern `switch` expression (`->` syntax) eliminates this entirely.
+**Two separate choices:** *statement vs. expression* (does the `switch` produce a value?) and *colon vs. arrow labels* (can control fall through?). They combine freely:
+
+| | Colon labels `case X:` | Arrow labels `case X ->` |
+|---|---|---|
+| **Statement** | Classic form; falls through without `break` | No fall-through; each case runs one expression, block or `throw` |
+| **Expression** | Must `yield` a value; can still fall through | Value is the expression on the right, or `yield` inside a block |
+
+A switch *expression* must be exhaustive — every possible value handled — so it needs a `default` unless it covers every constant of an enum (or every subtype of a sealed type). That turns "someone added a new enum constant" into a compile error instead of a silent gap.
+
+```java
+int score = switch (grade) {
+    case 'A' -> 4;
+    case 'B' -> 3;
+    case 'C' -> {
+        log("borderline");
+        yield 2;                 // yield returns a value from a block
+    }
+    default -> 0;
+};
+```
+
+**What a switch can test:** `int` and the types that promote to it (`byte`, `short`, `char`) and their wrappers, `String`, and enums. Since Java 21, a switch can test any reference type with *type patterns* (`case Circle c ->`) and handle `case null` (10.7). `long`, `float`, `double` and `boolean` selectors don't compile — as of Java 25 they need a preview feature (primitive types in patterns).
+
+> ⚠️ **Common mistake:** Forgetting `break` in a traditional `switch` statement causes **fall-through** — execution continues into the next case. This is one of the most classic Java bugs. Arrow labels (`->`), in statements and expressions alike, eliminate this entirely.
+
+**Labeled break and continue:** An unlabeled `break` or `continue` affects only the innermost loop. A label names an outer loop so you can leave or continue it directly:
+
+```java
+outer:
+for (int row = 0; row < grid.length; row++) {
+    for (int col = 0; col < grid[row].length; col++) {
+        if (grid[row][col] == target) {
+            System.out.println("found at " + row + "," + col);
+            break outer;         // leaves both loops
+        }
+    }
+}
+```
+
+Labels exist because the alternative — a flag variable checked by every loop — is clumsier. They are uncommon in application code because extracting the nested loops into a method and using `return` is usually clearer.
+
+**Predict it:** In `for (int i = 0; i < 5; i++) { if (i == 3) continue; if (i == 4) break; System.out.println(i); }`, what prints?
+
+**`0`, `1`, `2`.** At `i == 3`, `continue` skips the print and moves to the next iteration; at `i == 4`, `break` leaves the loop before printing.
+
+**Best intuition:** A colon `switch` is a set of entry points into one block of code — you fall from one to the next unless you jump out. An arrow `switch` is a lookup table — each row is self-contained.
+
+**Terminology:** *Fall-through*, *switch statement*, *switch expression*, *arrow label*, *`yield`*, *exhaustiveness*, *labeled statement*, *enhanced for*.
 
 ---
 
-### 1.7 Arrays
+### 1.9 Arrays
 
-**Memory layout:** Arrays are stored as a single contiguous block on the heap, with a fixed length set at creation time. Accessing `arr[i]` is O(1) because the JVM calculates the exact memory offset directly.
+**The problem:** A program often needs many values of one type — a thousand scores, a buffer of bytes — and must reach any of them by position, fast. Separate variables don't scale, and a structure that can be indexed outside its bounds (as in C) turns a typo into memory corruption.
+
+**How it works:** So Java provides arrays as built-in objects with a fixed length and checked indexing. Every access is bounds-checked: an index outside `0 … length - 1` throws `ArrayIndexOutOfBoundsException` instead of touching other memory.
+
+**Arrays are objects:** An array has a runtime class (`int[]`, `String[]`), inherits `Object`'s methods, has a `public final` field `length`, and is reached through a reference, so `int[] b = a;` makes two names for one array. Arrays don't override `equals`, `hashCode` or `toString` — use `Arrays.equals`, `Arrays.hashCode` and `Arrays.toString`. Elements of a new array get default values: `0`, `0.0`, `'\u0000'`, `false` or `null`.
+
+```java
+int[] a = new int[3];            // [0, 0, 0]
+int[] b = {1, 2, 3};             // initializer: length from the values
+int[] c = new int[] {1, 2, 3};   // same, usable anywhere an expression is
+int[] empty = new int[0];        // legal, and better than null for "no elements"
+// int[] bad = new int[-1];      // NegativeArraySizeException at runtime
+```
+
+**Memory layout:** The language guarantees a fixed length, indexed access and bounds checking — not a memory layout. In practice, HotSpot lays an array out as one object with a header and its elements stored next to each other on the heap, which is why indexing is constant-time and scanning a primitive array is very cache-friendly. Accessing `arr[i]` is O(1) because the JVM can compute the element's position directly.
 
 **Time complexity:**
 
@@ -214,21 +488,98 @@ String result = switch (day) {
 | Search (unsorted) | O(n) |
 | Insert/delete (requires shifting) | O(n) |
 
-**Multi-dimensional arrays:** Java doesn't have "true" 2D arrays — a 2D array is really an array of array references (jagged arrays are fully legal, meaning each row can have a different length).
+**Multi-dimensional arrays:** Java doesn't have "true" 2D arrays — a 2D array is really an array of array references (jagged arrays are fully legal, meaning each row can have a different length). `new int[3][5]` creates four objects: one array of 3 references, and three `int[5]` arrays.
 
 ```java
 int[][] grid = new int[3][]; // 3 rows, columns undefined yet
 grid[0] = new int[2];
 grid[1] = new int[5]; // different length — perfectly valid
+// grid[2] is still null
 ```
+
+**Array covariance:** If `String` is a subtype of `Object`, then `String[]` is a subtype of `Object[]` — so `Object[] objects = new String[3];` compiles. But the array object still knows it is a `String[]`, and the JVM checks every store into it: `objects[0] = 10;` compiles (an `Integer` is an `Object`) and throws `ArrayStoreException` at runtime. Generic collections are deliberately *not* covariant — `List<Object> l = new ArrayList<String>();` doesn't compile — which moves that error to compile time (Generics group).
+
+**Copying:** `a.clone()`, `Arrays.copyOf(a, n)` and `System.arraycopy` all copy *elements*. For arrays of objects that means copying references — a shallow copy whose elements are shared with the original.
+
+**The Arrays utility class:** `Arrays.toString` / `deepToString` for printing, `equals` / `deepEquals` for comparing contents, `sort`, `binarySearch` (on sorted arrays), `fill`, `copyOf` / `copyOfRange`, and `asList` — which returns a fixed-size `List` *view* backed by the array.
 
 > ⚠️ **Common misconception:** "Arrays and `ArrayList` are basically the same thing." Arrays are fixed-size and can hold primitives directly; `ArrayList` is resizable but only holds objects (autoboxing primitives). Full comparison lives in the Collections group.
 
+**Common mistake:** Printing or comparing an array directly — `System.out.println(arr)` prints something like `[I@1b6d3586` (the type and a hash code), and `a.equals(b)` compares references.
+
+**Predict it:** `Object[] objects = new String[2]; objects[0] = "hi"; objects[1] = 42;` — compile error, runtime exception, or fine?
+
+**It compiles, then throws `ArrayStoreException` on the last statement.** The variable's type is `Object[]`, so storing an `Integer` is legal to the compiler. The array object is a `String[]`, and every store into it is checked at runtime.
+
+**Best intuition:** An array is a row of numbered lockers bolted to the floor: fixed in number, each one reachable instantly by number, and a guard checks every key against the locker range — and, for object arrays, checks that what you put in matches the lockers' type.
+
+**Terminology:** *Array object*, *component type*, *length*, *jagged array*, *array covariance*, *`ArrayStoreException`*, *shallow copy*, *array initializer*.
+
 ---
 
-### 1.8 Methods
+### 1.10 Strings
+
+**The problem:** Text is everywhere — keys in maps, file names, user names, security checks — and it gets passed between countless methods and threads. If any holder could change a string, every method receiving one would have to copy it defensively, a map key could change after insertion, and a name checked by a security test could be swapped before it is used.
+
+**How it works:** So `String` is an immutable, `final` class: no method changes a `String`, and nobody can subclass it to add mutation. "Modifying" methods — `concat`, `replace`, `toUpperCase`, `trim`, `substring` — return a new `String` and leave the original untouched. Because strings can't change, they can be shared freely, and the language does share them.
+
+**Literals and the string pool:** The Java Language Specification guarantees that string literals — and compile-time constant expressions such as `"hel" + "lo"` — are *interned*: every occurrence of the same literal refers to the same `String` instance. `new String("hello")` always creates a new object, and strings computed at runtime (`part + "lo"`, `sb.toString()`, input from files) are new objects too. `s.intern()` returns the pooled instance with the same content. Where the pool is stored (on the heap since JDK 7, in HotSpot) is an implementation detail.
+
+```java
+String a = "hello";
+String b = "hello";
+String c = new String("hello");
+System.out.println(a == b);       // true  — both refer to the pooled literal (guaranteed)
+System.out.println(a == c);       // false — new String always creates another object
+System.out.println(a.equals(c));  // true  — same characters
+```
+
+**== vs. equals:** `==` compares references; `equals` compares characters. Interning makes `==` happen to work for literals, which is exactly why it is a trap: the same comparison fails as soon as one string comes from user input, a database or a concatenation at runtime. Use `equals`, or `equalsIgnoreCase`.
+
+**Concatenation:** `+` with a `String` operand converts the other operand to text — `null` becomes `"null"`, numbers their decimal form — and evaluates left to right, so `1 + 2 + "x"` is `"3x"` but `"x" + 1 + 2` is `"x12"`. The result of a runtime concatenation is a new `String`. *How* it is built is the compiler's and JVM's business: `javac` used `StringBuilder` calls before Java 9 and emits an `invokedynamic` call to `StringConcatFactory` since (JEP 280). The language only promises the resulting text.
+
+**StringBuilder and StringBuffer:** When a string is assembled in many steps — especially in a loop — each `s += x` copies everything built so far into a new `String`, making the loop O(n²). A `StringBuilder` is a mutable buffer: `append` adds in place, and `toString()` produces the final `String` once. `StringBuffer` is the older, synchronized version; a builder is almost never shared between threads, so prefer `StringBuilder`.
+
+**length() counts UTF-16 code units:** `charAt`, `length` and `substring` work on `char`s, so an emoji counts as 2 and `substring` can cut it in half (1.5). Use `codePointCount`, `codePoints()` or `offsetByCodePoints` when every visible character must count once.
+
+**Useful methods to know:** `isEmpty` / `isBlank` (Java 11), `strip` (Unicode-aware) vs. the older `trim`, `split`, `join`, `repeat`, `formatted` / `String.format`, `compareTo`, `contains`, `startsWith`. Multi-line literals use text blocks (`"""`, Java 15 — Modern Features group).
+
+> ⚠️ **Common misconception:** "`a == b` for strings is fine because Java pools strings." Only literals and compile-time constants are pooled automatically. A string read from a request or built at runtime is a different object with the same characters.
+
+> ⚠️ **Common misconception:** "String concatenation with `+` is always slow." For a single expression, the compiler and JVM generate efficient code. The cost appears when `+=` runs repeatedly in a loop, copying the growing string every time.
+
+**Common mistake:** Calling a "modifying" method and ignoring its result: `name.trim();` changes nothing. Write `name = name.trim();`.
+
+**Predict it:** `String part = "hel"; String c = part + "lo";` — is `c == "hello"`? Is `c.intern() == "hello"`?
+
+**`false`, then `true`.** `part` isn't a compile-time constant, so `part + "lo"` is computed at runtime into a new `String` object. `intern()` returns the pooled instance — the same object the literal `"hello"` refers to. (Declaring `final String part = "hel";` makes the whole expression a constant, and the first comparison becomes `true`.)
+
+**Best intuition:** A `String` is a printed label — to change the text you print a new label. A `StringBuilder` is a whiteboard you keep writing on until you print the final label once.
+
+**Terminology:** *Immutable*, *string literal*, *string pool / interning*, *compile-time constant*, *concatenation*, *`StringBuilder`*, *`StringBuffer`*, *code unit vs. code point*, *text block*.
+
+---
+
+### 1.11 Methods
+
+**The problem:** Logic copied into several places drifts apart when one copy is fixed and the others aren't. A method gives logic one name and one home. But calling it raises questions every language must answer: how arguments reach the method, what the method can change in the caller's world, and how the compiler picks among methods with the same name.
+
+**How it works:** So a method declaration fixes its modifiers, return type, name, parameter list and optional `throws` clause, and each call runs the body with its own fresh set of parameters and local variables.
+
+```java
+public static int add(int a, int b) throws IllegalStateException {
+//  ^modifiers  ^return  ^name ^parameters  ^throws clause (optional)
+    return a + b;
+}
+```
 
 **Key mechanisms:**
+
+- **Signature:** a method's name plus its parameter types — `add(int, int)`. Return type, parameter names and the `throws` clause aren't part of it, so two methods differing only in return type can't coexist: `int add(int a, int b)` and `double add(int a, int b)` is a compile error ("method is already defined").
+
+- **Return:** a non-`void` method must return a value on every path that completes normally; `return;` ends a `void` method early.
+
+- **Static and instance methods:** a `static` method belongs to the class and is called as `Math.max(a, b)`; an instance method runs on an object and can use its fields through `this` (2.4).
 
 - **Pass-by-value only:** Java *always* passes arguments by value. For objects, the value being copied is the *reference* itself — so the method can mutate the object's internal state, but reassigning the parameter inside the method does not affect the caller's variable.
 
@@ -239,23 +590,67 @@ void reassign(StringBuilder sb) {
 }
 ```
 
-> ⚠️ **Common misconception:** "Java passes objects by reference." This is false — Java passes the *reference value* by copy. This distinction is a favorite trap in interviews (expanded fully in the Interview file).
+> ⚠️ **Common misconception:** "Java passes objects by reference." This is false — Java passes the *reference value* by copy. This distinction is a favorite trap in interviews (expanded fully in the Interview file). A real pass-by-reference language would let `reassign` change which object the caller's variable refers to; Java can't, so a `swap(a, b)` method that swaps two variables is impossible.
 
-- **Method overloading:** Same method name, different parameter lists (resolved at compile time based on argument types — this is *static* / *compile-time* polymorphism).
-- **Varargs:** `void log(String... messages)` lets a method accept a variable number of arguments, internally treated as an array.
+- **Method overloading:** Same method name, different parameter lists (resolved at compile time based on the declared argument types — this is *static* / *compile-time* polymorphism). The compiler prefers an exact or widening match, then boxing, then varargs; if two candidates remain equally specific, the call is ambiguous and doesn't compile. 2.9 covers the rules in depth.
+- **Varargs:** `void log(String... messages)` lets a method accept a variable number of arguments, internally treated as an array. `log()` passes an empty array, `log("a", "b")` an array of two, and an existing `String[]` can be passed as-is. A method may have only one varargs parameter, and it must be last. Because varargs is matched last, `m(Integer)` beats `m(int...)` for `m(5)`.
+
+**Recursion and the call stack:** A method may call itself. Each call gets its own stack frame with its own parameters and locals, so a recursive method needs a *base case* that stops the recursion and a *recursive case* that moves toward it. Without one — or with input deep enough — the thread's stack fills up and the JVM throws `StackOverflowError`. Java doesn't eliminate tail calls, so deep recursion is usually rewritten as a loop.
+
+```java
+static int factorial(int n) {
+    if (n <= 1) return 1;              // base case
+    return n * factorial(n - 1);       // recursive case: n shrinks toward 1
+}
+```
+
+**Predict it:** `static void swap(int[] arr, int x) { arr[0] = 99; x = 99; arr = new int[] {7}; }` — after `int[] a = {1}; int b = 1; swap(a, b);`, what are `a[0]` and `b`?
+
+**`a[0]` is 99, `b` is 1.** The method got a copy of the reference to the caller's array, so `arr[0] = 99` changed that shared array. `x` is a copy of the int, and reassigning `arr` only redirected the method's own copy of the reference.
+
+**Best intuition:** Calling a method hands it photocopies of your arguments. A photocopy of a number is just a number. A photocopy of an address card still leads to the same house — the method can repaint the house, but tearing up its photocopy doesn't change your card.
+
+**Terminology:** *Parameter vs. argument*, *method signature*, *return type*, *pass-by-value*, *overloading*, *varargs*, *recursion*, *base case*, *stack frame*, *`StackOverflowError`*.
 
 ---
 
-### 1.9 Packages and Imports
+### 1.12 Packages and Imports
 
-**How the JVM resolves classes:** A package maps to a directory structure (`com.company.project` → `com/company/project/`). The **classpath** tells the JVM where to look for compiled `.class` files and packages at runtime.
+**The problem:** Thousands of libraries can't coordinate class names — two of them will both define `List`, `Logger` or `Node`. A large codebase also needs boundaries: groups of classes that work closely together and share details that the rest of the code shouldn't touch.
+
+**How it works:** So every class belongs to a package — declared with `package com.shop.orders;` as the first statement of the file, or the unnamed default package if omitted — and its *fully qualified name* is the package plus the class name: `com.shop.orders.OrderService`. Packages are flat namespaces: `java.util` and `java.util.concurrent` are unrelated as far as access and imports are concerned; the dots are only a naming convention. By convention, names start with a reversed domain you control (`com.example.billing`).
+
+**Packages and directories:** The language doesn't tie packages to folders — it leaves storage to the host system. In practice the tools do: `javac -d out` writes `com/shop/orders/OrderService.class`, class loaders look up a class in a JAR or directory by that path, and build tools such as Maven and Gradle expect sources under `src/main/java/com/shop/orders/`. So mirror packages in directories, but know it's a toolchain convention rather than a language rule. The **classpath** (or, for modular code, the module path) tells the JVM where to look for compiled `.class` files and packages at runtime.
+
+**What import does — and doesn't:** An import is a compile-time instruction for resolving simple names in *this file*. It doesn't download a dependency, load or initialize a class, create objects, or include code; the bytecode always contains fully qualified names, so imports have no runtime cost at all. A class that is imported but never used is never loaded because of the import.
 
 **Import mechanics:**
-- `import java.util.List;` — imports a single class
-- `import java.util.*;` — imports all classes in a package (does *not* include sub-packages)
-- `java.lang.*` is imported automatically into every file — that's why `String`, `System`, `Object` need no explicit import
+
+| Form | Example | Makes available |
+|---|---|---|
+| Single-type import | `import java.util.List;` | One type, by its simple name |
+| Type-import-on-demand (wildcard) | `import java.util.*;` | Every public type in that package, as needed — not sub-packages |
+| Single static import | `import static java.lang.Math.max;` | One static member |
+| Static import on demand | `import static java.lang.Math.*;` | All static members of a type |
+| Module import (Java 25) | `import module java.sql;` | Every public type in the packages that module exports, and in modules it transitively requires |
+
+- `java.lang.*` is imported automatically into every file — that's why `String`, `System`, `Object` need no explicit import.
+- A single-type import wins over a wildcard import with the same simple name, so `import java.util.*; import java.awt.*; import java.util.List;` makes `List` mean `java.util.List`. Two single-type imports of the same simple name don't compile; two wildcards that both contain `List` compile until you *use* `List`.
+- Types in the unnamed (default) package can't be imported by classes in named packages — fine for quick experiments, not for real code.
 
 > 📝 **Important terminology:** The **fully qualified name** of a class includes its package, e.g. `java.util.List`. You only need the short name (`List`) once it's imported or referenced via FQN directly (useful when two imported classes share the same simple name, e.g. `java.util.List` vs `java.awt.List`).
+
+**Packages and access:** A member with no access modifier is *package-private* — visible to every class in the same package and nowhere else, including subclasses in other packages (2.7). That makes the package a real encapsulation boundary: helper classes can stay invisible outside their feature. Modules (JPMS group) add one more layer — a package a module doesn't export is invisible outside it, even its `public` classes.
+
+> ⚠️ **Common misconception:** "`import` loads the class" or "a wildcard import makes the program slower." Imports only affect how the compiler resolves names in one file; nothing about them exists at runtime.
+
+**Predict it:** A file has `import java.util.*;` and `import java.awt.*;` and declares a field `List items;`. Does it compile? What if you add `import java.util.List;`?
+
+**No — then yes.** Both on-demand imports offer a `List`, so the use is ambiguous ("reference to List is ambiguous"). A single-type import is more specific than any wildcard, so adding `import java.util.List;` resolves `List` to `java.util.List`.
+
+**Best intuition:** A package is a surname that keeps people named `List` apart; an import is telling the compiler "in this file, when I say `List`, I mean the `java.util` one".
+
+**Terminology:** *Package*, *fully qualified name*, *unnamed package*, *single-type import*, *import on demand*, *static import*, *module import*, *classpath*, *module path*, *package-private*.
 
 ---
 

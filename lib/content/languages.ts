@@ -33,40 +33,8 @@ export const LANGUAGES: LanguageConfig[] = [
     id: "java",
     title: "Java",
     blurb: "The JVM, OOP, collections, concurrency and the production traps behind them.",
-    /**
-     * Group 1 does not align across levels.
-     *
-     *   Foundation / Understand : 1.1 What is Java?  +  1.2 JVM, JRE, and JDK
-     *   Interview               : 1.1 What is Java? / JVM / JRE / JDK
-     *   Production              : 1.1 JVM / JRE / JDK in Production
-     *
-     * Groups 2-12 align exactly by number, so only group 1 needs an explicit map. Two canonical
-     * concepts intentionally resolve to the same merged source section.
-     */
-    conceptAliases: {
-      interview: {
-        "1.1": "1.1",
-        "1.2": "1.1",
-        "1.3": "1.2",
-        "1.4": "1.3",
-        "1.5": "1.4",
-        "1.6": "1.5",
-        "1.7": "1.6",
-        "1.8": "1.7",
-        "1.9": "1.8",
-      },
-      production: {
-        "1.1": "1.1",
-        "1.2": "1.1",
-        "1.3": "1.2",
-        "1.4": "1.3",
-        "1.5": "1.4",
-        "1.6": "1.5",
-        "1.7": "1.6",
-        "1.8": "1.7",
-        "1.9": "1.8",
-      },
-    },
+    // All four Java files are numbered identically, so no alias table is needed. (Group 1 used to
+    // merge two Foundation concepts at Interview and Production; it was realigned in October 2026.)
     genericTitles: [
       "arrays",
       "methods",
@@ -76,6 +44,7 @@ export const LANGUAGES: LanguageConfig[] = [
       "packages-and-imports",
       "classes-and-objects",
       "what-is-java",
+      "strings",
       "what-are-generics",
       "what-is-a-stream",
       "what-is-an-exception",
