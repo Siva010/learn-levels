@@ -615,27 +615,42 @@ Package structure vs. classpath — the package is a logical/namespace concept; 
 - [[#2.1 Classes and Objects]]
 - [[#2.2 Constructors]]
 - [[#2.3 The this and super Keywords]]
-- [[#2.4 Encapsulation]]
-- [[#2.5 Inheritance]]
-- [[#2.6 Polymorphism]]
-- [[#2.7 Abstraction & Abstract Classes]]
-- [[#2.8 Interfaces]]
-- [[#2.9 Access Modifiers]]
-- [[#2.10 Static vs Instance Members]]
-- [[#2.11 The Object Class (equals, hashCode, toString)]]
+- [[#2.4 Static vs Instance Members]]
+- [[#2.5 Encapsulation]]
+- [[#2.6 Inheritance]]
+- [[#2.7 Access Modifiers]]
+- [[#2.8 Composition, Aggregation and Association]]
+- [[#2.9 Method Overloading]]
+- [[#2.10 Method Overriding]]
+- [[#2.11 Overriding vs Hiding]]
+- [[#2.12 Polymorphism]]
+- [[#2.13 Upcasting and Downcasting]]
+- [[#2.14 Abstraction]]
+- [[#2.15 Abstract Classes]]
+- [[#2.16 Interfaces]]
+- [[#2.17 Abstract Class vs Interface]]
+- [[#2.18 The final Keyword]]
+- [[#2.19 The Object Class]]
+- [[#2.20 equals and hashCode]]
+- [[#2.21 Immutability]]
+- [[#2.22 Object Initialization Order]]
 
 ---
 
 ### 2.1 Classes and Objects
 
 #### Definition
-A class is a blueprint defining fields and methods; an object is a runtime instance of that blueprint, created via `new` and allocated on the heap.
+A class is a blueprint defining fields and methods; an object is a runtime instance of that blueprint, created via `new` and allocated on the heap. A variable of a class type holds a reference to an object, never the object itself.
 
 #### Why it exists
 To bundle related data and behavior together, forming the basic building block of object-oriented modeling.
 
 #### Interview explanation
-Be ready to trace exactly what happens during `new ClassName(...)`: memory allocation → default field initialization → constructor execution → reference returned. This sequence is a common whiteboard question.
+**In 30 seconds** — A class declares fields and methods once; each `new` creates an independent object with its own copy of the instance fields and hands back a reference to it. Variables hold references, not objects: assigning one variable to another copies the reference, so both see the same object, and `null` means no object at all.
+
+**If they push deeper** — `new` does its work in a fixed order: it initializes the class if this is its first use, allocates space for every instance field (inherited ones included) and sets each to its default, runs the constructor chain from `Object` downwards — each class's field initializers and instance initializer blocks run just before the rest of that class's constructor body — and yields the reference. Static fields belong to the class, so they exist once however many objects are created.
+
+**What they test** — Be ready to trace exactly what happens during `new ClassName(...)`: memory allocation → default field initialization → constructor chain (superclass first, then field initializers, then the constructor body) → reference returned. This sequence is a common whiteboard question.
 
 #### Syntax
 ```java
@@ -663,41 +678,71 @@ System.out.println(c1.count); // 1
 System.out.println(c2.count); // 0 - independent state
 ```
 
+Predict the output — a question below asks for it:
+
+```java
+class Box { int size; }
+
+Box a = new Box();
+Box b = a;
+Box c = new Box();
+b.size = 5;
+c.size = 5;
+System.out.println(a.size);
+System.out.println(a == b);
+System.out.println(a == c);
+```
+
 #### Common interview questions
-- "What happens in memory when you create an object with `new`?"
-- "What's the difference between a class and an object?"
+- "What happens in memory when you create an object with `new`?" (The class is initialized if this is its first use; space for every instance field, inherited ones included, is allocated on the heap and set to defaults; the constructor chain runs from the top of the hierarchy down, each class running its field initializers and instance blocks before the rest of its constructor body; the reference becomes the value of the expression. Trap: saying the constructor allocates the object — allocation happens before any constructor code runs.)
+- "What's the difference between a class and an object?" (A class is a definition — fields, methods, constructors — loaded once per class loader; an object is one instance with its own instance-field values and its own identity. One class, any number of objects. Trap: calling the variable the object — the variable holds a reference to it.)
 - "Can a class exist without ever being instantiated? What's the point of that?" (Yes — utility classes with only static members, e.g. `Math`, are never instantiated.)
+- "What does the snippet in the Example print?" (`5`, `true`, `false`. `b = a` copied the reference, so `a` and `b` are one object and `b.size = 5` is visible through `a`. `c` is a second object, so `a == c` is false even though both sizes are 5 — `==` compares identity, never contents.)
+- "Why do Java variables hold references instead of objects?" (So objects can be shared and passed around cheaply and outlive the method that created them: copying a reference costs the same whatever the object's size, and the object stays alive until it is unreachable. The price is aliasing — a change through one reference is visible through all of them — and the possibility of `null`.)
+- "A method receives a `List`, calls `clear()` on it, then assigns the parameter to a new list. What does the caller see?" (An empty list, still the original one. `clear()` acted on the shared object, but Java passes the reference by value, so reassigning the parameter changed only the method's copy of it. Group 1.8 covers pass-by-value.)
 
 #### Follow-up questions
-- "Where are objects stored — stack or heap?" (Objects always live on the heap; only the reference variable itself lives on the stack if it's a local variable.)
-- "What happens to an object when no references point to it anymore?" (It becomes eligible for garbage collection — full detail in the JVM Internals group.)
+Interviewers rarely stop at "What happens in memory when you create an object with `new`?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which runs first — field initializers or the constructor body?" (The field initializers and instance initializer blocks, in textual order — but only after the superclass constructor has returned. So the order inside one constructor is `super(...)`, then initializers, then the rest of the body.)
+- "What does a field hold before its initializer runs, and can any code see that value?" (Its default — 0, false or null. Code sees it when a superclass constructor calls an overridable method that the subclass overrides: the override runs before the subclass's initializers and reads the defaults. 2.22 traces the full order.)
+- "If the constructor throws, does the object exist?" (It was allocated, but the `new` expression completes abruptly, so the caller never receives a reference and the object becomes unreachable — unless the constructor already leaked `this` somewhere reachable, in which case a half-built object is now visible. That is why constructors should not publish `this`.)
+- "So is every Java object created by running its class's constructor?" (No. Every `new` runs one, but `clone()` copies an object without running a constructor, and deserializing a `Serializable` class skips that class's constructors — only the no-arg constructor of the first non-serializable superclass runs. Records are the exception: they are deserialized through their canonical constructor. Invariants enforced only in constructors can therefore be bypassed.)
+
+Other follow-ups:
+
+- "Where are objects stored — stack or heap?" (In the JVM specification's model, every object is allocated on the heap; a local variable holds only a reference, in the method's stack frame. HotSpot's escape analysis can avoid allocating an object that never leaves its method, but that optimisation never changes what the program observes.)
+- "What happens to an object when no references point to it anymore?" (It becomes eligible for garbage collection once it is unreachable — no chain of references leads to it from a live thread or other GC root. Objects that only reference each other in a cycle are unreachable too. Eligible does not mean collected at once; the collector decides when. Full detail in the JVM Internals group.)
 
 #### Edge cases
-- Objects created but never assigned to a variable (`new Car("X", 2020);` with no assignment) are immediately eligible for garbage collection since nothing references them.
+- Objects created but never assigned to a variable (`new Car("X", 2020);` with no assignment) are eligible for garbage collection as soon as the statement completes — provided the constructor did not store `this` somewhere reachable.
 - Static nested classes vs. inner (non-static) classes behave differently — an inner class instance implicitly holds a reference to its enclosing instance; a static nested class does not.
+- Calling an instance method through a `null` reference compiles and throws `NullPointerException` at runtime. Since Java 15 the message names the expression that was null (helpful NullPointerExceptions, JEP 358).
 
 #### Common mistakes
-- Assuming two separately-created objects with identical field values are automatically `==` equal (they're not — `==` compares references, not content, unless `equals()` is overridden).
+- Assuming two separately-created objects with identical field values are `==` equal. They're not: for objects, `==` always compares references — whether both lead to the same object. Overriding `equals()` changes what `equals()` returns, never what `==` does.
 - Confusing a utility class (all-static, never instantiated) with a normal class design.
+- Assuming `Box b = a;` copies the object. It copies the reference; use a copy constructor or factory to get a second object.
 
 #### Comparisons
 
-| | Class | Object |
-|---|---|---|
-| What it is | Blueprint/template | Runtime instance |
-| Memory used | None (metadata only, loaded once) | Heap memory per instance |
-| Created with | `class` keyword definition | `new` keyword |
+| | Class | Object | Variable of class type |
+|---|---|---|---|
+| What it is | Blueprint/template | Runtime instance | A holder for a reference |
+| Memory used | Class metadata plus static fields, once per class loader | Heap memory per instance | One reference-sized slot |
+| Created with | `class` keyword definition | `new` keyword | A declaration (`Dog d;`) |
 
 #### Complexity
-Object creation is effectively O(1) for allocation (bump-pointer allocation in modern JVMs), though constructor body complexity adds on top.
+Allocation is cheap in HotSpot — usually a pointer bump in a thread-local buffer, an implementation detail rather than a language guarantee. Setting the fields to defaults and running the constructor chain cost time in proportion to the object's size and the constructors' work.
 
 #### Frequently confused with
-Class vs. instance vs. object — "instance" and "object" are synonyms; "class" is the distinct blueprint concept.
+Class vs. instance vs. object — "instance" and "object" are synonyms; "class" is the distinct blueprint concept. Object vs. reference — the variable holds the reference; the object lives elsewhere and may have several references to it.
 
 #### Important facts to remember
-- Objects always live on the heap; local variable references live on the stack.
+- Objects are allocated on the heap in the JVM's model; a local variable holds only a reference.
 - Static (class) members exist independently of any object instantiation.
-- An unreferenced object is eligible for GC immediately, not at some fixed later time.
+- An object becomes eligible for GC when it is unreachable — not when "nothing points to it", since cycles count as unreachable — and eligible does not mean collected immediately.
+- `==` on references compares identity, and nothing you write in a class changes that.
 
 ---
 
@@ -707,10 +752,14 @@ Class vs. instance vs. object — "instance" and "object" are synonyms; "class" 
 A constructor is a special block, matching the class name with no return type, that initializes a newly created object.
 
 #### Why it exists
-To guarantee every object starts in a valid, fully-initialized state before any other code can use it.
+A freshly allocated object holds only default values. Constructors run as part of normal object creation, so they are the one place a class can turn those defaults into a valid starting state and reject bad arguments before any caller receives the object.
 
 #### Interview explanation
-Constructor chaining (`this(...)`/`super(...)`) and the implicit-default-constructor rule are the two most commonly tested facts. Also expect questions distinguishing constructors from regular methods.
+**In 30 seconds** — A constructor runs every time `new` creates an object of its class. It has the class's name and no return type, can be overloaded, and is not inherited. If a class declares none, the compiler supplies a no-arg default constructor with the class's access level; declaring any constructor removes it. Every constructor except `Object`'s first calls a superclass constructor — `super()` implicitly unless you write `this(...)` or `super(...)`.
+
+**If they push deeper** — Inside a constructor the order is fixed: the superclass constructor runs to completion, then this class's field initializers and instance initializer blocks in textual order, then the rest of the body. Before Java 25 the explicit `this(...)`/`super(...)` call had to be the very first statement; Java 25 (JEP 513) allows code before it as long as that code does not touch the object under construction. Constructors guard normal creation only — `clone()` and deserialization of `Serializable` classes create objects without running that class's constructors.
+
+**What they test** — Constructor chaining (`this(...)`/`super(...)`) and the implicit-default-constructor rule are the two most commonly tested facts. Also expect questions distinguishing constructors from regular methods.
 
 #### Syntax
 ```java
@@ -735,18 +784,52 @@ class Car extends Vehicle {
 new Car(); // prints "Vehicle()" then "Car()"
 ```
 
+Predict the output — a question below asks for it:
+
+```java
+class Base {
+    Base() { System.out.println("Base()"); }
+    Base(String s) { System.out.println("Base(" + s + ")"); }
+}
+class Derived extends Base {
+    Derived() {
+        this("x");
+        System.out.println("Derived()");
+    }
+    Derived(String s) {
+        super(s);
+        System.out.println("Derived(" + s + ")");
+    }
+}
+
+new Derived();
+```
+
 #### Common interview questions
-- "What is a default constructor, and when does the compiler NOT provide one?"
+- "What is a default constructor, and when does the compiler NOT provide one?" (The no-arg constructor the compiler adds when a class declares no constructor at all; its body is just `super()` and its access matches the class. It is not provided as soon as you declare any constructor — so adding `Dog(String name)` silently breaks every `new Dog()`. Trap: calling any hand-written no-arg constructor a default constructor — the term means the compiler's.)
 - "Can a constructor be `private`? Why would you do that?" (Yes — used in Singleton pattern and static factory methods to control instantiation.)
 - "Can constructors be overloaded?" (Yes, same rules as method overloading — different parameter lists.)
+- "What does the snippet in the Example print?" (`Base(x)`, `Derived(x)`, `Derived()`. `Derived()` delegates to `Derived(String)` with `this("x")`, which calls `super(s)`, so `Base(String)` runs first, then the rest of `Derived(String)`, and only then the rest of `Derived()`. `Base()` never runs — exactly one superclass constructor runs per object.)
+- "Why must the superclass constructor run before the subclass's code?" (Because the subclass's fields and constructor body may rely on inherited state being valid. Building from `Object` downwards means each level starts from a fully initialized parent part — the same reason Java 25's statements-before-`super(...)` may not touch `this`.)
+- "You add `Order(String id)` to a class that other code creates with `new Order()`. What happens?" (Every `new Order()` stops compiling, and so does every subclass that relied on an implicit `super()`, because the default constructor no longer exists. Add an explicit no-arg constructor if that form is still wanted.)
 
 #### Follow-up questions
-- "Can a constructor call another constructor in the same class, and another constructor in the parent class, at the same time?" (No — `this(...)` and `super(...)` are mutually exclusive and must each be the very first statement if used.)
+Interviewers rarely stop at "What is a default constructor, and when does the compiler NOT provide one?" — they drill down from your answer. Answer each step before opening it:
+
+- "What does the default constructor contain?" (Only an implicit `super()` call, and it has the same access modifier as its class — `public` for a `public` class, package-private for a package-private one.)
+- "So what if the superclass has no no-arg constructor?" (A subclass that declares no constructor fails to compile, because its default constructor's `super()` has nothing to call. Every subclass constructor must call `super(args)` explicitly.)
+- "Are constructors inherited, then?" (No. A subclass has only the constructors it declares, plus the default one if it declares none. `new Child(5)` does not compile just because `Parent(int)` exists — `Child` must declare `Child(int x) { super(x); }`.)
+- "Can a subclass constructor run code before calling `super(...)`?" (Before Java 25, no — the call had to be the first statement, so argument checks went into a static helper inside the argument list. Since Java 25 (JEP 513), statements may come first if they do not use the object under construction: they can validate arguments and assign the class's own fields that have no initializer, but cannot call instance methods or read fields.)
+
+Other follow-ups:
+
+- "Can a constructor call another constructor in the same class, and another constructor in the parent class, at the same time?" (No — `this(...)` and `super(...)` are mutually exclusive: a constructor contains at most one explicit constructor invocation. Up to Java 24 it must be the very first statement; Java 25 relaxes that, not the one-call rule.)
 - "Can a constructor be `abstract`, `static`, or `final`?" (No to all three — none of these modifiers apply to constructors.)
 
 #### Edge cases
 - If a parent class has *no* no-arg constructor (only parameterized ones), every subclass constructor **must** explicitly call `super(args)` — the implicit no-arg `super()` call fails to compile.
-- Constructors are not inherited — a subclass must define its own, even if trivial.
+- Constructors are not inherited — a subclass gets only the constructors it declares (or the compiler's default one if it declares none), even when the parent has a matching signature.
+- A constructor that leaks `this` (registers itself as a listener, stores itself in a static collection) before it finishes exposes a half-built object, and if it then throws, that broken object stays reachable. JDK 21's `javac -Xlint:this-escape` warns about such escapes.
 
 #### Common mistakes
 - Accidentally writing a "constructor" with a return type (even `void`) — this silently compiles as a regular method with the same name as the class, not a constructor, and is never called automatically.
@@ -758,32 +841,38 @@ new Car(); // prints "Vehicle()" then "Car()"
 |---|---|---|
 | Name | Must match class name exactly | Any valid identifier |
 | Return type | None (not even `void`) | Required (can be `void`) |
-| Called | Automatically via `new` | Explicitly by name |
-| Inherited? | No | Yes (unless private/static) |
+| Called | By `new`, or from another constructor via `this(...)`/`super(...)` | Explicitly by name |
+| Inherited? | No | Yes, if accessible and not overridden or hidden — static methods included; private methods are never inherited |
 
 #### Complexity
 Not applicable.
 
 #### Frequently confused with
-Constructors vs. static factory methods (e.g., `List.of(...)`) — factory methods are ordinary static methods that *internally* call a constructor, but offer more flexibility (can return cached instances, subtypes, or `null`).
+Constructors vs. static factory methods (e.g., `List.of(...)`) — factory methods are ordinary static methods that *internally* call a constructor, but offer more flexibility (descriptive names, can return cached instances or a subtype).
 
 #### Important facts to remember
-- Every constructor's first statement is implicitly `super()` unless `this(...)` or an explicit `super(args)` is written.
+- Every constructor except `Object`'s starts with a superclass constructor call — implicitly `super()` unless `this(...)` or an explicit `super(args)` is written.
 - Constructors are never inherited and never marked `abstract`, `static`, or `final`.
 - A `private` constructor is a valid, common technique (Singleton, utility classes, static factories).
+- The default constructor has its class's access level, not always `public`.
+- Constructors run for every `new`, but `clone()` and deserialization can create objects without them.
 
 ---
 
 ### 2.3 The this and super Keywords
 
 #### Definition
-`this` references the current object instance; `super` references the immediate parent class, used to access its fields, methods, or constructor.
+`this` references the current object instance. `super` accesses the immediate parent class's version of a member — a field, method or constructor — for that same object; it is not a reference to a separate object.
 
 #### Why it exists
 To disambiguate names (shadowing) and to give subclasses explicit, controlled access to parent behavior they're extending or overriding.
 
 #### Interview explanation
-Interviewers commonly ask you to fix "shadowed field" bugs using `this`, and to explain exactly when `super()` is called implicitly vs. must be called explicitly.
+**In 30 seconds** — `this` is the current object: use it to reach a field hidden by a parameter (`this.name = name`), to pass or return the object, and as `this(...)` to call another constructor of the same class. `super` reaches the superclass's version of a member on the same object: `super.m()` runs the parent's implementation of an overridden method, and `super(...)` calls a parent constructor. Neither exists in static code.
+
+**If they push deeper** — `this` is a real value; `super` is not — `Object o = super;` doesn't compile. `super.m()` starts method lookup in the direct superclass, so if the parent only inherited `m`, the grandparent's version runs; what you can't do is skip the parent's own override. A constructor contains at most one of `this(...)` or `super(...)`; up to Java 24 it had to be the first statement, and Java 25 allows earlier statements that don't use the object.
+
+**What they test** — Interviewers commonly ask you to fix "shadowed field" bugs using `this`, and to explain exactly when `super()` is called implicitly vs. must be called explicitly.
 
 #### Syntax
 ```java
@@ -809,29 +898,65 @@ class Box {
 }
 ```
 
+Predict the output — a question below asks for it:
+
+```java
+class A {
+    String who() { return "A"; }
+}
+class B extends A {
+    @Override String who() { return "B"; }
+}
+class C extends B {
+    @Override String who() { return "C"; }
+    void test() {
+        System.out.println(this.who());
+        System.out.println(super.who());
+        System.out.println(((A) this).who());
+    }
+}
+
+new C().test();
+```
+
 #### Common interview questions
-- "What's the difference between `this()` and `super()` in a constructor?"
-- "Can you use both `this()` and `super()` in the same constructor?" (No — only one, and it must be the first line.)
-- "Why would you need `super.method()` inside an overridden method?"
+- "What's the difference between `this()` and `super()` in a constructor?" (`this(...)` delegates to another constructor of the same class; `super(...)` calls a constructor of the direct superclass. Either way exactly one superclass constructor runs per object, because a `this(...)` chain must end in a constructor that calls `super(...)`, implicitly or explicitly.)
+- "Can you use both `this()` and `super()` in the same constructor?" (No — at most one explicit constructor call per constructor. Up to Java 24 it must be the first line; Java 25 allows statements before it that don't use the object, but still only one call.)
+- "Why would you need `super.method()` inside an overridden method?" (To extend the parent's behaviour instead of replacing it: the override runs the parent's logic and adds its own. Without `super`, calling `method()` inside the override would call the override itself — infinite recursion.)
+- "What does the snippet in the Example print?" (`C`, `B`, `C`. `this.who()` dispatches on the runtime type, `C`. `super.who()` asks for `B`'s version. `((A) this).who()` still prints `C` — a cast changes the reference's static type, not the object, and overridden methods dispatch on the object. Only `super` can reach a parent's override.)
+- "Why can you write `return this;` but not `return super;`?" (`this` is a reference to the current object; `super` is not a value at all — it only tells the compiler where to start looking up a member. There is one object, and `super` is a way of naming the parent's members on it.)
+- "A subclass constructor assigns `name = name;` and the field stays null. What happened?" (The parameter `name` shadows the field, so the statement assigns the parameter to itself. Write `this.name = name;`. Many IDEs flag self-assignment.)
 
 #### Follow-up questions
+Interviewers rarely stop at "Why would you need `super.method()` inside an overridden method?" — they drill down from your answer. Answer each step before opening it:
+
+- "Which version runs when the parent does not override the method itself?" (The nearest one up the hierarchy. `super.m()` starts the lookup in the direct superclass; if that class only inherited `m`, the inherited implementation runs.)
+- "Can you call the grandparent's version when the parent does override it?" (No — there is no `super.super`. A class can reach only its parent's view of a member. If the parent's override must be bypassed, the design needs changing — for example the grandparent exposes a protected helper.)
+- "Can `super` call an interface's default method?" (Yes, with a qualified form: `Flyable.super.takeOff()` calls the default method from interface `Flyable`, which the class must directly implement. This is how a class resolves two conflicting default methods (2.16).)
+- "Can `this` leak out of a constructor, and why does that matter?" (Yes — passing `this` to another method or object, or calling an overridable method, exposes the object before construction finishes. Another thread or a subclass override may see unset fields. JDK 21's `javac -Xlint:this-escape` warns about it.)
+
+Other follow-ups:
+
 - "What happens if you call `super.method()` on a method that doesn't exist in the parent?" (Compile error — `super` only resolves to members actually declared/inherited in the parent class chain.)
 - "Does `this` exist inside a static method?" (No — static methods have no implicit object context, so `this` cannot be used there.)
 
 #### Edge cases
-- In a chain of three or more classes (`A -> B -> C`), calling `super` from `C` only reaches `B`, not `A` directly — you'd need `B` to itself call `super` to reach `A`.
+- In a chain of three or more classes (`A -> B -> C`), `super.m()` in `C` starts at `B`. If `B` declares `m`, `B`'s version runs; if `B` only inherits `m` from `A`, `A`'s version runs. What `C` can never do is skip `B`'s override to reach `A`'s.
 - Using `this` inside a constructor before all fields are initialized can expose a partially-constructed object if passed to another method (a subtle bug in complex constructors).
+- `super.field` reads the parent's field when the subclass declares a field with the same name — field hiding, covered in 2.11.
 
 #### Common mistakes
 - Forgetting `this.` when a constructor parameter shadows a field name, silently assigning the parameter to itself instead of setting the field.
-- Assuming `super` skips levels in a multi-level hierarchy — it never does; it always means "exactly one level up from here."
+- Assuming `super` can skip levels in a multi-level hierarchy — there is no `super.super`; `super` always starts the lookup one level up from here.
+- Assuming a cast such as `((Parent) this).m()` calls the parent's override. It doesn't — overridden methods dispatch on the object, whatever the cast.
 
 #### Comparisons
 
 | | `this` | `super` |
 |---|---|---|
-| Refers to | Current object | Parent class |
-| Used in | Any instance context | Subclass context only |
+| Refers to | Current object | The superclass's members, applied to the current object |
+| Usable as a value? | Yes (`return this`, `register(this)`) | No |
+| Used in | Any instance context | Any instance context of a class with a superclass |
 | Common use | Disambiguate shadowed names, constructor chaining | Access overridden parent behavior, parent constructor |
 
 #### Complexity
@@ -841,22 +966,132 @@ Not applicable.
 `super` (parent class reference) vs. `Object` (the ultimate root class) — `super` is relative to the current class's direct parent, not always `Object`.
 
 #### Important facts to remember
-- `this()`/`super()` must be the first statement in a constructor, and only one of them can appear.
-- `super` always means exactly one level up — never further.
+- A constructor contains at most one of `this()`/`super()`; up to Java 24 it must be the first statement, and Java 25 allows earlier statements that don't use the object.
+- `super` always starts the lookup one level up — it can find an inherited implementation further up, but can never skip the parent's own override.
 - Neither `this` nor `super` can be used inside a `static` context.
+- `this` is a value; `super` is not.
 
 ---
 
-### 2.4 Encapsulation
+### 2.4 Static vs Instance Members
 
 #### Definition
-Encapsulation is bundling an object's data with the methods that operate on it, while restricting direct external access to that data (typically via `private` fields and public accessor methods).
+Static members belong to the class itself (one copy total, shared); instance members belong to each object individually (one copy per instance).
+
+#### Why it exists
+To distinguish data/behavior that's naturally per-object from data/behavior that's naturally shared across the entire class.
+
+#### Interview explanation
+**In 30 seconds** — An instance field exists once per object; a static field exists once per class and is shared by every instance. A static method runs without an object, so it has no `this` and can't touch instance members except through an explicit reference. Static members are inherited but never overridden — a same-named static in a subclass hides the parent's.
+
+**If they push deeper** — Static state is created when the class is *initialized*, which happens on first active use — creating an instance, calling a static method, or using a static field that isn't a compile-time constant — not merely when the class is loaded. Static field initializers and `static` blocks run once, in textual order. Strictly, a static field exists once per class per class loader, so a class loaded by two loaders has two copies.
+
+**What they test** — A classic trick question: "can a static method access an instance field?" — always answer confidently: no, not directly, because static methods have no implicit `this`/object context.
+
+#### Syntax
+```java
+class Counter {
+    static int totalInstances = 0;   // static/class member
+    int id;                          // instance member
+    Counter() {
+        id = ++totalInstances;
+    }
+}
+```
+
+#### Example
+```java
+class MathUtils {
+    static int square(int x) { return x * x; } // no object needed
+}
+System.out.println(MathUtils.square(5)); // called on class, not an instance
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class Ticket {
+    static int next = 1;
+    int number;
+    Ticket() { number = next++; }
+}
+
+Ticket a = new Ticket();
+Ticket b = new Ticket();
+a.next = 10;
+Ticket c = new Ticket();
+System.out.println(a.number + " " + b.number + " " + c.number + " " + b.next);
+```
+
+#### Common interview questions
+- "Can a static method call an instance method directly?" (No — it would need an explicit object reference to do so.)
+- "When would you use a static block?" (For one-time static field initialization logic that's more complex than a simple assignment, run once when the class is initialized — on its first active use, not merely when it is loaded.)
+- "Are static variables thread-safe by default?" (No — shared static mutable state requires explicit synchronization in multi-threaded code.)
+- "What does the snippet in the Example print?" (`1 2 10 11`. There is one `next` for the whole class: `a.next = 10` changes the shared field even though it is written through `a`, so `c` gets 10 and `next` becomes 11, which is also what `b.next` reads. Trap: thinking `a.next` belongs to `a` — the compiler resolves it to `Ticket.next`.)
+- "Why can't a static method use `this`?" (Because it isn't invoked on an object — `MathUtils.square(5)` has no receiver. With no current object there is nothing for `this` to refer to and no instance fields to read.)
+- "A web service keeps the logged-in user in a `static` field. What goes wrong?" (Every request thread shares that one field, so concurrent requests overwrite each other's user and one user can see another's data. Per-request state belongs in request-scoped objects or method parameters, never in statics.)
+
+#### Follow-up questions
+Interviewers rarely stop at "Can a static method call an instance method directly?" — they drill down from your answer. Answer each step before opening it:
+
+- "Can an instance method call a static method?" (Yes — instance code can use everything static, because the class's members are always available; only the reverse direction needs an object.)
+- "Can you call a static method through an object reference?" (Yes, it compiles with a warning, but the object is ignored: the method is chosen from the reference's declared type at compile time. Even a `null` reference works without a `NullPointerException`.)
+- "Then what happens when a subclass declares a static method with the same signature?" (It *hides* the parent's. The subclass version is chosen when the code names the subclass type; a call through a parent-typed reference still runs the parent's version, whatever the object. Overriding needs dispatch on an object, and a static call has none.)
+- "Can a static method hide an instance method, or the reverse?" (Neither compiles. A subclass instance method can't override a static one, and a subclass static method can't hide an instance one — the compiler rejects both with "cannot override".)
+
+Other follow-ups:
+
+- "When exactly does static initialization happen?" (When the class is first *initialized*, which the JVM does immediately before the first instance creation, static method call, static field assignment, or read of a static field that is not a constant variable — and also when a subclass is initialized or `Class.forName` is called. Loading can happen earlier and does not run static code. Reading a `static final` compile-time constant such as `static final int MAX = 10` does not initialize the class, because the compiler copies the value into the caller.)
+- "Can you override a static method?" (No — you can only *hide* it; the call is resolved at compile time based on the reference's declared type, not overridden polymorphically.)
+
+#### Edge cases
+- Static field initializers and static initialization blocks run once, in the order they appear in the source, when the class is initialized — before any instance is created.
+- A `static` field in a class hierarchy is shared even between parent and child references if not redeclared in the child — easy to trip up on when debugging unexpected shared state.
+- If a static initializer throws, the first use fails with `ExceptionInInitializerError` and every later use of the class fails with `NoClassDefFoundError` — the class is marked unusable for the life of its class loader.
+
+#### Common mistakes
+- Trying to access `this` inside a static method (compile error).
+- Assuming each subclass gets its own independent copy of an inherited static field — it doesn't, unless explicitly redeclared in the subclass (which then hides, not shares, the parent's field).
+- Writing `obj.staticMethod()` and expecting it to depend on `obj`'s runtime type — it never does.
+
+#### Comparisons
+
+| | Static (class) member | Instance member |
+|---|---|---|
+| Copies in memory | One per class (per class loader), shared by all | One per object |
+| Access | `ClassName.member` (via an instance compiles, but is resolved by the reference's declared type — discouraged) | `instance.member` |
+| Can use `this`? | No | Yes |
+| Overridable? | No (can only be hidden) | Yes (if not private/static/final) |
+| Created when | The class is initialized | The object is created |
+
+#### Complexity
+Not applicable.
+
+#### Frequently confused with
+Static method "hiding" vs. instance method "overriding" — these look syntactically similar but resolve completely differently (compile-time vs. runtime). Class *loading* vs class *initialization* — static code runs at initialization.
+
+#### Important facts to remember
+- Static members exist once per class (per class loader) and are created when the class is initialized, shared across all instances.
+- Static methods cannot use `this` or directly call instance methods/fields.
+- Static methods can be hidden, never truly overridden.
+- Reading a compile-time constant does not initialize its class.
+
+---
+
+### 2.5 Encapsulation
+
+#### Definition
+Encapsulation is bundling an object's data with the methods that operate on it, while restricting direct external access to that data — typically via `private` fields and methods that expose meaningful operations rather than raw state.
 
 #### Why it exists
 To protect object invariants and allow internal implementation to evolve without breaking external code that depends on the class's public behavior.
 
 #### Interview explanation
-Be ready to justify encapsulation beyond "just making fields private" — the real value is *validation* and *implementation freedom*, not the mechanical getter/setter pattern alone.
+**In 30 seconds** — Encapsulation means the object owns its state: fields are private, and the only way to change them is through methods that enforce the object's rules. The point is invariants — a balance that can't go negative because `withdraw` checks it — and the freedom to change the representation later. Getters and setters for every field are not encapsulation; they hand control straight back to callers.
+
+**If they push deeper** — It is distinct from information hiding, which is about concealing design decisions that might change, and from abstraction, which is about choosing the essential operations to expose. Encapsulation also leaks through references: a getter that returns an internal `List` lets callers mutate the object without touching a field, so mutable state must be copied on the way in and out. And `private` is enforced by the compiler and the JVM, but reflection can still bypass it for classpath code — it is a design boundary, not a security boundary.
+
+**What they test** — Be ready to justify encapsulation beyond "just making fields private" — the real value is *validation* and *implementation freedom*, not the mechanical getter/setter pattern alone.
 
 #### Syntax
 ```java
@@ -873,26 +1108,56 @@ class Temperature {
 #### Example
 ```java
 class Account {
-    private double balance;
-    void deposit(double amt) {
-        if (amt <= 0) throw new IllegalArgumentException("Deposit must be positive");
-        balance += amt;
+    private BigDecimal balance = BigDecimal.ZERO;
+    void deposit(BigDecimal amt) {
+        if (amt.signum() <= 0) throw new IllegalArgumentException("Deposit must be positive");
+        balance = balance.add(amt);
     }
 }
 ```
 
+Predict the output — a question below asks for it:
+
+```java
+class Team {
+    private final List<String> members;
+    Team(List<String> members) { this.members = members; }
+    List<String> members() { return members; }
+    int size() { return members.size(); }
+}
+
+List<String> names = new ArrayList<>(List.of("Ann"));
+Team team = new Team(names);
+names.add("Bob");
+team.members().add("Cid");
+System.out.println(team.size());
+```
+
 #### Common interview questions
-- "What is encapsulation, and how does Java enforce it?"
-- "Is a class with all-public fields encapsulated?" (No.)
+- "What is encapsulation, and how does Java enforce it?" (Keeping an object's state under its own control: callers change it only through methods that uphold the object's invariants. Java enforces the boundary with access modifiers — `private` fields are unreachable from other classes at compile time and at link time. The design part — which operations to expose — is up to you. Trap: answering only "private fields with getters and setters".)
+- "Is a class with all-public fields encapsulated?" (No. Any code can put it into any state, so it can't guarantee a single invariant, and its representation can never change without breaking callers.)
 - "Why prefer immutable objects (final fields, no setters) in some designs?" (Simpler reasoning, inherent thread-safety, no invalid intermediate states.)
+- "What does the snippet in the Example print?" (`3`. The constructor stored the caller's list without copying, so `names.add("Bob")` changed the team; the getter returned the same list, so `add("Cid")` changed it again. `private final` protected the *field*, not the list it refers to. Fix: `this.members = List.copyOf(members)` and return the immutable copy.)
+- "What is the difference between encapsulation, information hiding and abstraction?" (Encapsulation bundles state with behaviour and controls access to it. Information hiding conceals design decisions likely to change — the representation, the algorithm — behind a stable interface. Abstraction chooses which essential operations the interface offers. Encapsulation is usually the mechanism that achieves information hiding.)
+- "A teammate adds `setBalance(BigDecimal)` so a report job can fix data. What is the risk?" (Every caller now can set any balance, bypassing the deposit and withdrawal rules and the audit trail they produce. Add a specific, validated operation for the correction — `applyAdjustment(amount, reason)` — instead of a general setter.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is encapsulation, and how does Java enforce it?" — they drill down from your answer. Answer each step before opening it:
+
+- "If the field is private, how can a caller still corrupt the object?" (Through a reference to mutable internal state: a getter returning the internal `List`, `Date` or array, or a constructor that stored the caller's mutable argument. The caller mutates the object those references lead to without touching the field.)
+- "How do you close that hole?" (Copy on the way in and on the way out — `List.copyOf`, `new Date(d.getTime())`, `array.clone()` — or store immutable types to begin with. Copy *before* validating, so the caller can't change the value between the check and the copy.)
+- "Is `private` per object or per class?" (Per class. Code in `BankAccount` can read another `BankAccount`'s private fields — which is what makes `equals(Object other)` possible. Encapsulation protects the class's invariants from other classes, not one instance from another.)
+- "Can reflection break encapsulation?" (For your own classpath code, yes — `setAccessible(true)` reads and writes private fields. Since Java 16/17, packages of a named module that are not opened refuse it, which is why the JDK's internals are no longer reachable that way. Treat encapsulation as a design guarantee, not a security mechanism.)
+
+Other follow-ups:
+
 - "If a getter just returns a private field with no logic, is that still 'encapsulation'?" (Technically yes — it hides the field behind a method, preserving the *option* to add logic later without changing the public API — but it provides no protection by itself.)
-- "How does encapsulation relate to immutability?" (Immutability is a strong form of encapsulation — no setters exist at all, so state can never be changed after construction.)
+- "How does encapsulation relate to immutability?" (Immutability removes mutation altogether — no setters exist, so state can never change after construction. Encapsulation is what makes that enforceable: private final fields, no mutators and defensive copies of mutable components (2.21).)
 
 #### Edge cases
 - Returning a mutable field directly (a `List`, `Map`, array, or mutable custom object) from a getter breaks encapsulation even if the field itself is `private` — the caller gets a live handle to internal state.
-- Reflection can bypass `private` access entirely (`field.setAccessible(true)`) — encapsulation is a compile-time/language-level guarantee, not an absolute security boundary.
+- Reflection can bypass `private` access (`field.setAccessible(true)`) for classes on the classpath; since Java 16/17 it fails for packages a named module does not open, including all JDK internals. Encapsulation is a compile-time/language-level guarantee, not an absolute security boundary.
+- `Collections.unmodifiableList(items)` is a read-only *view*: callers can't change it, but they see every later change the class makes to `items`. `List.copyOf(items)` is a snapshot.
 
 #### Common mistakes
 - Adding a public setter for every private field "just in case," which effectively defeats encapsulation.
@@ -910,25 +1175,30 @@ class Account {
 Not applicable.
 
 #### Frequently confused with
-Encapsulation vs. abstraction — encapsulation is about *hiding data/state and controlling access*; abstraction is about *hiding implementation complexity and exposing only relevant behavior*. They're related but distinct.
+Encapsulation vs. abstraction — encapsulation is about *hiding data/state and controlling access*; abstraction is about *hiding implementation complexity and exposing only relevant behavior*. They're related but distinct. Encapsulation vs. information hiding — information hiding is the goal (conceal decisions that may change); encapsulation is the usual mechanism.
 
 #### Important facts to remember
 - Encapsulation ≠ "private fields + getters/setters for everything" — it's about controlled, validated access.
-- Reflection can bypass encapsulation; it's a design/compile-time guarantee, not a hard security wall.
+- Reflection can bypass encapsulation for classpath code; it's a design/compile-time guarantee, not a hard security wall.
 - Defensive copying is required for mutable fields to preserve real encapsulation.
+- `private` is per class, not per object.
 
 ---
 
-### 2.5 Inheritance
+### 2.6 Inheritance
 
 #### Definition
-Inheritance lets a subclass acquire the fields and methods of a superclass using `extends`, modeling an "is-a" relationship.
+Inheritance lets a subclass acquire the accessible fields and methods of a superclass using `extends`, modeling an "is-a" relationship: the subclass becomes a subtype of the superclass.
 
 #### Why it exists
-To enable code reuse and establish type hierarchies that support polymorphism.
+To establish type hierarchies in which a subclass object can stand in for its superclass — the basis of subtype polymorphism. Reuse of the superclass's code comes with it, but is not on its own a reason to inherit.
 
 #### Interview explanation
-Know cold: Java allows single inheritance of classes but multiple inheritance of interfaces. Be ready to discuss "composition over inheritance" as a design principle interviewers love to probe.
+**In 30 seconds** — `class Dog extends Animal` says a Dog *is an* Animal: a `Dog` can be used wherever an `Animal` is expected, and it inherits `Animal`'s accessible members, which it can extend or override. Java allows one superclass per class but any number of interfaces. Reuse alone doesn't justify inheritance — if "is a" isn't true, use composition.
+
+**If they push deeper** — A subclass is coupled to its parent's implementation, not just its API: the fragile base class problem means a subclass can break when the parent changes how its own methods call each other (the `HashSet.addAll` → `add` double-count is the classic case). That is why parents should be designed and documented for extension or closed with `final` or `sealed`. Java forbids multiple class inheritance because classes carry state and constructors; interfaces carry neither, so multiple interface inheritance — including default methods since Java 8 — is allowed, with explicit conflict rules.
+
+**What they test** — Know cold: Java allows single inheritance of classes but multiple inheritance of interfaces. Be ready to discuss "composition over inheritance" as a design principle interviewers love to probe.
 
 #### Syntax
 ```java
@@ -952,18 +1222,49 @@ class Rectangle extends Shape {
 }
 ```
 
+Predict the output — a question below asks for it:
+
+```java
+class CountingSet<E> extends HashSet<E> {
+    int added;
+    @Override public boolean add(E e) { added++; return super.add(e); }
+    @Override public boolean addAll(Collection<? extends E> c) {
+        added += c.size();
+        return super.addAll(c);
+    }
+}
+
+CountingSet<String> s = new CountingSet<>();
+s.addAll(List.of("x", "y", "z"));
+System.out.println(s.added);
+```
+
 #### Common interview questions
-- "Why doesn't Java support multiple inheritance of classes?" (To avoid the "diamond problem" — ambiguity when two parent classes define the same method/field differently.)
-- "What is the 'diamond problem' and how does Java avoid/handle it for interfaces?" (For interfaces with conflicting default methods, the implementing class must explicitly override and resolve the conflict — Java forces you to disambiguate rather than picking silently.)
-- "Composition vs. inheritance — when would you choose one over the other?"
+- "Why doesn't Java support multiple inheritance of classes?" (Because classes carry state: two superclasses would each bring fields and constructors, with no single initialization order, and conflicting method implementations would need a resolution rule. Java keeps one superclass and allows multiple inheritance of type through interfaces, which have no instance state. The "diamond problem" is the usual name for the ambiguity, but state is the deeper reason.)
+- "What is the 'diamond problem' and how does Java avoid/handle it for interfaces?" (For conflicting default methods, Java applies rules: a method from a superclass wins over any default; a more specific interface — one that extends the other — wins over its parent. Only if neither applies must the class override the method and choose, optionally calling `A.super.m()`. Java forces you to disambiguate rather than picking silently.)
+- "Composition vs. inheritance — when would you choose one over the other?" (Inheritance when the subclass genuinely *is a* kind of the parent and can be used anywhere the parent is expected — and the parent is designed for extension. Composition when you only want to reuse behaviour: hold the other object in a field and call it. Composition depends only on the public API, so the parent's internals can't break you, and the part can be swapped. Trap: choosing inheritance because two classes share some code.)
+- "What does the snippet in the Example print?" (`6`. `addAll` adds 3, then `super.addAll` — inherited from `AbstractCollection` — calls `add` once per element, which dispatches to the overriding `add` and adds 3 more. The subclass relied on an implementation detail of its parent: the fragile base class problem.)
+- "Why is reuse alone not a good reason to inherit?" (Because inheritance also makes the subclass a subtype: it must honour every inherited method's contract and exposes the whole parent API. `Stack extends Vector` reused `Vector`'s storage and inherited `add(int, E)`, so callers can insert into the middle of a stack.)
+- "You need a `Set` that logs every insertion. Do you extend `HashSet`?" (Better to wrap it: a class that implements `Set` and forwards to a private `HashSet`, logging in its own `add` and `addAll`. Forwarding depends only on `Set`'s contract, so it can't double-count however `HashSet` is implemented, and it works with any `Set`.)
 
 #### Follow-up questions
-- "Can a subclass access private members of its parent?" (No — `private` members are never inherited/accessible directly, even by subclasses; only `protected` and `public` (and package-private within the same package) are accessible.)
+Interviewers rarely stop at "Composition vs. inheritance — when would you choose one over the other?" — they drill down from your answer. Answer each step before opening it:
+
+- "What exactly makes inheritance more tightly coupled?" (A subclass sees the parent's protected members and relies on how its methods call each other — its *self-use*. Composition sees only the public API. Changing a parent's internals can break a subclass; it cannot break a class that merely holds a reference.)
+- "How can a class be made safe to extend?" (Document its self-use — which overridable methods each public method calls, as the JDK does with `@implSpec` — never call overridable methods from constructors, and keep the protected surface small. Effective Java's rule: design and document for inheritance, or prohibit it.)
+- "And how do you prohibit it?" (Make the class `final`, or give it only private constructors and expose static factories. Since Java 17, `sealed` permits a fixed list of subclasses instead.)
+- "Does Java's `final String` cost you anything?" (You can't subclass `String` to add behaviour — but you never needed to: a static utility or a wrapper does it. In exchange, every `String` is guaranteed immutable, which hash keys, security checks and string sharing all rely on.)
+
+Other follow-ups:
+
+- "Can a subclass access private members of its parent?" (No — `private` members are not inherited and not accessible from a subclass, which is why a subclass can't name them. The one exception is a subclass nested in the same top-level class: `private` is scoped to the top-level class, so nested classes can reach it.)
 - "What is the 'fragile base class' problem?" (A seemingly safe change to a parent class breaks subclasses in unexpected ways because they depended on undocumented parent behavior.)
 
 #### Edge cases
 - `final` classes cannot be extended at all (e.g., `String`, `Integer`) — a deliberate design choice to prevent unsafe subclassing of core immutable types.
-- Constructors are not inherited, so every level of a hierarchy needs its own constructor(s), even if just delegating via `super(...)`.
+- Constructors are not inherited, so every level of a hierarchy needs its own constructor(s) — declared or the compiler's default — even if just delegating via `super(...)`.
+- A `sealed` class (Java 17) can extend only to the classes it `permits`; each of those must be `final`, `sealed` or `non-sealed`.
+- Every class has exactly one direct superclass except `Object`, which has none.
 
 #### Common mistakes
 - Using inheritance where there's no true "is-a" relationship, just to reuse code (classic anti-pattern: `Stack extends Vector` in the legacy JDK, now considered a design mistake).
@@ -985,249 +1286,26 @@ Inheritance vs. interface implementation — inheritance (`extends`) shares stat
 
 #### Important facts to remember
 - Single inheritance for classes; multiple for interfaces.
-- Private members are never inherited/directly accessible by subclasses.
+- Private members are never inherited; a subclass reaches them only if it is nested in the same top-level class.
 - "Composition over inheritance" is a widely-endorsed design principle, not just a slogan — favor it when there's no true "is-a" relationship.
+- Inheritance is justified by IS-A and substitutability, not by reuse alone.
 
 ---
 
-### 2.6 Polymorphism
-
-#### Definition
-Polymorphism is the ability for the same method call to behave differently depending on the actual runtime type of the object (runtime/dynamic polymorphism via overriding) or the compile-time argument types (compile-time/static polymorphism via overloading).
-
-#### Why it exists
-To let code operate generically against an abstraction, while the correct specific behavior is selected automatically at the appropriate time (compile time for overloads, runtime for overrides).
-
-#### Interview explanation
-This is one of the highest-yield OOP interview topics. Be ready to write code demonstrating dynamic dispatch, and clearly separate overloading (compile-time) from overriding (runtime) with a confident, precise explanation.
-
-#### Syntax
-```java
-class Animal { void speak() { System.out.println("..."); } }
-class Dog extends Animal { @Override void speak() { System.out.println("Woof"); } }
-
-Animal a = new Dog(); // declared type Animal, actual type Dog
-a.speak(); // "Woof" - decided at runtime by actual type
-```
-
-#### Example
-```java
-class Shape { double area() { return 0; } }
-class Circle extends Shape {
-    double r;
-    Circle(double r) { this.r = r; }
-    @Override double area() { return Math.PI * r * r; }
-}
-class Square extends Shape {
-    double side;
-    Square(double s) { side = s; }
-    @Override double area() { return side * side; }
-}
-List<Shape> shapes = List.of(new Circle(2), new Square(3));
-for (Shape s : shapes) System.out.println(s.area()); // correct area for each, via polymorphism
-```
-
-#### Common interview questions
-- "Explain runtime polymorphism with an example."
-- "What is dynamic method dispatch?"
-- "Can you achieve polymorphism with private or static methods?" (No — both are resolved statically/at compile time; only public/protected/package-private instance methods can be overridden and dispatched dynamically.)
-
-#### Follow-up questions
-- "If a field is 'overridden' in a subclass (same name), is that polymorphic too?" (No — field access is resolved at compile time based on the *declared* type of the reference, not the runtime type. Only methods exhibit dynamic dispatch; fields do not. This is a very popular trick question.)
-- "What's the performance cost of virtual dispatch?" (A small indirect lookup cost vs. a direct call; modern JITs often eliminate this via inlining for monomorphic call sites — usually not a real-world bottleneck.)
-
-#### Edge cases
-- Static methods can be "hidden" by a subclass defining a method with the same signature, but this is **method hiding**, not overriding — resolved at compile time based on the reference's declared type, unlike true overriding.
-- Calling an overridden method from within a parent constructor is dangerous: it dispatches to the *subclass's* override, which may run before the subclass's own fields are initialized, leading to surprising `null`/default values.
-
-#### Common mistakes
-- Confusing field access with method dispatch — assuming a subclass's field "overrides" the parent's the same way a method would (fields are never polymorphic).
-- Calling overridable instance methods from a constructor without realizing the subclass override might run against a not-yet-fully-initialized object.
-
-#### Comparisons
-
-| | Overloading | Overriding |
-|---|---|---|
-| Resolved | Compile time | Runtime |
-| Relationship | Same class (or unrelated classes) | Parent-child (inheritance) |
-| Also called | Static/compile-time polymorphism | Dynamic/runtime polymorphism |
-| Applies to | Methods (and constructors) | Instance methods only (not static, not fields) |
-
-#### Complexity
-Virtual dispatch is effectively O(1) — a fixed-cost lookup, not proportional to hierarchy depth.
-
-#### Frequently confused with
-Overloading vs. overriding (see comparisons above) — the single most commonly confused pair of terms in Java OOP interviews.
-
-#### Important facts to remember
-- Fields are never polymorphic — only instance methods are.
-- Static methods are hidden, not overridden — resolved at compile time by declared type.
-- Calling overridable methods from a constructor is a well-known anti-pattern due to partial-initialization risk.
-
----
-
-### 2.7 Abstraction & Abstract Classes
-
-#### Definition
-Abstraction is the principle of exposing only essential behavior while hiding implementation detail. An abstract class is a partially-implemented class (mixing concrete and abstract methods) that cannot be instantiated directly.
-
-#### Why it exists
-To let related classes share common structure/implementation while forcing each subclass to fill in the parts that must differ.
-
-#### Interview explanation
-Interviewers frequently ask you to choose between an abstract class and an interface for a given design scenario — know the decision criteria cold (shared state/implementation → abstract class; pure contract, possibly across unrelated types → interface).
-
-#### Syntax
-```java
-abstract class PaymentProcessor {
-    abstract void processPayment(double amount); // must be implemented by subclass
-    void logTransaction(double amount) { // shared, concrete
-        System.out.println("Logging: " + amount);
-    }
-}
-```
-
-#### Example
-```java
-abstract class Employee {
-    String name;
-    Employee(String name) { this.name = name; }
-    abstract double calculateSalary();
-    void printPaySlip() {
-        System.out.println(name + ": " + calculateSalary());
-    }
-}
-class SalariedEmployee extends Employee {
-    double monthlySalary;
-    SalariedEmployee(String name, double s) { super(name); monthlySalary = s; }
-    @Override double calculateSalary() { return monthlySalary; }
-}
-```
-
-#### Common interview questions
-- "When would you use an abstract class instead of an interface?"
-- "Can an abstract class have zero abstract methods?" (Yes, legally — though unusual; it's still marked `abstract` purely to prevent direct instantiation.)
-- "Can you have a constructor in an abstract class if you can never instantiate it directly?" (Yes — it runs when a concrete subclass is instantiated, via implicit or explicit `super()`.)
-
-#### Follow-up questions
-- "What happens if a subclass doesn't implement all abstract methods?" (The subclass must itself be declared `abstract`, or it's a compile error.)
-- "Can an abstract class implement an interface without implementing all its methods?" (Yes — an abstract class can leave interface methods unimplemented, deferring that obligation to its own concrete subclasses.)
-
-#### Edge cases
-- An abstract class can have `final` concrete methods (methods subclasses cannot override) alongside its abstract ones — mixing "fixed shared logic" with "must customize" logic in the same class.
-- A class can be `abstract` even with zero abstract methods — sometimes done deliberately just to block direct instantiation of a "template" base class.
-
-#### Common mistakes
-- Choosing an abstract class purely to share code between two unrelated types that don't have a genuine "is-a" relationship (interfaces with default methods, or composition, are often the better fit).
-- Forgetting a subclass must be marked `abstract` itself if it doesn't implement every inherited abstract method.
-
-#### Comparisons
-
-| | Abstract class | Interface |
-|---|---|---|
-| Multiple inheritance | No (single parent only) | Yes (implement many) |
-| Instance fields with state | Yes | No (only constants) |
-| Constructors | Yes | No |
-| Method implementations | Yes (concrete + abstract mixed) | Yes (default/static methods, Java 8+) |
-| Best for | Closely related types sharing implementation | Unrelated types sharing a capability/contract |
-
-#### Complexity
-Not applicable.
-
-#### Frequently confused with
-Abstract class vs. interface — the most classic "which would you choose" design interview question in Java.
-
-#### Important facts to remember
-- Abstract classes can have constructors, instance fields, and concrete methods — much more than a pure interface.
-- A subclass that doesn't implement all abstract methods must itself be declared abstract.
-- Choose abstract class for "shared implementation + is-a," interface for "shared capability, possibly across unrelated types."
-
----
-
-### 2.8 Interfaces
-
-#### Definition
-An interface defines a contract of method signatures (and, since Java 8, default/static methods) that implementing classes must fulfill.
-
-#### Why it exists
-To decouple "what a type can do" from "how it does it," enabling multiple inheritance of behavior and flexible, testable designs (program to an interface, not an implementation).
-
-#### Interview explanation
-Know the evolution: pre-Java 8 (pure abstract contract) vs. post-Java 8 (default/static methods) vs. Java 9+ (private interface methods for internal code reuse between default methods). Also be fluent in functional interfaces (exactly one abstract method), the foundation for lambdas.
-
-#### Syntax
-```java
-interface Notifier {
-    void send(String message);              // abstract
-    default void sendUrgent(String msg) {    // default method
-        send("URGENT: " + msg);
-    }
-    static Notifier console() {              // static factory method
-        return msg -> System.out.println(msg);
-    }
-}
-```
-
-#### Example
-```java
-interface Comparable2<T> {
-    int compareTo(T other);
-}
-class Money implements Comparable2<Money> {
-    double amount;
-    Money(double a) { amount = a; }
-    @Override public int compareTo(Money other) { return Double.compare(amount, other.amount); }
-}
-```
-
-#### Common interview questions
-- "What's the difference between an abstract class and an interface?" (See 2.7 comparison table.)
-- "What is a functional interface? Give an example from the JDK." (`Runnable`, `Comparator<T>`, `Function<T,R>` — each has exactly one abstract method.)
-- "What is the 'diamond problem' with default methods, and how must a class resolve it?" (If two interfaces provide conflicting default implementations for the same method, the implementing class MUST override that method explicitly — Java refuses to guess.)
-
-#### Follow-up questions
-- "Can an interface extend another interface? Can it extend multiple interfaces?" (Yes to both — unlike classes, interfaces support multiple inheritance of the contract itself.)
-- "Can interface fields be non-final or non-static?" (No — all interface fields are implicitly `public static final`, i.e., compile-time constants.)
-
-#### Edge cases
-- Two default methods from different interfaces with the same signature force the implementing class to override and choose (or combine) behavior explicitly — otherwise it's a compile error.
-- A functional interface can still have default/static methods — the "exactly one abstract method" rule only counts *abstract* methods, not default/static ones.
-
-#### Common mistakes
-- Assuming an interface variable can hold per-instance mutable state — interface fields are always constants, not instance data.
-- Forgetting `@FunctionalInterface` doesn't *make* an interface functional — it's just a compiler-enforced check that the interface has exactly one abstract method; the annotation is optional but good practice.
-
-#### Comparisons
-
-| | Interface (pre-Java 8) | Interface (Java 8+) |
-|---|---|---|
-| Method bodies | None allowed | Default & static methods allowed |
-| Multiple inheritance of behavior | No (contract only) | Yes (default methods provide shared behavior) |
-| Private helper methods | N/A | Allowed since Java 9 |
-
-#### Complexity
-Not applicable.
-
-#### Frequently confused with
-Interfaces vs. abstract classes (see 2.7); functional interfaces vs. "any interface with one method someone happens to call using a lambda" (a functional interface is specifically defined as having exactly one abstract method — the formal term, not just an informal pattern).
-
-#### Important facts to remember
-- Interface fields are always `public static final`.
-- A class can implement any number of interfaces (multiple inheritance of type/behavior).
-- A functional interface has exactly one abstract method (default/static methods don't count toward that total).
-
----
-
-### 2.9 Access Modifiers
+### 2.7 Access Modifiers
 
 #### Definition
 Keywords (`public`, `protected`, `private`, and package-private/default) that control the visibility scope of a class, field, method, or constructor.
 
 #### Why it exists
-To enforce encapsulation boundaries at compile time, controlling exactly which code can see and use a given member.
+To enforce encapsulation boundaries — checked by the compiler and again by the JVM at link time — controlling exactly which code can see and use a given member.
 
 #### Interview explanation
-Memorize the visibility table cold. Interviewers often ask edge-case questions about `protected` visibility across packages specifically, since it's the most nuanced of the four.
+**In 30 seconds** — Four levels, narrowest first: `private` (the class), package-private with no keyword (the package), `protected` (the package plus subclasses in other packages), `public` (everyone). Top-level classes can only be `public` or package-private. The compiler enforces them, and the JVM re-checks at link time.
+
+**If they push deeper** — Two rules catch people out. `protected` across packages works only through the subclass's own type: `PremiumAccount` can read `balance` on itself or another `PremiumAccount`, but not on a plain `Account` reference. And `private` is per class, not per object — a method can read the private fields of any instance of its own class, which is how `equals` works. Reflection can bypass access for classpath code, but not for packages a named module doesn't open.
+
+**What they test** — Memorize the visibility table cold. Interviewers often ask edge-case questions about `protected` visibility across packages specifically, since it's the most nuanced of the four.
 
 #### Syntax
 ```java
@@ -1256,18 +1334,54 @@ public class PremiumAccount extends Account {
 }
 ```
 
+Predict which lines compile — a question below asks for it:
+
+```java
+package com.bank;
+public class Account {
+    protected double balance;
+    protected Account() {}
+}
+```
+```java
+package com.bank.premium;
+import com.bank.Account;
+
+public class PremiumAccount extends Account {
+    void check(PremiumAccount mine, Account any) {
+        System.out.println(this.balance);   // line 1
+        System.out.println(mine.balance);   // line 2
+        System.out.println(any.balance);    // line 3
+        Account fresh = new Account();      // line 4
+    }
+}
+```
+
 #### Common interview questions
-- "What's the difference between `protected` and default (package-private) access?"
+- "What's the difference between `protected` and default (package-private) access?" (Both allow any class in the same package. `protected` additionally lets subclasses in *other* packages use the member — through their own type. So `protected` is the wider of the two. Trap: ranking `protected` below package-private.)
 - "Can a `private` method be overridden?" (No — `private` methods aren't inherited/visible to subclasses at all, so a subclass method with the same signature is a completely new, unrelated method, not an override.)
 - "What access level should interface methods have?" (Implicitly `public` — except Java 9+ *private* interface methods, which exist purely as internal helpers for default methods, not part of the contract.)
+- "Which lines in the Example compile?" (Lines 1 and 2 compile; lines 3 and 4 do not. A subclass in another package may use an inherited `protected` member only through `this` or a reference of its own type — `any` might be some other subclass's object. The `protected` constructor can be called only through `super(...)`, or by creating an anonymous subclass with `new Account() {}`.)
+- "Why does `protected` restrict access through a superclass reference?" (Because that object may belong to a different subclass with its own invariants. `PremiumAccount` is trusted with *its own kind* of account, not with every `Account` in the system; the rule stops one subclass from reaching into another's state.)
+- "You need a helper method that tests can call but other packages shouldn't. What access do you give it?" (Package-private, with the test in the same package — Maven and Gradle compile `src/test/java` into the same package as the class. Making it `public` just for tests turns it into API that someone will depend on.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What's the difference between `protected` and default (package-private) access?" — they drill down from your answer. Answer each step before opening it:
+
+- "Can a subclass in another package call a protected method on any instance of the parent?" (No — only on `this` or on references typed as the subclass or a subtype of it. `someAccount.recalculate()` with a plain `Account` reference does not compile.)
+- "Can a method read the private fields of another object of the same class?" (Yes. Access is checked per class, not per object, so `other.balance` inside `Account` compiles. That is what lets `equals` and copy constructors work.)
+- "If access is checked at compile time, can recompiling one class let another break the rules?" (No. The JVM checks access again when it links the calling class, so code compiled against a member that later became `private` fails with `IllegalAccessError` rather than reaching it.)
+- "So is `private` a security boundary?" (Not on its own. Reflection with `setAccessible(true)` reaches private members of classpath code; since Java 16/17 that fails only for packages a named module does not open. Use modules and real access control for security, and treat `private` as a design boundary.)
+
+Other follow-ups:
+
 - "Can a top-level class be `private` or `protected`?" (No — top-level classes can only be `public` or package-private/default; `private`/`protected` are only valid for members and nested classes.)
 - "Does `protected` allow access from a subclass in a different package via any reference, or only via inheritance?" (Only through inheritance-related access — specifically, through a reference of the subclass's own type or a subtype, not through an arbitrary `Account` reference obtained some other way, in a different package.)
 
 #### Edge cases
 - `protected` access across packages only applies through the subclass relationship itself — a subclass in another package can access an inherited `protected` member on *itself* or other instances of its own subclass type, but not on an arbitrary superclass-typed reference from that other package.
-- Package-private members are invisible even to subclasses if those subclasses live in a different package — `protected` is required for that case.
+- Package-private members are invisible even to subclasses if those subclasses live in a different package — `protected` is required for that case. Such a method is not inherited there, so a same-signature method in that subclass does not override it.
+- A `protected static` member is reachable from a subclass in another package through the class name, without the own-type restriction.
 
 #### Common mistakes
 - Assuming `protected` means "any subclass anywhere can freely access it via any reference" — the actual rule is more restrictive across packages (see edge case above).
@@ -1290,90 +1404,1357 @@ Not applicable.
 
 #### Important facts to remember
 - Top-level classes can only be `public` or package-private, never `private`/`protected`.
-- `private` members are never inherited or visible to subclasses in any way.
+- `private` members are never inherited; outside their top-level class they are invisible to subclasses.
 - `protected` cross-package access is restricted to access through the subclass's own type, not arbitrary superclass references.
+- `private` is per class, not per object.
 
 ---
 
-### 2.10 Static vs Instance Members
+### 2.8 Composition, Aggregation and Association
 
 #### Definition
-Static members belong to the class itself (one copy total, shared); instance members belong to each object individually (one copy per instance).
+Composition builds a class from other objects held in its fields (HAS-A) and delegates work to them, instead of inheriting from them (IS-A). Association, aggregation and composition are increasingly strong forms of HAS-A: knowing another object, grouping parts that can exist independently, and owning parts whose lifetime is tied to the whole.
 
 #### Why it exists
-To distinguish data/behavior that's naturally per-object from data/behavior that's naturally shared across the entire class.
+Inheritance couples a class to its parent's implementation and makes it a subtype whether that is wanted or not. Most reuse only needs another object's behaviour, which a field provides with looser coupling and the freedom to swap the part.
 
 #### Interview explanation
-A classic trick question: "can a static method access an instance field?" — always answer confidently: no, not directly, because static methods have no implicit `this`/object context.
+**In 30 seconds** — IS-A means inheritance: `Car extends Vehicle`, so a car can be used anywhere a vehicle is expected. HAS-A means composition: `Car` holds an `Engine` in a field and calls it. Composition is usually preferred for reuse because it depends only on the part's public API, the part can be swapped — often behind an interface — and the parent's internals can't break you. Use inheritance when the subtype relationship is real.
+
+**If they push deeper** — Association, aggregation and composition differ by ownership and lifetime: association is a plain "uses" link, aggregation groups parts that can outlive the whole or be shared (a team and its players), and composition owns parts that die with it (an order and its lines). Java doesn't enforce any of that — all three are a reference in a field — so ownership is a convention: the class creates or copies its parts and never exposes them. The trade-off of composition is forwarding boilerplate, and the wrapper isn't a subtype of the part unless it implements the part's interface.
 
 #### Syntax
 ```java
-class Counter {
-    static int totalInstances = 0;   // static/class member
-    int id;                          // instance member
-    Counter() {
-        id = ++totalInstances;
+class Car {
+    private final Engine engine;          // HAS-A
+    Car(Engine engine) { this.engine = engine; }
+    void start() { engine.start(); }      // delegation
+}
+class SportsCar extends Car {             // IS-A
+    SportsCar(Engine engine) { super(engine); }
+}
+```
+
+#### Example
+```java
+class Order {                                     // composition: Order owns its lines
+    private final List<OrderLine> lines = new ArrayList<>();
+    void addLine(String sku, int qty) { lines.add(new OrderLine(sku, qty)); }
+    List<OrderLine> lines() { return List.copyOf(lines); }
+}
+class Team {                                      // aggregation: players exist independently
+    private final List<Player> players;
+    Team(List<Player> players) { this.players = List.copyOf(players); }
+}
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class CountingSet<E> {
+    private final Set<E> inner;
+    private int added;
+    CountingSet(Set<E> inner) { this.inner = inner; }
+    boolean add(E e) { added++; return inner.add(e); }
+    boolean addAll(Collection<? extends E> c) { added += c.size(); return inner.addAll(c); }
+    int added() { return added; }
+}
+
+CountingSet<String> s = new CountingSet<>(new HashSet<>());
+s.addAll(List.of("x", "y", "z"));
+System.out.println(s.added());
+```
+
+#### Common interview questions
+- "What is the difference between IS-A and HAS-A?" (IS-A is a subtype relationship expressed with `extends` or `implements`: the subclass can be used wherever the parent is expected. HAS-A is a field: the class uses another object without becoming its kind. Test it with the sentence — a car *is a* vehicle, a car *has an* engine.)
+- "Why is composition often preferred over inheritance?" (It couples you to the part's public contract instead of its implementation, so the fragile base class problem can't occur; the part can be swapped at runtime or in tests; and a class can compose many parts but extend only one class. Trap: concluding inheritance is always wrong — it's right for genuine, designed-for-extension hierarchies.)
+- "What is the difference between aggregation and composition?" (Both are whole–part relationships. In aggregation the parts have their own lifetime and may be shared — a player can leave a team. In composition the whole owns the parts and they don't outlive it — an order line has no meaning without its order. Java code looks the same for both; the difference is whether the whole creates or copies its parts and keeps them private.)
+- "What does the snippet in the Example print?" (`3`. The wrapper adds 3 in its own `addAll`, then delegates to `HashSet.addAll`, whose internal `add` calls go to the `HashSet`, not back to the wrapper. Compare the subclass version in 2.6, which prints 6.)
+- "Does Java enforce composition's ownership?" (No. A field holds a reference, and nothing stops the same object being referenced elsewhere. Ownership holds only if the class creates or defensively copies its parts and never returns them; garbage collection then removes them together with the whole once both are unreachable.)
+- "Your `ReportService` extends `EmailSender` to reuse its `send` method. What would you change?" (A report service is not an email sender, so it shouldn't expose `send` and every other inherited method to its callers. Give it a field — `private final EmailSender sender;` passed into the constructor — and call `sender.send(...)`. Now tests can pass a fake sender and the mail implementation can change freely.)
+
+#### Follow-up questions
+Interviewers rarely stop at "Why is composition often preferred over inheritance?" — they drill down from your answer. Answer each step before opening it:
+
+- "If composition is better, how does the wrapper get used where the original type is expected?" (By implementing the same interface and forwarding each method to the wrapped object — the forwarding or decorator shape. Composition gives reuse; the interface gives substitutability.)
+- "What does that forwarding cost you?" (Boilerplate — one method per interface method — and the self problem: the wrapped object knows nothing about the wrapper, so if it passes `this` to a callback, the callback gets the inner object and bypasses the wrapper.)
+- "When is inheritance still the right choice?" (When the subclass truly is a kind of the parent, must be usable wherever the parent is, and the parent was designed and documented for extension — or is an abstract class meant to be extended, such as a framework's base class.)
+- "And how does this connect to dependency injection?" (Dependency injection is composition with the parts supplied from outside: the class declares the collaborators it HAS in its constructor, and the caller or a container decides which implementations to pass. That is why constructor parameters are usually interfaces.)
+
+Other follow-ups:
+
+- "Is a method parameter a HAS-A relationship?" (It is an association — the method uses the object for the duration of the call. HAS-A usually means a field that the object keeps.)
+
+#### Edge cases
+- A class can be both: `class BoundedQueue<E> implements Queue<E>` IS-A `Queue` and HAS-A `ArrayDeque` inside — implementing an interface while composing an implementation is the most common healthy shape.
+- An inner (non-static nested) class instance has an implicit reference to its outer instance — a hidden association that keeps the outer object reachable as long as the inner one is.
+- Two wrappers around the same object share it: aggregation by accident. A decorator that "owns" the object it wraps must not let the caller keep using the unwrapped reference.
+
+#### Common mistakes
+- Inheriting to reuse a handful of methods, then inheriting dozens more that callers can misuse (`Stack extends Vector`).
+- Exposing owned parts through getters, turning composition into shared mutable state.
+- Treating UML's filled and hollow diamonds as something the compiler checks — they document intent only.
+
+#### Comparisons
+
+| | Inheritance (IS-A) | Composition (HAS-A) |
+|---|---|---|
+| Relationship | Subtype of the parent | Holds a reference to the part |
+| Coupled to | Parent's implementation and protected members | Part's public API only |
+| Can change at runtime | No | Yes — assign a different part |
+| How many | One superclass | Any number of parts |
+| Substitutability | Automatic | Only if the class also implements the part's interface |
+
+#### Complexity
+Delegation adds one method call per forwarded operation — negligible, and usually inlined by the JIT.
+
+#### Frequently confused with
+Aggregation vs. composition — same Java code, different ownership. Composition vs. dependency injection — DI is one way to supply composed parts, not a different relationship.
+
+#### Important facts to remember
+- IS-A → `extends`/`implements`; HAS-A → a field.
+- Code reuse alone is not a reason to inherit; composition reuses without subtyping.
+- Java doesn't enforce aggregation or composition semantics — ownership is a convention the class maintains.
+- A wrapper is substitutable for the wrapped type only if it implements the same interface.
+
+---
+
+### 2.9 Method Overloading
+
+#### Definition
+Method overloading is declaring several methods with the same name and different parameter lists in one class (inherited methods included). The compiler selects one overload per call from the arguments' declared types — compile-time polymorphism.
+
+#### Why it exists
+So one natural name can cover related operations on different inputs (`println(int)`, `println(String)`) without giving up compile-time type checking.
+
+#### Interview explanation
+**In 30 seconds** — Overloads share a name and differ in parameter types, number or order; the return type alone can't distinguish them. The compiler picks the overload at compile time from the *declared* types of the arguments, so an argument's runtime type never changes the choice. Constructors overload the same way.
+
+**If they push deeper** — Resolution runs in three phases and stops at the first that finds a match: widening only, then boxing/unboxing, then varargs. That's why `m(5)` prefers `m(long)` over `m(Integer)`, and `m(Integer)` over `m(int...)`. Within a phase the most specific overload wins; if none is most specific, the call is ambiguous and fails to compile — `s(null)` with `s(String)` and `s(StringBuilder)` is the classic case.
+
+#### Syntax
+```java
+class Calculator {
+    int add(int a, int b)          { return a + b; }
+    double add(double a, double b) { return a + b; }
+    int add(int a, int b, int c)   { return a + b + c; }
+}
+```
+
+#### Example
+```java
+void print(int x)    { System.out.println("int"); }
+void print(double x) { System.out.println("double"); }
+void print(String x) { System.out.println("String"); }
+
+print(5);      // int
+print(5.0);    // double
+print("5");    // String
+print('a');    // int    — char widens to int
+print(5L);     // double — long widens to double
+```
+
+Predict the output — a question below asks for it:
+
+```java
+static void m(long x)    { System.out.println("long"); }
+static void m(Integer x) { System.out.println("Integer"); }
+static void v(int... x)  { System.out.println("varargs"); }
+static void v(Integer x) { System.out.println("Integer"); }
+static void o(Object x)  { System.out.println("Object"); }
+static void o(String x)  { System.out.println("String"); }
+
+m(5);
+v(5);
+o(null);
+Object s = "text";
+o(s);
+```
+
+#### Common interview questions
+- "What is method overloading?" (Several methods in one class sharing a name with different parameter lists; the compiler chooses one from the argument types at compile time. Example: `print(int)`, `print(double)`, `print(String)`.)
+- "Can you overload a method by changing only its return type?" (No — it's a compile error ("method is already defined"). A call like `add(1, 2)` gives the compiler nothing to choose a return type by, so only parameter lists distinguish overloads.)
+- "Can static methods and `main` be overloaded?" (Yes. Overloading is about signatures, so static methods overload like instance ones, and a class may declare several `main` methods. The launcher looks for `main(String[])` — and since Java 25 falls back to a no-argument `main` if there is none.)
+- "What does the snippet in the Example print?" (`long`, `Integer`, `String`, `Object`. `m(5)` matches `m(long)` by widening in phase 1, before boxing is considered. `v(5)` boxes in phase 2, before varargs. `o(null)` fits both, and `String` is more specific. `o(s)` uses the declared type `Object`, whatever `s` holds at runtime.)
+- "Why is overload resolution done at compile time rather than at runtime?" (Because the compiler knows the declared types and can check the call, and Java's runtime dispatch is single dispatch — it only looks at the receiver object. Choosing the overload up front keeps calls cheap and predictable; dispatching on argument types at runtime (multiple dispatch) is something Java doesn't do.)
+- "A colleague calls `list.remove(1)` on a `List<Integer>` holding `[10, 20, 30]` to remove the value 1. What happens?" (It removes `20`, the element at index 1. `remove(int)` matches without boxing, so it wins over `remove(Object)`. Use `list.remove(Integer.valueOf(1))` to remove by value.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What is method overloading?" — they drill down from your answer. Answer each step before opening it:
+
+- "With `m(long)` and `m(Integer)`, which runs for `m(5)`?" (`m(long)`. Phase 1 allows widening but not boxing, and `int` widens to `long`, so the boxing candidate is never considered.)
+- "And with `v(Integer)` and `v(int...)`, which runs for `v(5)`?" (`v(Integer)`. Varargs is the last resort, tried only if phases 1 and 2 find nothing.)
+- "What if two overloads apply in the same phase?" (The most specific one wins — the one whose parameter types are assignable to the other's. If neither is, the call is ambiguous and won't compile: `s(null)` with `s(String)` and `s(StringBuilder)`.)
+- "Can an argument's runtime type ever change which overload runs?" (No. Only the declared types matter. `Object x = "hi"; describe(x);` always calls `describe(Object)`. The only runtime choice Java makes is which *override* of the chosen signature runs, based on the receiver object.)
+
+Other follow-ups:
+
+- "Can a subclass overload a method it inherits?" (Yes. A subclass method with the same name and a different parameter list overloads the inherited one, and a subclass-typed reference can call either. With the same parameter list it would override instead.)
+
+#### Edge cases
+- `byte` and `short` arguments with only `print(int)` and `print(double)` choose `print(int)` — widening goes to the nearest wider type that has an overload.
+- A method `take(int x)` called with a `null` `Integer` compiles — unboxing is allowed — and throws `NullPointerException` at runtime.
+- `String.valueOf(null)` compiles and throws `NullPointerException`: `valueOf(char[])` is more specific than `valueOf(Object)`, so it is chosen and dereferences the null array.
+- `Arrays.asList(intArray)` returns a list of size 1 holding the `int[]` itself — varargs over a generic `T...` can't take primitives, so the whole array becomes one element.
+
+#### Common mistakes
+- Expecting an overload to be chosen by the runtime type of an argument.
+- Adding an overload that makes existing calls ambiguous — for example, adding `send(StringBuilder)` beside `send(String)` breaks every `send(null)` call site.
+- Thinking a subclass "overrides" a method when its parameter type differs slightly — that's an overload, and the parent's version still runs for parent-typed calls. `@Override` catches it.
+
+#### Comparisons
+
+| | Overloading | Overriding |
+|---|---|---|
+| Where | Same class (inherited methods included) | Subclass redefines an inherited method |
+| Signature | Same name, different parameter list | Same name and parameter list |
+| Chosen | At compile time, from argument declared types | At runtime, from the receiver object's class |
+| Return type | Free | Same or a subtype (covariant) |
+| Applies to | Methods and constructors, static or instance | Instance methods only |
+| Also called | Compile-time / static polymorphism | Runtime / dynamic polymorphism |
+
+#### Complexity
+Resolution happens entirely at compile time; overloading has no runtime cost.
+
+#### Frequently confused with
+Overloading vs. overriding — the most commonly confused pair of terms in Java OOP interviews (see the comparison table). Overloading vs. varargs — varargs is one parameter form an overload can use, and the last one the compiler tries.
+
+#### Important facts to remember
+- Overloads differ in parameter lists; return type alone is not enough.
+- Choice is made at compile time from declared argument types.
+- Phases: widening → boxing → varargs; then most specific; otherwise ambiguous.
+- `List.remove(int)` vs `remove(Object)` is the classic overloading bug.
+
+---
+
+### 2.10 Method Overriding
+
+#### Definition
+Overriding is a subclass declaring an instance method with the same signature as an accessible inherited one, replacing it for objects of the subclass. Which implementation runs is decided at runtime from the receiver object's class.
+
+#### Why it exists
+So subclasses can specialise inherited behaviour while callers keep programming against the parent type — the mechanism behind runtime polymorphism.
+
+#### Interview explanation
+**In 30 seconds** — An override has the same name and parameter types as the inherited method. Its return type may be the same or a subtype; its access may be the same or wider; it may throw fewer or narrower checked exceptions but no new ones. `private`, `static` and `final` methods can't be overridden. Always annotate with `@Override` so the compiler catches accidental overloads.
+
+**If they push deeper** — Every rule exists to keep the override substitutable: a caller written against the parent's signature, access and `throws` clause must still compile and behave correctly against any subclass. A `private` method isn't inherited, so a same-named subclass method is unrelated; a `static` one is hidden rather than overridden (2.11); a package-private method can be overridden only from the same package. Unchecked exceptions aren't restricted by the compiler, but throwing ones the parent's contract doesn't allow still breaks callers.
+
+#### Syntax
+```java
+class Shape {
+    double area() { return 0; }
+}
+class Circle extends Shape {
+    private final double r;
+    Circle(double r) { this.r = r; }
+    @Override
+    double area() { return Math.PI * r * r; }
+}
+```
+
+#### Example
+```java
+class Parent {
+    protected Number value() throws java.io.IOException { return 1; }
+}
+class Child extends Parent {
+    @Override
+    public Integer value() { return 2; }   // wider access, covariant return, drops the checked exception
+}
+// Not allowed in Child:
+//   private Number value()                  — narrower access
+//   Number value() throws Exception         — broader checked exception
+//   static Number value()                   — static can't override an instance method
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class P {
+    private void hello() { System.out.println("P.hello"); }
+    void greet() { hello(); }
+}
+class C extends P {
+    void hello() { System.out.println("C.hello"); }
+}
+
+new C().greet();
+new C().hello();
+```
+
+#### Common interview questions
+- "What are the rules for overriding a method?" (Same name and parameter types; return type the same or a subtype; access the same or wider; no new or broader checked exceptions; the method must be an inherited instance method that isn't `final`. `@Override` makes the compiler verify all of it.)
+- "Can you override a `private`, `static` or `final` method?" (No to all three. `private` isn't inherited, so a same-named method is new; `static` is hidden, chosen at compile time; `final` is forbidden by design.)
+- "What is a covariant return type?" (An override may return a subtype of the parent method's return type — `Object clone()` can be overridden as `Point clone()`. Callers expecting the parent's type still get one, and callers using the subclass get the precise type without a cast. It applies to reference types only; a primitive return type must match exactly.)
+- "What does the snippet in the Example print?" (`P.hello`, then `C.hello`. `P.hello` is private, so `C.hello` is a separate method, not an override; `greet()` was compiled inside `P` and calls `P`'s private method directly. Calling `hello()` on a `C` reference reaches `C`'s own method.)
+- "Why can't an override narrow access or add checked exceptions?" (Because callers are compiled against the parent's declaration. If `Animal.speak()` is public and doesn't throw `IOException`, code calling `animal.speak()` has no `try` and assumes access — an override that hid the method or threw a new checked exception would break that code whenever a subclass object turned up.)
+- "A subclass declares `boolean equals(Money other)` and `HashSet.contains` stops finding equal values. Why?" (That method overloads `equals(Object)` instead of overriding it; collections call `equals(Object)`, which still compares identity. Declare `equals(Object o)` with `@Override` — the annotation would have flagged the mistake.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What are the rules for overriding a method?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why is the return type allowed to change at all?" (Because a subtype is still a valid instance of the declared return type, so substitutability holds. Before Java 5, return types had to match exactly and callers needed casts.)
+- "Can an override throw a `RuntimeException` the parent doesn't declare?" (Yes — the compiler only restricts checked exceptions. Whether it *should* depends on the parent's documented contract; throwing `UnsupportedOperationException` from an override that promised to work is a Liskov violation even though it compiles.)
+- "What does `@Override` actually guarantee?" (Only that the method overrides or implements a supertype method — otherwise it's a compile error. It changes nothing at runtime, and the method overrides with or without it; the annotation just turns a silent overload into an error.)
+- "What happens if a parent constructor calls a method the child overrides?" (The child's override runs before the child's constructor body and field initializers, so it sees default values — `null`, `0`. 2.22 traces it. Don't call overridable methods from constructors.)
+
+Other follow-ups:
+
+- "Can a package-private method be overridden?" (Only by a subclass in the same package. In another package the method isn't inherited, so a same-signature method there is unrelated and the parent's own calls keep running the parent's version.)
+
+#### Edge cases
+- A subclass instance method can't have the same signature as a parent static method, and a subclass static method can't match a parent instance method — both are compile errors.
+- Overriding a method of a generic superclass with a concrete type argument (`compareTo(Money other)` implementing `Comparable<Money>`) makes the compiler generate a *bridge method* `compareTo(Object)` that casts and forwards — which is why stack traces sometimes show a synthetic frame.
+- An interface method implemented in a class must be `public`, because interface methods are implicitly public and an implementation can't narrow access.
+- `synchronized` is not part of the signature — an override may add or drop it, so a parent's locking is not inherited by its overrides.
+
+#### Common mistakes
+- Overloading instead of overriding because of a parameter type mismatch (`equals(Point)`), then wondering why the new method never runs.
+- Omitting `@Override`, so a later rename of the parent method silently disconnects every override.
+- Assuming a cast changes which override runs — `((Animal) dog).sound()` still runs `Dog.sound()`.
+
+#### Comparisons
+
+| | Overriding | Hiding (2.11) |
+|---|---|---|
+| Applies to | Instance methods | Static methods and fields |
+| Chosen by | Runtime class of the object | Declared type at compile time |
+| `super` / qualified access | `super.m()` reaches the parent's version | `Parent.m()` or `super.field` reach the parent's member |
+| `@Override` allowed | Yes | No — compile error on a static method |
+
+#### Complexity
+A call to an overridable method is resolved at runtime; HotSpot usually makes it as cheap as a direct call by inlining when only one or two implementations are seen at that call site (2.12).
+
+#### Frequently confused with
+Overriding vs. overloading (2.9) — same signature replaces, different parameter list adds. Overriding vs. hiding (2.11) — instance methods vs. static methods and fields.
+
+#### Important facts to remember
+- Same signature; covariant return allowed; access never narrower; no new/broader checked exceptions.
+- `private`, `static`, `final` methods can't be overridden.
+- `@Override` turns accidental overloads into compile errors.
+- Overrides dispatch on the object's runtime class — casts don't change that.
+
+---
+
+### 2.11 Overriding vs Hiding
+
+#### Definition
+Overriding replaces an inherited *instance* method, and the version that runs is chosen at runtime from the object's class. Hiding happens when a subclass declares a *static* method or a *field* with the same name as an inherited one: both members exist, and the one used is chosen at compile time from the declared type.
+
+#### Why it exists
+Dynamic dispatch needs an object, and static members have none; fields are storage that the parent's compiled code depends on. So Java dispatches only instance methods and resolves static methods and fields by type.
+
+#### Interview explanation
+**In 30 seconds** — Only instance methods are overridden. With `Parent p = new Child();`, `p.instanceMethod()` runs `Child`'s version because the object is a `Child`; `p.staticMethod()` and `p.field` use `Parent`'s, because static methods and fields are resolved from the declared type at compile time. That is hiding: the subclass's member exists alongside the parent's rather than replacing it.
+
+**If they push deeper** — A `Child` object carries both hidden fields, so `((Child) p).field` and `p.field` read different slots of the same object, and `Parent`'s own methods always read `Parent`'s field. Static methods are inherited — `Child.parentStatic()` compiles — but a static call through an instance is compiled against the declared type, so the object is ignored and even a `null` reference works. A static method can't hide an instance method or vice versa, and `@Override` on a static method is a compile error.
+
+#### Syntax
+```java
+class Parent {
+    static void staticMethod() { System.out.println("Parent static"); }
+    void instanceMethod()       { System.out.println("Parent instance"); }
+    String field = "Parent field";
+}
+class Child extends Parent {
+    static void staticMethod() { System.out.println("Child static"); }      // hides
+    @Override void instanceMethod() { System.out.println("Child instance"); } // overrides
+    String field = "Child field";                                            // hides
+}
+```
+
+#### Example
+```java
+Parent p = new Child();
+p.instanceMethod();          // Child instance — runtime class decides
+p.staticMethod();            // Parent static  — declared type decides
+System.out.println(p.field); // Parent field   — declared type decides
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class Base {
+    int value = 1;
+    static String tag() { return "Base"; }
+    int doubled() { return value * 2; }
+}
+class Sub extends Base {
+    int value = 10;
+    static String tag() { return "Sub"; }
+}
+
+Base b = new Sub();
+Sub s = (Sub) b;
+System.out.println(b.value + " " + s.value);
+System.out.println(b.tag() + " " + s.tag());
+System.out.println(s.doubled());
+Base nothing = null;
+System.out.println(nothing.tag());
+```
+
+#### Common interview questions
+- "Why can't Java override static methods?" (Overriding means picking an implementation from the object at runtime, and a static method is called on a class, with no object. The compiler fixes the target from the declared type — a static call names the class in the bytecode — so a subclass's same-signature static method can only hide the parent's. Trap: saying static methods aren't inherited; they are.)
+- "What happens when a field is hidden?" (The subclass object gets a second field with the same name. Which one an expression reads depends on its declared type: `p.field` with `p` declared `Parent` reads the parent's, a `Child` reference reads the child's, and `super.field` reaches the parent's from inside `Child`. Methods compiled in `Parent` always read `Parent`'s field.)
+- "What is the difference between overriding and hiding?" (Overriding applies to instance methods and is resolved at runtime from the object's class. Hiding applies to static methods and fields and is resolved at compile time from the declared type. Overriding replaces; hiding adds a second member alongside.)
+- "What does the snippet in the Example print?" (`1 10`, `Base Sub`, `2`, `Base`. Fields: `b` is declared `Base`, `s` is declared `Sub`, so they read different slots of the same object. Static `tag()` follows the declared type too. `doubled()` is `Base`'s code reading `Base.value`, which is 1. The last call compiles to `Base.tag()`, so the `null` reference is never dereferenced.)
+- "Why are fields resolved by declared type rather than by the object?" (Because a field is storage the declaring class's code depends on, possibly with a different type in the subclass. Behaviour is the polymorphic part of an object: if subclasses must vary a value, expose it through an overridable method, and the method dispatches.)
+- "A subclass redeclares `protected int timeoutSeconds = 30;` to change the parent's default of 10, but requests still time out after 10 seconds. Why?" (It created a second field. The parent's timeout logic reads the parent's field, which is still 10. Assign the inherited field in the subclass constructor, or pass the value to the parent's constructor.)
+
+#### Follow-up questions
+Interviewers rarely stop at "Why can't Java override static methods?" — they drill down from your answer. Answer each step before opening it:
+
+- "With `Parent p = new Child();`, what does `p.staticMethod()` run?" (`Parent.staticMethod()`. The compiler resolves it from `p`'s declared type, and `javac -Xlint` warns that a static method should be qualified by its type name.)
+- "And if `p` is `null`?" (It still runs `Parent.staticMethod()` with no `NullPointerException` — the reference's value is never used for a static call. The same holds for a static field accessed through `null`.)
+- "Is a parent's static method visible through the subclass at all?" (Yes — static methods are inherited, so `Child.parentOnlyStatic()` compiles. Hiding only happens when `Child` declares a method with the same signature.)
+- "How do you get polymorphic behaviour for something that is currently static?" (Make it an instance method — on the object itself or on a strategy object that is passed in — or pass the behaviour as a lambda. Only instance methods dispatch on the object.)
+
+Other follow-ups:
+
+- "Can a subclass declare an instance method with the same signature as a parent static method?" (No — compile error: an instance method can't override a static one. The reverse, a static method matching a parent instance method, is also an error.)
+
+#### Edge cases
+- `@Override` on a static method fails to compile ("static methods cannot be annotated with @Override").
+- A hiding static method must follow the same return-type and access rules as an override — it can't narrow access.
+- A static field can hide an instance field and an instance field can hide a static one; the types needn't match.
+- Interface static methods are not inherited by implementing classes at all — `ImplClass.staticFromInterface()` doesn't compile; call it as `InterfaceName.method()`.
+
+#### Common mistakes
+- Calling static methods through instances, which reads as polymorphic and isn't.
+- Redeclaring a field to change its value for a subclass, which creates a second field instead.
+- Forgetting that casts work the opposite way for the two rules: `((Child) p).field` and `((Child) p).staticMethod()` *do* switch to `Child`'s members, because the cast changes the declared type, while `((Parent) child).instanceMethod()` still runs `Child`'s override.
+
+#### Comparisons
+
+| | Instance method | Static method | Field |
+|---|---|---|---|
+| Same name in subclass | Overrides | Hides | Hides |
+| Resolved by | Runtime class of the object | Declared type / class named | Declared type |
+| Resolved when | Runtime | Compile time | Compile time |
+| Through a `null` reference | `NullPointerException` | Works | Instance field: `NullPointerException`; static field: works |
+| `@Override` | Allowed | Compile error | Not applicable |
+
+#### Complexity
+Not applicable — hidden members are bound at compile time.
+
+#### Frequently confused with
+Hiding vs. shadowing — *shadowing* is a local variable or parameter reusing a field's name inside one scope (`this.name = name`); *hiding* is a subclass member reusing an inherited member's name. Hiding vs. overriding — static/fields vs. instance methods.
+
+#### Important facts to remember
+- Only instance methods are polymorphic; static methods and fields are resolved by declared type.
+- Hidden members coexist with the parent's — nothing is replaced.
+- Static methods are inherited but never overridden.
+- A static call through an instance ignores the instance, even `null`.
+
+---
+
+### 2.12 Polymorphism
+
+#### Definition
+Polymorphism is the ability for the same method call to behave differently depending on the actual runtime type of the object (runtime/dynamic polymorphism via overriding) or the compile-time argument types (compile-time/static polymorphism via overloading).
+
+#### Why it exists
+To let code operate generically against an abstraction, while the correct specific behavior is selected automatically at the appropriate time (compile time for overloads, runtime for overrides).
+
+#### Interview explanation
+**In 30 seconds** — Java has two kinds. Compile-time polymorphism is overloading: the compiler picks among same-named methods by argument types. Runtime polymorphism is overriding plus dynamic dispatch: with `Animal a = new Dog()`, `a.sound()` runs `Dog`'s version because the object is a `Dog`. The reference's declared type decides what you may call; the object's runtime class decides which override runs.
+
+**If they push deeper** — Every call is resolved in two steps. The compiler checks the call against the declared type and fixes the signature, including the overload; at runtime the JVM finds that signature's implementation in the receiver's class. So `a.fetch()` fails to compile when `Animal` has no `fetch`, even though the object is a `Dog`, and an argument's runtime type never affects the choice — Java dispatches on the receiver only. Only instance methods dispatch: static methods and fields are resolved by declared type (hiding). The JVM's lookup technique — method tables, inline caches, JIT inlining — is an implementation detail, not part of the language.
+
+**What they test** — This is one of the highest-yield OOP interview topics. Be ready to write code demonstrating dynamic dispatch, and clearly separate overloading (compile-time) from overriding (runtime) with a confident, precise explanation.
+
+#### Syntax
+```java
+class Animal { void speak() { System.out.println("..."); } }
+class Dog extends Animal { @Override void speak() { System.out.println("Woof"); } }
+
+Animal a = new Dog(); // declared type Animal, actual type Dog
+a.speak(); // "Woof" - decided at runtime by actual type
+```
+
+#### Example
+```java
+class Shape { double area() { return 0; } }
+class Circle extends Shape {
+    double r;
+    Circle(double r) { this.r = r; }
+    @Override double area() { return Math.PI * r * r; }
+}
+class Square extends Shape {
+    double side;
+    Square(double s) { side = s; }
+    @Override double area() { return side * side; }
+}
+List<Shape> shapes = List.of(new Circle(2), new Square(3));
+for (Shape s : shapes) System.out.println(s.area()); // correct area for each, via polymorphism
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class Animal {
+    void greet(Animal a) { System.out.println("Animal meets Animal"); }
+    void greet(Dog d)    { System.out.println("Animal meets Dog"); }
+}
+class Dog extends Animal {
+    @Override void greet(Animal a) { System.out.println("Dog meets Animal"); }
+    @Override void greet(Dog d)    { System.out.println("Dog meets Dog"); }
+}
+
+Animal x = new Dog();
+Animal y = new Dog();
+Dog z = new Dog();
+x.greet(y);
+x.greet(z);
+```
+
+#### Common interview questions
+- "Explain runtime polymorphism with an example." (`Animal a = new Dog(); a.speak();` prints `Woof`. The compiler accepts the call because `Animal` declares `speak()`; at runtime the JVM runs the override from the object's class, `Dog`. A loop over `List<Animal>` therefore gets each object's own behaviour with no type checks. Trap: saying the reference type decides — it decides only what is callable.)
+- "What is dynamic method dispatch?" (The runtime mechanism behind overriding: for a call to an overridable instance method, the JVM selects the implementation from the receiver object's actual class — the nearest override walking up from that class — rather than from the reference's declared type. The language specifies the result; how the JVM does the lookup is an implementation detail.)
+- "Can you achieve polymorphism with private or static methods?" (Not runtime polymorphism — both are resolved statically/at compile time. Only overridable instance methods dispatch dynamically: public or protected ones, and package-private ones only within their package; `final` ones can't be overridden. Static methods can still be overloaded, which is compile-time polymorphism.)
+- "What does the snippet in the Example print?" (`Dog meets Animal`, then `Dog meets Dog`. The overload is chosen at compile time from the argument's declared type — `y` is declared `Animal`, `z` is declared `Dog`. The override is chosen at runtime from the receiver `x`, which is a `Dog`. Trap: answering `Dog meets Dog` for the first call because `y` is really a `Dog` — Java never dispatches on argument runtime types.)
+- "Why does `a.fetch()` fail to compile when `a` holds a `Dog`?" (The compiler only knows the declared type, `Animal`, and must reject calls that wouldn't work for every `Animal` the variable could hold. The runtime object is irrelevant at compile time; to call `fetch()` you need a `Dog`-typed reference — a downcast after an `instanceof` check (2.13).)
+- "A payment module has `if (p instanceof Card) … else if (p instanceof Wallet) …` in five places. How would you restructure it?" (Move the varying behaviour into the types: declare `charge()` on a `PaymentMethod` interface and implement it in each class, so callers write `p.charge()` once and a new payment type touches no existing code. If the set of types is closed and the logic belongs outside them, a `sealed` interface with an exhaustive `switch` is the modern alternative (Java 21).)
+
+#### Follow-up questions
+Interviewers rarely stop at "Explain runtime polymorphism with an example." — they drill down from your answer. Answer each step before opening it:
+
+- "What decides whether `a.speak()` compiles, and what decides which code runs?" (The declared type of `a` decides whether it compiles — `Animal` must have a `speak()`. The runtime class of the object decides which implementation runs.)
+- "Does the runtime type of an *argument* affect which method runs?" (No. Overloads are chosen at compile time from argument declared types; only the receiver is dispatched at runtime. Java is single dispatch. Double dispatch, when needed, is built by hand — the visitor pattern.)
+- "What if `a` is `null`?" (The call compiles — `Animal` has the method — and throws `NullPointerException` at runtime, because there is no object to dispatch on. A static method called through a `null` reference would *not* throw (2.11).)
+- "When the parent's own code calls an overridable method on `this`, which version runs?" (The subclass's override — dispatch uses the object, wherever the call is written. That is what makes the template method pattern work (2.15), and what makes calling overridable methods from a parent constructor dangerous (2.22).)
+
+Other follow-ups:
+
+- "If a field is 'overridden' in a subclass (same name), is that polymorphic too?" (No — field access is resolved at compile time based on the *declared* type of the reference, not the runtime type. Only methods exhibit dynamic dispatch; fields do not. This is a very popular trick question.)
+- "What's the performance cost of virtual dispatch?" (A small indirect lookup cost vs. a direct call; modern JITs such as HotSpot's often eliminate this via inlining for monomorphic call sites — usually not a real-world bottleneck.)
+
+#### Edge cases
+- Static methods can be "hidden" by a subclass defining a method with the same signature, but this is **method hiding**, not overriding — resolved at compile time based on the reference's declared type, unlike true overriding.
+- Calling an overridden method from within a parent constructor is dangerous: it dispatches to the *subclass's* override, which may run before the subclass's own fields are initialized, leading to surprising `null`/default values.
+- A cast doesn't change which override runs: `((Animal) dog).speak()` still runs `Dog.speak()`. Only `super.speak()` inside `Dog` reaches the parent's version.
+- Calling an instance method on a `null` reference compiles and throws `NullPointerException` at runtime.
+
+#### Common mistakes
+- Confusing field access with method dispatch — assuming a subclass's field "overrides" the parent's the same way a method would (fields are never polymorphic).
+- Calling overridable instance methods from a constructor without realizing the subclass override might run against a not-yet-fully-initialized object.
+- Expecting overload choice to follow the argument's runtime type.
+
+#### Comparisons
+
+| | Overloading | Overriding |
+|---|---|---|
+| Resolved | Compile time | Runtime |
+| Relationship | Same class, including methods it inherits | Parent-child (inheritance) |
+| Also called | Static/compile-time polymorphism | Dynamic/runtime polymorphism |
+| Applies to | Methods (and constructors) | Instance methods only (not static, not fields) |
+
+#### Complexity
+The language specifies no cost. In HotSpot, call sites that see one or two receiver classes are inlined to roughly the cost of a direct call; class method calls otherwise use a constant-time table lookup, and interface calls a slightly more involved one.
+
+#### Frequently confused with
+Overloading vs. overriding (see comparisons above) — the single most commonly confused pair of terms in Java OOP interviews. Dynamic dispatch vs. runtime polymorphism — the mechanism vs. the behaviour it produces.
+
+#### Important facts to remember
+- Fields are never polymorphic — only instance methods are.
+- Static methods are hidden, not overridden — resolved at compile time by declared type.
+- Calling overridable methods from a constructor is a well-known anti-pattern due to partial-initialization risk.
+- Declared type decides what compiles; runtime class decides which override runs; argument runtime types decide nothing.
+
+---
+
+### 2.13 Upcasting and Downcasting
+
+#### Definition
+Upcasting converts a reference to a supertype (implicit, always safe); downcasting converts a reference to a subtype (explicit, checked at runtime, may throw `ClassCastException`). Neither changes the object — only the type through which the compiler lets you use it.
+
+#### Why it exists
+Upcasting is what lets parent-typed code accept any subtype; downcasting is a checked way back to a subtype's own API when it is genuinely needed.
+
+#### Interview explanation
+**In 30 seconds** — `Animal a = new Dog();` is an upcast: implicit and always safe, because every `Dog` is an `Animal`. `Dog d = (Dog) a;` is a downcast: it must be explicit, and the JVM checks the actual object at runtime — if it's a `Cat`, you get `ClassCastException`. Use `instanceof`, ideally with a pattern (`a instanceof Dog d`), before downcasting.
+
+**If they push deeper** — The compiler rejects only casts that could never succeed, such as `String` to `Integer`; any cast between related types compiles and is checked at runtime. Casts to interfaces are looser: from a non-`final` class they compile because some subclass might implement the interface. A cast never changes the object, so overridden methods still dispatch to the runtime class. `null` passes any cast and fails `instanceof`. Generic casts are unchecked beyond the raw type because of erasure.
+
+#### Syntax
+```java
+Animal a = new Dog();            // upcast (implicit)
+Dog d = (Dog) a;                 // downcast (explicit, runtime-checked)
+
+if (a instanceof Dog dog) {      // pattern matching for instanceof (Java 16+)
+    dog.fetch();
+}
+```
+
+#### Example
+```java
+Animal a = new Cat();
+try {
+    Dog d = (Dog) a;             // compiles: Animal and Dog are related
+} catch (ClassCastException e) {
+    System.out.println(e.getMessage());   // class Cat cannot be cast to class Dog (...)
+}
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class Animal { String sound() { return "..."; } }
+class Dog extends Animal { @Override String sound() { return "Woof"; } }
+class Cat extends Animal { @Override String sound() { return "Meow"; } }
+
+Animal a = new Dog();
+Object o = a;
+System.out.println(((Animal) o).sound());
+System.out.println(o instanceof Cat);
+Animal none = null;
+Dog d = (Dog) none;
+System.out.println(d == null);
+System.out.println(none instanceof Animal);
+```
+
+#### Common interview questions
+- "What happens during upcasting and downcasting?" (Upcasting assigns a subtype reference to a supertype variable — implicit and always safe. Downcasting goes the other way and must be explicit; the JVM checks the object's class at runtime and throws `ClassCastException` if it doesn't fit. In both cases the object is untouched — only the compile-time type of the reference changes.)
+- "When does a downcast throw `ClassCastException`?" (When the object's runtime class is neither the target type nor a subclass of it — `(Dog)` applied to a reference that holds a `Cat`. The compiler can't know which object the reference will hold, so it inserts a runtime check instead.)
+- "Why is upcasting implicit but downcasting explicit?" (An upcast can never fail: every `Dog` is an `Animal`. A downcast can fail, so Java makes you write it — the cast marks the place where you are claiming more than the compiler can verify.)
+- "What does the snippet in the Example print?" (`Woof`, `false`, `true`, `false`. The cast to `Animal` changes only the reference type, so `Dog.sound()` runs. The object is a `Dog`, not a `Cat`. Casting `null` always succeeds, giving `null`. `instanceof` is always `false` for `null`.)
+- "Which of these compile: `(Integer) someString`, `(Dog) someAnimal`, `(Runnable) someAnimal`?" (The first doesn't — `String` and `Integer` are unrelated classes, so no object could ever pass. The second compiles and is checked at runtime. The third compiles if `Animal` isn't `final`, because a subclass of `Animal` might implement `Runnable`; it fails at runtime unless the object does.)
+- "An event handler receives `Event e` and does `((OrderEvent) e).orderId()`. It worked for months, then started throwing `ClassCastException`. What happened, and what is the fix?" (A new kind of `Event` started reaching the handler. The unchecked downcast assumed only one subtype would ever arrive. Fix: check with `instanceof OrderEvent oe` and handle the rest explicitly, or route events by type so the handler receives `OrderEvent` directly — or, for a closed set, use a `sealed` interface and an exhaustive `switch`.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What happens during upcasting and downcasting?" — they drill down from your answer. Answer each step before opening it:
+
+- "After `Animal a = new Dog();`, which `sound()` runs for `a.sound()`?" (`Dog`'s. The upcast changed what the compiler lets you call, not the object; overridden methods dispatch on the runtime class (2.12).)
+- "Then why can't you call `a.fetch()`?" (Because calls are checked against the declared type, `Animal`, which has no `fetch()`. You'd need `((Dog) a).fetch()` or a pattern variable.)
+- "How do you downcast safely?" (Test first: `if (a instanceof Dog d) d.fetch();` — the pattern binds `d` only when the test succeeds, so the cast can't drift away from the check. For several types, a `switch` with type patterns (Java 21) does the same.)
+- "Why is frequent downcasting considered a design smell?" (It means type information was thrown away and is being recovered by guessing. Usually the varying behaviour belongs in a polymorphic method, or the API should keep the precise type — via generics or a narrower parameter type — so no cast is needed.)
+
+Other follow-ups:
+
+- "Can you cast between sibling classes such as `Dog` and `Cat`?" (No — `(Cat) someDog`, where the reference is declared `Dog`, doesn't compile: a `Dog` can never be a `Cat` because a class has one superclass chain. Through an `Animal` reference it compiles and fails at runtime.)
+
+#### Edge cases
+- `(Dog) null` succeeds; `null instanceof Dog` is `false` — so `instanceof` doubles as a null check.
+- `(List<String>) obj` is an unchecked cast: only `List` is verified at runtime, and a wrong element type fails later, wherever an element is read.
+- Arrays are covariant: `Object[] objs = new String[1]; objs[0] = 1;` compiles and throws `ArrayStoreException` — the runtime check happens on the store.
+- Boxing is not casting: `(Integer) someObject` is a reference downcast, while `(int) someLong` converts a primitive value.
+
+#### Common mistakes
+- Downcasting without a check because "it's always that type here".
+- Believing an upcast removes data or behaviour from the object.
+- Using `getClass() == Dog.class` where a subclass of `Dog` should also qualify — `instanceof` accepts subclasses, `getClass()` doesn't.
+
+#### Comparisons
+
+| | Upcast | Downcast |
+|---|---|---|
+| Example | `Animal a = dog;` | `Dog d = (Dog) a;` |
+| Explicit? | No | Yes |
+| Can fail? | Never | At runtime, with `ClassCastException` |
+| Compiler rejects | — | Casts between unrelated types |
+
+| | `instanceof` | `getClass() ==` |
+|---|---|---|
+| Subclasses match? | Yes | No — exact class only |
+| `null` | `false` | `NullPointerException` |
+
+#### Complexity
+A downcast is a constant-time type check at runtime; an upcast costs nothing.
+
+#### Frequently confused with
+Reference casts vs. primitive casts — `(Dog) a` only relabels a reference, while `(int) 3.9` produces a new value. `instanceof` vs. `getClass()` — subtype test vs. exact-class test.
+
+#### Important facts to remember
+- Upcast: implicit, always safe. Downcast: explicit, runtime-checked.
+- Casts never change the object; overrides still dispatch on its runtime class.
+- `null` passes every cast and fails every `instanceof`.
+- The compiler rejects only casts that can never succeed.
+
+---
+
+### 2.14 Abstraction
+
+#### Definition
+Abstraction is the principle of exposing only essential behavior while hiding implementation detail: a type presents what it does, in its callers' terms, and conceals how. Interfaces and abstract classes are mechanisms for it, not its definition.
+
+#### Why it exists
+So callers depend on a small, stable set of operations instead of on implementation details, which keeps them simple and lets implementations change or be swapped without touching them.
+
+#### Interview explanation
+**In 30 seconds** — Abstraction means choosing the essential operations of a concept and hiding everything else behind them: `notifier.send(to, message)` instead of SMTP calls. Callers depend on *what*, never on *how*. In Java it's usually expressed with an interface or an abstract class, but a plain class with a well-chosen public API is an abstraction too.
+
+**If they push deeper** — It differs from encapsulation: abstraction decides which operations to expose, encapsulation bundles state with behaviour and blocks outside access, and information hiding is the goal of concealing decisions likely to change. Abstractions leak — a remote call behind a local-looking method can be slow or fail — so a good one specifies errors and cost, not just signatures. And they have a price: an interface with one implementation forever, or a layer that only forwards, adds indirection without flexibility.
+
+#### Syntax
+```java
+interface PaymentGateway {                      // the abstraction
+    Receipt charge(Money amount, Card card);
+}
+class StripeGateway implements PaymentGateway { // one implementation
+    @Override
+    public Receipt charge(Money amount, Card card) { /* HTTP calls, retries, mapping */ return null; }
+}
+```
+
+#### Example
+```java
+interface PriceSource {
+    BigDecimal priceOf(String sku);
+}
+
+class Checkout {
+    private final PriceSource prices;
+    Checkout(PriceSource prices) { this.prices = prices; }
+    BigDecimal total(List<String> skus) {
+        return skus.stream().map(prices::priceOf).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+}
+```
+
+Predict the output — a question below asks for it:
+
+```java
+interface Shape { double area(); }
+
+class Square implements Shape {
+    private final double side;
+    Square(double side) { this.side = side; }
+    public double area() { return side * side; }
+}
+class Rect implements Shape {
+    private final double w, h;
+    Rect(double w, double h) { this.w = w; this.h = h; }
+    public double area() { return w * h; }
+}
+
+static double total(List<Shape> shapes) {
+    double sum = 0;
+    for (Shape s : shapes) sum += s.area();
+    return sum;
+}
+
+System.out.println(total(List.of(new Square(2), new Rect(2, 3))));
+```
+
+#### Common interview questions
+- "What is abstraction?" (Exposing a concept's essential operations and hiding how they're done. Callers program against the *what* — an interface such as `PaymentGateway.charge` — so the *how* can change. Trap: defining it as "using abstract classes and interfaces"; those are the mechanisms.)
+- "What is the difference between encapsulation, abstraction and information hiding?" (Abstraction chooses which operations to present. Information hiding conceals design decisions that might change, such as the data representation. Encapsulation is the mechanism — state bundled with behaviour behind access control — that usually achieves the hiding. A class can be encapsulated but poorly abstracted, with private fields and dozens of methods mirroring them.)
+- "How does Java support abstraction?" (Through interfaces (a type with no instance state), abstract classes (a partial implementation with abstract steps), and access control that keeps the rest of a class out of reach. A well-designed concrete class with a small public API also qualifies.)
+- "What does the snippet in the Example print?" (`10.0`. `total` knows only the `Shape` abstraction; each object supplies its own `area()` — 4.0 and 6.0 — through dynamic dispatch. Adding a `Circle` would need no change to `total`.)
+- "Why is abstraction worth the extra interface and indirection?" (Because it fixes the dependency at the level that changes least. Callers rely on a few operations, so implementations, data stores and external providers can change, and tests can substitute fakes, without editing callers. The cost is real, so it pays off at boundaries and where several implementations exist or are likely.)
+- "Your `OrderRepository` interface has one implementation and mirrors its SQL methods one-to-one. Is that a good abstraction?" (Not really — it abstracts nothing if it exposes the implementation's shape, such as `executeOrderSelectWithJoin`. Name the operations in domain terms (`findOpenOrdersFor(customer)`), or drop the interface and use the class directly until a second implementation or a real boundary justifies one.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What is abstraction?" — they drill down from your answer. Answer each step before opening it:
+
+- "Is an interface automatically an abstraction?" (Only if it captures the concept rather than one implementation. An interface whose methods mirror a single class, or are named after the technology behind it, leaks the *how* and abstracts nothing.)
+- "What is a leaky abstraction?" (One whose hidden details still affect callers — `List.get(i)` being linear on a `LinkedList`, or a local-looking method making a network call that can time out. Some leakage is unavoidable; the contract should state what callers can rely on: results, errors, cost.)
+- "When would you not introduce an abstraction?" (When there is one implementation and no boundary to protect — inside a module, a concrete class is simpler, and it can be turned into an interface later when a second implementation appears. Premature abstraction costs indirection for flexibility nobody uses.)
+- "How do abstract classes and interfaces differ as abstraction tools?" (An interface defines a type with no instance state and can be implemented by any class; an abstract class can hold state and partial implementation but uses up the single superclass slot. 2.17 compares them in full.)
+
+Other follow-ups:
+
+- "Can a method be an abstraction?" (Yes. `order.total()` hides the summing and rounding rules; a method that reads at one consistent level — `validate(order); charge(order); confirm(order);` — is an abstraction over the steps it calls.)
+
+#### Edge cases
+- An abstraction's contract includes more than signatures: thrown exceptions, `null` handling, thread-safety and performance expectations are part of what callers rely on.
+- Changing the behaviour behind an abstraction can still break callers if they relied on undocumented behaviour (Hyrum's law) — the reason to document what's guaranteed.
+
+#### Common mistakes
+- Defining abstraction as "abstract classes and interfaces".
+- Naming abstractions after their implementation (`MySqlUserStore`).
+- Abstracting everything up front — an interface per class, each with one implementation.
+
+#### Comparisons
+
+| | Abstraction | Encapsulation | Information hiding |
+|---|---|---|---|
+| Question it answers | What should callers see? | How is state protected? | Which decisions stay secret? |
+| Typical tool | Interface, abstract class, chosen public API | `private` fields + methods | Both of the others |
+| Failure looks like | Callers depend on implementation details | Callers corrupt internal state | A representation change breaks callers |
+
+#### Complexity
+Not applicable — an extra interface call is typically inlined by the JIT.
+
+#### Frequently confused with
+Abstraction vs. encapsulation (see comparison). Abstraction (the principle) vs. abstract class (one Java mechanism, 2.15).
+
+#### Important facts to remember
+- Abstraction = expose the essential *what*, hide the *how*.
+- Interfaces and abstract classes are mechanisms, not the definition.
+- Abstractions leak; a good contract states errors and cost.
+- One implementation and no boundary usually means no interface is needed yet.
+
+---
+
+### 2.15 Abstract Classes
+
+#### Definition
+An abstract class is a partially-implemented class (mixing concrete and abstract methods, and able to hold fields and constructors) that cannot be instantiated directly. It is one mechanism for abstraction (2.14).
+
+#### Why it exists
+To let related classes share common structure/implementation while forcing each subclass to fill in the parts that must differ.
+
+#### Interview explanation
+**In 30 seconds** — An `abstract` class can't be instantiated with `new`. It can have everything a normal class has — fields, constructors, concrete and static methods — plus abstract methods with no body. A concrete subclass must implement every abstract method; a subclass that doesn't must be abstract too. Use one when related classes share state and code but differ in a few steps.
+
+**If they push deeper** — Its constructors run as part of every subclass object, so it can initialise and validate shared fields. Abstract methods can't be `private`, `static` or `final`, because each would prevent overriding, and a class can't be both `abstract` and `final`. Its classic use is the template method: a concrete, often `final`, method fixes an algorithm and calls abstract steps that subclasses supply. The cost is the single superclass slot and inheritance's coupling — 2.17 covers when an interface is the better choice.
+
+**What they test** — Interviewers frequently ask you to choose between an abstract class and an interface for a given design scenario — know the decision criteria cold (shared state/implementation → abstract class; pure contract, possibly across unrelated types → interface).
+
+#### Syntax
+```java
+abstract class PaymentProcessor {
+    abstract void processPayment(double amount); // must be implemented by subclass
+    void logTransaction(double amount) { // shared, concrete
+        System.out.println("Logging: " + amount);
     }
 }
 ```
 
 #### Example
 ```java
-class MathUtils {
-    static int square(int x) { return x * x; } // no object needed
+abstract class Employee {
+    String name;
+    Employee(String name) { this.name = name; }
+    abstract double calculateSalary();
+    void printPaySlip() {
+        System.out.println(name + ": " + calculateSalary());
+    }
 }
-System.out.println(MathUtils.square(5)); // called on class, not an instance
+class SalariedEmployee extends Employee {
+    double monthlySalary;
+    SalariedEmployee(String name, double s) { super(name); monthlySalary = s; }
+    @Override double calculateSalary() { return monthlySalary; }
+}
+```
+
+Predict the output — a question below asks for it:
+
+```java
+abstract class Report {
+    Report() { System.out.println("Report()"); }
+    abstract String body();
+    final void print() { System.out.println("[" + body() + "]"); }
+}
+class Sales extends Report {
+    Sales() { System.out.println("Sales()"); }
+    @Override String body() { return "sales"; }
+}
+
+Report r = new Sales();
+r.print();
 ```
 
 #### Common interview questions
-- "Can a static method call an instance method directly?" (No — it would need an explicit object reference to do so.)
-- "When would you use a static block?" (For one-time static field initialization logic that's more complex than a simple assignment, run once when the class is first loaded.)
-- "Are static variables thread-safe by default?" (No — shared static mutable state requires explicit synchronization in multi-threaded code.)
+- "When would you use an abstract class instead of an interface?" (When closely related classes share *state* and implementation — fields, constructor logic, helper methods — and you want to force them to supply a few specific steps. If you only need a contract, especially across unrelated classes, or a class may need several such types, use an interface. A common shape is both: an interface for the type plus an abstract class implementing most of it. Full comparison in 2.17.)
+- "Can an abstract class have zero abstract methods?" (Yes, legally — though unusual; it's still marked `abstract` purely to prevent direct instantiation.)
+- "Can you have a constructor in an abstract class if you can never instantiate it directly?" (Yes — it runs when a concrete subclass is instantiated, via implicit or explicit `super()`.)
+- "What does the snippet in the Example print?" (`Report()`, `Sales()`, `[sales]`. Constructing a `Sales` runs the abstract parent's constructor first, then the subclass's. `print()` is a final template method in the abstract class; it calls `body()`, which dispatches to `Sales`.)
+- "Why can't an abstract method be `private`, `static` or `final`?" (An abstract method exists only to be overridden. A `private` method isn't inherited, a `static` one is hidden rather than overridden, and a `final` one can't be overridden — so each combination would demand an implementation that can never be supplied. The compiler reports an illegal combination of modifiers.)
+- "Three report types share header, footer and paging logic but differ in their body. How would you structure them?" (An abstract `Report` holding the shared fields and a `final` `render()` that writes header, calls an abstract `renderBody()`, then writes footer and paging; each report type extends it and implements only `renderBody()`. If the report types must also extend something else, use composition instead: a `ReportRenderer` that takes a `BodyWriter` interface.)
 
 #### Follow-up questions
-- "When exactly does static initialization happen?" (When the class is first loaded/initialized by the JVM — typically on first active use, such as first instantiation, first static method call, or first static field access.)
-- "Can you override a static method?" (No — you can only *hide* it; the call is resolved at compile time based on the reference's declared type, not overridden polymorphically.)
+Interviewers rarely stop at "When would you use an abstract class instead of an interface?" — they drill down from your answer. Answer each step before opening it:
+
+- "What can an abstract class hold that an interface can't?" (Instance fields, constructors, and non-public members such as `protected` methods. An interface can have only constants, and its methods are public or private.)
+- "Why does that difference matter in practice?" (Shared state lets the base class own invariants — validating the `name` once in its constructor, keeping a counter — instead of every implementation repeating it. Interfaces can share behaviour through default methods, but those can only call other interface methods; they have no fields to work with.)
+- "What do you give up by choosing the abstract class?" (The subclass's only superclass slot, and loose coupling: subclasses depend on the base class's implementation and suffer the fragile base class problem. A class can implement many interfaces but extend one class.)
+- "How do the JDK's collections combine both?" (`List` is an interface; `AbstractList` is an abstract class implementing most of it on top of `get` and `size`. You implement `List` directly when you must, or extend `AbstractList` to write only two methods — a *skeletal implementation*.)
+
+Other follow-ups:
+
+- "What happens if a subclass doesn't implement all abstract methods?" (The subclass must itself be declared `abstract`, or it's a compile error.)
+- "Can an abstract class implement an interface without implementing all its methods?" (Yes — an abstract class can leave interface methods unimplemented, deferring that obligation to its own concrete subclasses.)
 
 #### Edge cases
-- Static initialization blocks run once, in the order they appear in the source, when the class is loaded — before any instance is created.
-- A `static` field in a class hierarchy is shared even between parent and child references if not redeclared in the child — easy to trip up on when debugging unexpected shared state.
+- An abstract class can have `final` concrete methods (methods subclasses cannot override) alongside its abstract ones — mixing "fixed shared logic" with "must customize" logic in the same class.
+- A class can be `abstract` even with zero abstract methods — sometimes done deliberately just to block direct instantiation of a "template" base class.
+- An anonymous class can instantiate an abstract class on the spot by implementing its abstract methods: `new Report() { String body() { return "x"; } }`.
+- An abstract class may have a `static` `main` method and be run as a program — "can't be instantiated" doesn't mean "can't execute".
 
 #### Common mistakes
-- Trying to access `this` inside a static method (compile error).
-- Assuming each subclass gets its own independent copy of an inherited static field — it doesn't, unless explicitly redeclared in the subclass (which then shadows, not shares, the parent's field).
+- Choosing an abstract class purely to share code between two unrelated types that don't have a genuine "is-a" relationship (interfaces with default methods, or composition, are often the better fit).
+- Forgetting a subclass must be marked `abstract` itself if it doesn't implement every inherited abstract method.
+- Calling an abstract method from the abstract class's constructor — it runs the subclass's implementation before the subclass's fields are set (2.22).
 
 #### Comparisons
 
-| | Static (class) member | Instance member |
+| | Abstract class | Concrete class |
 |---|---|---|
-| Copies in memory | One, shared by all | One per object |
-| Access | `ClassName.member` (or via instance, discouraged) | `instance.member` |
-| Can use `this`? | No | Yes |
-| Overridable? | No (can only be hidden) | Yes (if not private/static/final) |
+| `new` allowed | No | Yes |
+| Abstract methods | Allowed | Not allowed |
+| Constructors, fields, concrete methods | Yes | Yes |
+| Can be `final` | No | Yes |
+
+The abstract class vs. interface comparison is in 2.17.
 
 #### Complexity
 Not applicable.
 
 #### Frequently confused with
-Static method "hiding" vs. instance method "overriding" — these look syntactically similar but resolve completely differently (compile-time vs. runtime).
+Abstract class vs. interface — the most classic "which would you choose" design interview question in Java (2.17). Abstract class vs. abstraction — the first is one mechanism for the second (2.14).
 
 #### Important facts to remember
-- Static members are loaded once per class, shared across all instances.
-- Static methods cannot use `this` or directly call instance methods/fields.
-- Static methods can be hidden, never truly overridden.
+- Abstract classes can have constructors, instance fields, and concrete methods — much more than a pure interface.
+- A subclass that doesn't implement all abstract methods must itself be declared abstract.
+- Choose abstract class for "shared implementation + is-a," interface for "shared capability, possibly across unrelated types."
+- Abstract methods can't be `private`, `static` or `final`; an abstract class can't be `final`.
 
 ---
 
-### 2.11 The Object Class (equals, hashCode, toString)
+### 2.16 Interfaces
 
 #### Definition
-`Object` is the implicit root superclass of every Java class, providing default `equals()` (reference comparison), `hashCode()` (identity-derived), and `toString()` (class name + hash) implementations.
+An interface defines a type through a contract of method signatures that implementing classes must fulfill. Since Java 8 it may also contain default and static methods, and since Java 9 private methods — but never instance fields or constructors.
+
+#### Why it exists
+To decouple "what a type can do" from "how it does it," enabling multiple inheritance of behavior and flexible, testable designs (program to an interface, not an implementation).
+
+#### Interview explanation
+**In 30 seconds** — An interface is a type any class can implement, regardless of what it extends, and a class can implement many. Its abstract methods are implicitly `public abstract`, its fields `public static final`. Since Java 8 it can carry behaviour through `default` and `static` methods, and since Java 9 `private` helpers — so "interfaces have no implementation" is outdated. What it still can't have is instance state or constructors.
+
+**If they push deeper** — Default methods brought a diamond problem, solved by three rules: a class's own or inherited method beats any default; a more specific interface beats the one it extends; otherwise the class must override and may call `A.super.m()`. Static interface methods aren't inherited by implementing classes — call them as `Interface.m()`. A default method can't override `equals`, `hashCode` or `toString`. Interface fields are final but not necessarily constants — `List<String> NAMES = new ArrayList<>()` is one shared, mutable list.
+
+**What they test** — Know the evolution: pre-Java 8 (pure abstract contract) vs. post-Java 8 (default/static methods) vs. Java 9+ (private interface methods for internal code reuse between default methods). Also be fluent in functional interfaces (exactly one abstract method), the foundation for lambdas.
+
+#### Syntax
+```java
+interface Notifier {
+    void send(String message);              // abstract
+    default void sendUrgent(String msg) {    // default method
+        send("URGENT: " + msg);
+    }
+    static Notifier console() {              // static factory method
+        return msg -> System.out.println(msg);
+    }
+}
+```
+
+#### Example
+```java
+interface Comparable2<T> {
+    int compareTo(T other);
+}
+class Money implements Comparable2<Money> {
+    long cents;
+    Money(long cents) { this.cents = cents; }
+    @Override public int compareTo(Money other) { return Long.compare(cents, other.cents); }
+}
+```
+
+Predict the output — a question below asks for it:
+
+```java
+interface A { default String who() { return "A"; } }
+interface B extends A { default String who() { return "B"; } }
+class Base { public String who() { return "Base"; } }
+
+class One implements A, B { }
+class Two extends Base implements B { }
+class Three implements A {
+    @Override public String who() { return "Three+" + A.super.who(); }
+}
+
+System.out.println(new One().who());
+System.out.println(new Two().who());
+System.out.println(new Three().who());
+```
+
+#### Common interview questions
+- "What's the difference between an abstract class and an interface?" (An abstract class can hold instance state, constructors and non-public members, and a class extends only one; an interface holds no instance state and a class can implement many. Both can contain implemented methods today. Full comparison in 2.17.)
+- "What is a functional interface? Give an example from the JDK." (`Runnable`, `Comparator<T>`, `Function<T,R>` — each has exactly one abstract method.)
+- "What is the 'diamond problem' with default methods, and how must a class resolve it?" (Two inherited default methods with the same signature. Java resolves it by rules: a method from the class hierarchy wins over any default; a more specific interface — one extending the other — wins over its parent. Only when neither applies must the class override the method, optionally calling `A.super.m()` or `B.super.m()`. Java refuses to guess.)
+- "What does the snippet in the Example print?" (`B`, `Base`, `Three+A`. `One`: `B` extends `A`, so `B`'s default is more specific. `Two`: a method inherited from the superclass `Base` beats any default. `Three` overrides and calls the interface's default explicitly with `A.super.who()`.)
+- "Can an interface contain implementation?" (Yes, since Java 8: default methods give every implementing class a body it can keep or override, static methods hold utility code, and private methods (Java 9) share code between them. What an interface still can't contain is instance state, so default methods work only through other interface methods.)
+- "You need to add a method to an interface that 40 classes in other teams implement. What do you do?" (Add it as a `default` method with a sensible implementation built on the existing methods, so no implementation breaks — the reason default methods were added to Java 8, for `Collection.stream()`. Implementations that can do better override it.)
+
+#### Follow-up questions
+Interviewers rarely stop at "Can an interface contain implementation?" — they drill down from your answer. Answer each step before opening it:
+
+- "If interfaces have method bodies now, what's left that only abstract classes can do?" (Hold instance fields and constructors, and declare `protected` or package-private members. An interface's defaults can't keep state between calls except through the methods the class implements.)
+- "Are interface static methods inherited by implementing classes?" (No. `Comparator.naturalOrder()` must be called through `Comparator`, not through a class implementing it or an instance of one. As a result, two interfaces can declare static methods with the same signature without any conflict in a class that implements both.)
+- "Can a default method override `toString()` or `equals()`?" (No — it's a compile error. A class always inherits those from `Object`, and a class method beats a default, so such a default could never run.)
+- "Why did Java 8 add default methods at all?" (To evolve published interfaces. Adding `stream()` or `forEach()` as abstract methods to `Collection` and `Iterable` would have broken every collection class ever written; as defaults, existing classes compiled and ran unchanged.)
+
+Other follow-ups:
+
+- "Can an interface extend another interface? Can it extend multiple interfaces?" (Yes to both — unlike classes, interfaces support multiple inheritance of the contract itself.)
+- "Can interface fields be non-final or non-static?" (No — all interface fields are implicitly `public static final`. They are compile-time constants only when initialised with a constant expression; `int SEED = new Random().nextInt();` is legal and computed when the interface is initialized.)
+
+#### Edge cases
+- Two default methods from different interfaces with the same signature force the implementing class to override and choose (or combine) behavior explicitly — otherwise it's a compile error — unless one interface extends the other or a superclass already provides the method.
+- A functional interface can still have default/static methods — the "exactly one abstract method" rule only counts *abstract* methods, not default/static ones. Abstract methods matching `Object`'s public methods don't count either, which is why `Comparator` is functional despite declaring `equals`.
+- A class implementing an interface method must declare it `public` — leaving out the modifier means package-private, which narrows access and doesn't compile.
+
+#### Common mistakes
+- Assuming an interface variable can hold per-instance mutable state — interface fields are always static and final, not instance data.
+- Forgetting `@FunctionalInterface` doesn't *make* an interface functional — it's just a compiler-enforced check that the interface has exactly one abstract method; the annotation is optional but good practice.
+- Calling an interface's static method through an implementing class.
+
+#### Comparisons
+
+| | Interface (pre-Java 8) | Interface (Java 8+) |
+|---|---|---|
+| Method bodies | None allowed | Default & static methods allowed |
+| Multiple inheritance of behavior | No (contract only) | Yes (default methods provide shared behavior) |
+| Private helper methods | N/A | Allowed since Java 9 |
+
+#### Complexity
+Not applicable.
+
+#### Frequently confused with
+Interfaces vs. abstract classes (see 2.17); functional interfaces vs. "any interface with one method someone happens to call using a lambda" (a functional interface is specifically defined as having exactly one abstract method — the formal term, not just an informal pattern).
+
+#### Important facts to remember
+- Interface fields are always `public static final` — final, but not necessarily constant.
+- A class can implement any number of interfaces (multiple inheritance of type/behavior).
+- A functional interface has exactly one abstract method (default/static methods don't count toward that total).
+- Diamond rules: class wins → more specific interface wins → otherwise override.
+- Interface static methods are not inherited by implementing classes.
+
+---
+
+### 2.17 Abstract Class vs Interface
+
+#### Definition
+Two ways to define a type that other classes complete. An abstract class is a partial class — fields, constructors, any member access, abstract and concrete methods — and a class extends at most one. An interface is a stateless type — abstract, default, static and private methods plus constants — and a class can implement many.
+
+#### Why it exists
+The question exists because Java separates inheritance of *state* (one superclass) from inheritance of *type* (many interfaces). Choosing well decides whether unrelated classes can share a role and where shared state lives.
+
+#### Interview explanation
+**In 30 seconds** — Use an interface for a role that any class can take on — a class can implement many, and none of them dictates its superclass. Use an abstract class when closely related classes share state and code: it can have instance fields, constructors, `protected` members and `final` methods, but a class can extend only one. Since Java 8 both can contain method bodies, so "interfaces have no code" is no longer the difference.
+
+**If they push deeper** — The lasting differences are state, construction, member access and multiplicity. An interface's default methods can work only through its other methods — there are no fields — and can always be overridden, while an abstract class can hold invariants in fields and lock an algorithm with a `final` template method. A common professional design uses both: an interface as the public type and an abstract skeletal implementation for convenience (`List` and `AbstractList`), so callers depend only on the interface.
+
+#### Syntax
+```java
+interface Shape { double area(); }
+
+abstract class Polygon implements Shape {
+    protected final int sides;
+    protected Polygon(int sides) { this.sides = sides; }
+}
+
+class Square extends Polygon {
+    private final double side;
+    Square(double side) { super(4); this.side = side; }
+    @Override public double area() { return side * side; }
+}
+```
+
+#### Example
+```java
+interface Auditable { String auditId(); }          // a role: any class can take it on
+
+abstract class Entity {                            // a family: shared state and invariants
+    private final long id;
+    protected Entity(long id) {
+        if (id <= 0) throw new IllegalArgumentException("id");
+        this.id = id;
+    }
+    public final long id() { return id; }
+}
+
+class Invoice extends Entity implements Auditable, Comparable<Invoice> {
+    Invoice(long id) { super(id); }
+    @Override public String auditId() { return "INV-" + id(); }
+    @Override public int compareTo(Invoice o) { return Long.compare(id(), o.id()); }
+}
+```
+
+Predict which of these declarations compile — a question below asks for it:
+
+```java
+interface I1 { int LIMIT = 10; }
+interface I2 { protected void m(); }
+interface I3 { private void helper() {} default void m() { helper(); } }
+interface I4 { I4() {} }
+abstract class A1 { protected abstract void m(); }
+interface I5 { final default void m() {} }
+```
+
+#### Common interview questions
+- "What's the difference between an abstract class and an interface?" (An abstract class can have instance fields, constructors, any access level and `final` methods, and a class extends only one. An interface has no instance state or constructors, its members are public (or private methods), and a class can implement many. Both can contain abstract methods and methods with bodies today. Trap: "interfaces can't have implementation" — untrue since Java 8.)
+- "When would you choose an abstract class over an interface?" (When closely related classes share state or construction logic, need `protected` hooks, or must follow a fixed algorithm enforced by a `final` template method. Otherwise prefer an interface, because it doesn't consume the implementer's superclass.)
+- "Did Java 8 make abstract classes unnecessary?" (No. Default methods let interfaces share behaviour, but not state: a default can't keep a field, run constructor validation, or be made `final`. Abstract classes still own those jobs; interfaces just took over "type with some convenience methods".)
+- "Which declarations in the Example compile?" (`I1`, `I3` and `A1` compile; `I2`, `I4` and `I5` don't. Interface fields are implicitly `public static final`. `protected` isn't allowed on interface members. Private interface methods are allowed since Java 9. Interfaces have no constructors. Abstract classes may have `protected` abstract methods. Interface methods can't be `final`.)
+- "Why do libraries often provide both an interface and an abstract class for the same concept?" (The interface is the type callers and implementers depend on — anyone can implement it whatever they extend. The abstract class is optional convenience that implements most methods in terms of a few, so an implementer writes only those few. `Collection`/`AbstractCollection`, `List`/`AbstractList`, `Map`/`AbstractMap`.)
+- "A teammate made `Auditable` an abstract class with an `auditId()` method. Two existing entities that already extend `BaseEntity` now can't be auditable. What should change?" (Make `Auditable` an interface: it describes a role, and roles must be addable to classes that already have a superclass. If several auditable classes share code, put it in a default method or a helper they compose.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What's the difference between an abstract class and an interface?" — they drill down from your answer. Answer each step before opening it:
+
+- "If interfaces have default methods, can they replace abstract classes?" (Only where no state is involved. A default method can call the interface's other methods, but it can't store anything or enforce construction-time invariants, and an implementing class can always override it.)
+- "Can an abstract class implement an interface without implementing its methods?" (Yes — an abstract class may leave interface methods abstract, passing the obligation to its concrete subclasses. That's how skeletal implementations work.)
+- "Can an interface extend an abstract class?" (No. Interfaces extend only interfaces. A class can extend an abstract class and implement interfaces; an interface can extend many interfaces.)
+- "Which one would you use as a constructor parameter type in a service?" (The interface, if one exists — the service then accepts any implementation, including a fake in tests. Depending on an abstract class instead ties callers to one family of implementations.)
+
+Other follow-ups:
+
+- "Is there any performance difference between calling through an abstract class and through an interface?" (Not in practice. HotSpot's interface call path is slightly more involved, but at call sites with one or two receiver classes both are inlined, and the difference disappears.)
+
+#### Edge cases
+- An interface may have a `private static` method (Java 9+), but no `protected` member of any kind.
+- A default method can't be `final`, `synchronized`, or override a public method of `Object`.
+- An abstract class can have no abstract methods at all; an interface can have no methods at all (a marker interface).
+- A `sealed` interface (Java 17) or a `sealed` abstract class restricts who may implement or extend it — both can model a closed family.
+
+#### Common mistakes
+- Saying "interfaces can't have implementation" or "can't have static/private methods".
+- Using an abstract class for a cross-cutting role (`Auditable`, `Cacheable`), which unrelated classes then can't adopt.
+- Putting mutable shared "state" in an interface constant (`List<String> CACHE = new ArrayList<>()`), creating a global, unsynchronized variable.
+
+#### Comparisons
+
+| | Abstract class | Interface |
+|---|---|---|
+| Multiple inheritance | No (single parent only) | Yes (implement many) |
+| Instance fields with state | Yes | No (only `public static final` fields) |
+| Constructors | Yes | No |
+| Method implementations | Yes (concrete + abstract mixed) | Yes (default/static methods, Java 8+; private, Java 9+) |
+| `protected` / `final` methods | Yes | No |
+| Best for | Closely related types sharing implementation | Unrelated types sharing a capability/contract |
+
+#### Complexity
+Not applicable.
+
+#### Frequently confused with
+Abstract class vs. interface — the most classic "which would you choose" design interview question in Java. Default method vs. abstract class method — a default can always be overridden and has no fields to work with.
+
+#### Important facts to remember
+- Abstract classes: state, constructors, any access, `final` methods — one per class.
+- Interfaces: no instance state, public members (private helper methods allowed) — many per class.
+- Both can contain method bodies since Java 8.
+- Prefer interfaces for types; add an abstract skeletal class for implementers' convenience.
+
+---
+
+### 2.18 The final Keyword
+
+#### Definition
+`final` forbids one kind of change, depending on what it marks: a final variable or field can be assigned only once, a final method can't be overridden (or, if static, hidden), and a final class can't be extended.
+
+#### Why it exists
+To let a class state — and the compiler enforce — that a value, a behaviour or a type's guarantees won't change, which protects invariants and makes code safe to reason about and share.
+
+#### Interview explanation
+**In 30 seconds** — On a variable, `final` means "assigned once": a final field must be set by its initializer or by every constructor, and never after. On a method it means "can't be overridden"; on a class, "can't be extended" — `String` is final. A final reference is not an immutable object: `final List<String> names` can't be pointed elsewhere, but `names.add(...)` still works.
+
+**If they push deeper** — The compiler checks definite assignment: a blank final field must be assigned exactly once on every constructor path. `static final` primitives and strings initialised with constant expressions are *constant variables* that the compiler inlines into callers — so changing one in a library needs callers recompiled, and reading one doesn't initialize its class. Final fields also carry a memory-model guarantee: after construction, every thread sees their constructed values without synchronization, provided `this` didn't escape. `final` isn't a performance tool — the JIT inlines non-final methods it can prove have one implementation.
+
+#### Syntax
+```java
+final int x = 1;                    // final local variable
+class Config {
+    private final String url;       // blank final field: assigned in every constructor
+    static final int MAX = 100;     // constant
+    Config(String url) { this.url = url; }
+    final String url() { return url; }   // can't be overridden
+}
+final class Money { }               // can't be extended
+```
+
+#### Example
+```java
+final List<String> names = new ArrayList<>();
+names.add("Siva");          // allowed: the object changes
+// names = new ArrayList<>();   // compile error: the reference can't change
+
+final int[] counts = {1, 2};
+counts[0] = 99;             // allowed: array elements aren't final
+```
+
+Predict which lines compile — a question below asks for it:
+
+```java
+class Box {
+    private final int size;                  // line 1
+    private final List<String> items = new ArrayList<>();
+
+    Box(int size) { this.size = size; }
+    Box() { }                                // line 2
+
+    void grow() { size = size + 1; }         // line 3
+    void add(String s) { items.add(s); }     // line 4
+    final void seal() { }
+}
+class BigBox extends Box {
+    BigBox() { super(10); }
+    void seal() { }                          // line 5
+}
+```
+
+#### Common interview questions
+- "What is the difference between a final reference and an immutable object?" (A final reference can't be reassigned to point at another object. An immutable object can't have its state changed at all. `final List<String> l = new ArrayList<>()` is a final reference to a mutable list; `List.of("a")` is an immutable list, which could be held in a non-final variable. Immutability needs a class designed for it (2.21).)
+- "What does `final` mean on a class, a method and a variable?" (Class: no subclasses. Method: no overriding — and for a static method, no hiding. Variable or field: assigned exactly once. They're separate rules that happen to share a keyword.)
+- "Can a final field be assigned in a constructor?" (Yes — that's the usual way. A final field without an initializer (a blank final) must be assigned exactly once on every constructor path, or in an instance initializer; it can never be assigned in an ordinary method.)
+- "Which lines in the Example fail to compile?" (Lines 2, 3 and 5. Line 2: the `Box()` constructor leaves the blank final `size` unassigned. Line 3: a final field can't be assigned in a method. Line 5: `seal()` is final in `Box`, so `BigBox` can't override it. Lines 1 and 4 are fine — `items.add` changes the list, not the final reference.)
+- "Why is `String` final?" (Its guarantees — immutability, stable `hashCode`, safe use as map keys and in security checks such as file paths and class names — would be worthless if a subclass could add mutable state or override methods. Making the class final means every `String` really behaves like one.)
+- "A library changes `public static final int TIMEOUT = 30;` to 60, and your service still times out after 30 seconds after upgrading the jar. Why?" (`TIMEOUT` is a constant variable, so its value was copied into your compiled classes. Swapping the jar doesn't change them; recompiling your code against the new version does. Library authors avoid this by exposing such values through a method or a non-constant field.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What is the difference between a final reference and an immutable object?" — they drill down from your answer. Answer each step before opening it:
+
+- "So what does it take to make an object immutable?" (A class with all fields `private final`, no mutators, no way for subclasses to add mutability (a `final` class or private constructors), and defensive copies of any mutable components on the way in and out. 2.21 covers it.)
+- "Does `final` help with thread safety?" (Yes, specifically for fields: the memory model guarantees that once a constructor finishes, other threads see the constructed values of `final` fields without synchronization — as long as `this` didn't escape during construction. It doesn't make the objects those fields refer to thread-safe.)
+- "What does effectively final mean?" (A local variable or parameter that is never reassigned after initialization, even without the keyword. Lambdas and anonymous or local classes can capture only final or effectively final locals, because they capture the value, not the variable.)
+- "How is `final` different from `sealed`?" (`final` allows no subclasses at all. `sealed` (Java 17) allows exactly the subclasses listed in its `permits` clause, each of which must itself be `final`, `sealed` or `non-sealed`. Sealed suits closed hierarchies such as a fixed set of payment types.)
+
+Other follow-ups:
+
+- "Can an abstract method be final? Can an abstract class be final?" (No to both — `abstract` demands a subclass or override that `final` forbids. The compiler reports an illegal combination of modifiers.)
+
+#### Edge cases
+- A `private` method is implicitly impossible to override, so adding `final` to it changes nothing.
+- A `static final` method can't be hidden by a subclass static method with the same signature.
+- `final` parameters stop reassignment inside the method only; the caller's object can still be mutated through them.
+- Reflection can't change a `static final` field or a final field of a record or hidden class. For ordinary classes, `setAccessible(true)` can still change a final instance field — though since JDK 26 (JEP 500) doing so prints a warning unless `--enable-final-field-mutation` allows it, on the way to forbidding it.
+
+#### Common mistakes
+- Calling a `final` field immutable when its type is mutable.
+- Changing a public constant in a library and expecting dependents to see it without recompiling.
+- Making every method `final` "for performance" — it doesn't help, and it blocks legitimate subclasses and proxies.
+
+#### Comparisons
+
+| Applied to | Forbids | Doesn't forbid |
+|---|---|---|
+| Variable / field | Reassignment | Mutating the object it refers to |
+| Method | Overriding (and hiding, if static) | Overloading it; calling it |
+| Class | Subclassing | Creating instances; mutable fields |
+
+#### Complexity
+Not applicable.
+
+#### Frequently confused with
+`final` vs. immutable — a variable property vs. an object property. `final` vs. `static` — "assigned once" vs. "one per class"; `static final` combines them into a constant. `final` vs. `finally` / `finalize` — unrelated keywords that only look alike (exception handling, and a deprecated `Object` method, 2.19).
+
+#### Important facts to remember
+- Final variable → no reassignment; final method → no overriding; final class → no subclassing.
+- Final reference ≠ immutable object.
+- Blank final fields must be assigned exactly once on every constructor path.
+- Constant variables are inlined into callers.
+
+---
+
+### 2.19 The Object Class
+
+#### Definition
+`Object` is the implicit root superclass of every Java class (and of arrays). It provides identity-based defaults for `equals()`, `hashCode()` and `toString()`, plus `getClass()`, `clone()`, `finalize()` and the monitor methods `wait()`/`notify()`/`notifyAll()`.
 
 #### Why it exists
 To guarantee every object in Java has baseline, universal behavior for identity comparison, hashing, and string representation — which subclasses can override to provide meaningful, value-based semantics.
 
 #### Interview explanation
-The equals/hashCode contract is one of the highest-frequency Java interview topics. Be ready to write a correct `equals()`/`hashCode()` override from scratch, and explain exactly *why* breaking the contract corrupts `HashMap`/`HashSet` behavior.
+**In 30 seconds** — Every class extends `Object`, directly or indirectly, so every object has `equals`, `hashCode`, `toString`, `getClass`, `clone`, `finalize`, `wait` and `notify`. The defaults are identity-based: `equals` is `==`, `hashCode` is the identity hash code, `toString` is the class name plus `@` plus the hash in hex. You routinely override `equals`, `hashCode` and `toString`; `getClass`, `wait` and `notify` are `final`.
+
+**If they push deeper** — The identity hash code is not a memory address: the API promises only that it is stable for the object's lifetime and consistent with identity equality, and HotSpot generates and caches it because objects move. `clone()` is `protected`, makes a shallow copy without running a constructor, and needs the `Cloneable` marker — copy constructors are preferred. `finalize()` is deprecated for removal (JEP 421, Java 18); resources are released with try-with-resources.
+
+#### Syntax
+```java
+class Point {
+    private final int x, y;
+    Point(int x, int y) { this.x = x; this.y = y; }
+
+    @Override public String toString() { return "Point(" + x + ", " + y + ")"; }
+    // equals and hashCode: see 2.20
+}
+```
+
+#### Example
+```java
+Object o = new int[] {1, 2, 3};
+System.out.println(o.getClass().getSimpleName());   // int[] — arrays are objects
+System.out.println(o instanceof Object);            // true
+
+Point p = new Point(1, 2);
+System.out.println(p);                              // Point(1, 2) — println calls toString()
+System.out.println(p.getClass() == Point.class);    // true
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class Dog {
+    @Override public int hashCode() { return 255; }
+}
+
+Dog d = new Dog();
+String s = d.toString();
+System.out.println(s.substring(s.indexOf('@')));
+System.out.println(System.identityHashCode(d) == d.hashCode());
+System.out.println(d.equals(new Dog()));
+```
+
+#### Common interview questions
+- "What methods does `Object` provide?" (`equals`, `hashCode`, `toString`, `getClass`, `clone`, `finalize`, and `wait`, `notify`, `notifyAll`. The first three are the ones you override; `getClass` and the monitor methods are `final`; `clone` and `finalize` are historical and best avoided.)
+- "What does the default `toString()` print?" (`getClass().getName() + "@" + Integer.toHexString(hashCode())` — the fully-qualified class name, `@`, and the hash code in hex. Because it calls `hashCode()`, overriding `hashCode` changes it.)
+- "Is the default `hashCode()` the memory address?" (No. The contract only requires it to be stable for the object's lifetime and consistent with `equals`; distinct objects may even collide. HotSpot generates a value on first use and stores it in the object header, since the garbage collector moves objects.)
+- "What does the snippet in the Example print?" (`@ff`, `false`, `false`. `toString()` uses the overridden `hashCode()`, 255 = `ff`. `System.identityHashCode` ignores the override and returns the identity hash, which almost certainly isn't 255. `equals` is still identity-based, and the two dogs are different objects.)
+- "Why is `clone()` considered broken?" (It's `protected` in `Object`, so callers can't use it unless the class overrides it as `public`; it depends on `Cloneable`, an interface with no methods; it copies fields shallowly and runs no constructor, so invariants and `final` fields can't be re-established; and it throws a checked exception. Copy constructors and static factories avoid all of that. Arrays' `clone()` is the useful exception.)
+- "A team relies on `finalize()` to close file handles, and the service runs out of file descriptors under load. Why?" (Finalizers run only when the garbage collector gets round to it — possibly never — and on a single finalizer thread that can fall behind. File handles pile up long after the objects are unreachable. Close resources deterministically with try-with-resources on an `AutoCloseable`.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What methods does `Object` provide?" — they drill down from your answer. Answer each step before opening it:
+
+- "Why is `getClass()` final?" (Because it reports a fact the JVM knows — the object's runtime class — and code such as `equals` implementations and frameworks depend on it being truthful. An override could lie.)
+- "What's the difference between `obj.getClass()` and `Dog.class`?" (`getClass()` is the runtime class of a particular object — possibly a subclass, or a proxy class; `Dog.class` is a compile-time literal for exactly `Dog`. `animal.getClass() == Dog.class` is false for a `Puppy extends Dog`.)
+- "Do interfaces extend `Object`?" (Not formally — an interface has no superclass. But every interface implicitly declares `Object`'s public methods as members, so you can call `toString()` or `equals()` on any interface-typed reference, and the implementing object's versions run.)
+- "What replaces `finalize()` for cleanup?" (Explicit release through `AutoCloseable` and try-with-resources. `java.lang.ref.Cleaner` exists as a safety net for when a caller forgets — it runs a cleanup action after the object becomes phantom-reachable, without the resurrection and ordering problems of finalizers.)
+
+Other follow-ups:
+
+- "Are arrays objects?" (Yes. Every array type extends `Object`, so arrays have `getClass()`, `hashCode()` and so on — but their `equals` and `toString` are `Object`'s identity versions. Compare contents with `Arrays.equals` and print them with `Arrays.toString`.)
+
+#### Edge cases
+- `getClass()` on a framework proxy (Hibernate, Spring CGLIB) returns the generated proxy subclass, not your entity or bean class.
+- `Object`'s `clone()` is `protected`, so `new Object().clone()` doesn't compile outside `java.lang` — a class must override it as `public` for callers to use it.
+- Arrays' `equals` and `hashCode` are identity-based: two arrays with identical contents are not `equals`.
+
+#### Common mistakes
+- Believing the default `hashCode` is an address, or unique.
+- Using `clone()` on classes with mutable fields and getting shallow copies that share internals.
+- Relying on `finalize()` for any cleanup.
+
+#### Comparisons
+
+| | `getClass()` | `instanceof` |
+|---|---|---|
+| Asks | Exactly which class is this? | Is this the type or a subtype? |
+| Subclass of the type | Different class | `true` |
+| `null` receiver | `NullPointerException` | `false` |
+
+#### Complexity
+Not applicable.
+
+#### Frequently confused with
+`final`, `finally` and `finalize()` — a modifier, an exception-handling block, and a deprecated `Object` method. `getClass()` vs. the `.class` literal — runtime class of an object vs. a fixed type.
+
+#### Important facts to remember
+- Every class (and every array) extends `Object`; interfaces expose its public methods.
+- Default `equals` is identity; default `hashCode` is the identity hash code — not an address.
+- `getClass`, `wait`, `notify`, `notifyAll` are final.
+- Avoid `clone()` (prefer copy constructors) and `finalize()` (deprecated for removal).
+
+---
+
+### 2.20 equals and hashCode
+
+#### Definition
+`equals()` defines when two objects are logically equal; `hashCode()` returns an `int` that hash-based collections use to choose a bucket. `Object`'s versions are identity-based. A class that overrides one must override the other so that equal objects always have equal hash codes.
+
+#### Why it exists
+Value-like classes need equality by content, and hash-based collections find elements by hash code first and `equals` second — so the two methods must agree for lookups to work.
+
+#### Interview explanation
+**In 30 seconds** — `==` compares references; `equals` compares whatever the class defines. Override `equals` for value-like classes, and always override `hashCode` with it using the same fields: equal objects must have equal hash codes, though unequal objects may collide. `equals` must be reflexive, symmetric, transitive, consistent, and return `false` for `null`.
+
+**If they push deeper** — `HashMap` uses the hash code to pick a bucket and calls `equals` only within it, so an object with `equals` but no matching `hashCode` is looked for in the wrong bucket — lookups with a new, equal instance fail. Mutating a field used in `hashCode` after insertion strands the object in its old bucket. For the type check, `getClass()` gives exact-class equality and `instanceof` lets subclasses participate; each has a cost, and the clean answer is a `final` value class with `instanceof` — or a `record`, which generates all three methods from its components.
+
+**What they test** — The equals/hashCode contract is one of the highest-frequency Java interview topics. Be ready to write a correct `equals()`/`hashCode()` override from scratch, and explain exactly *why* breaking the contract corrupts `HashMap`/`HashSet` behavior.
 
 #### Syntax
 ```java
@@ -1397,44 +2778,306 @@ Set<Point> points = new HashSet<>();
 points.add(new Point(1, 2));
 System.out.println(points.contains(new Point(1, 2)));
 // true only if Point correctly overrides both equals() AND hashCode()
-// false (surprisingly, to many) if only equals() was overridden
+// almost certainly false (surprisingly, to many) if only equals() was overridden
+```
+
+Predict the output — a question below asks for it:
+
+```java
+String s1 = "hi", s2 = "hi", s3 = new String("hi");
+System.out.println(s1 == s2);
+System.out.println(s1 == s3);
+System.out.println(s1.equals(s3));
+
+Integer i1 = 127, i2 = 127, i3 = 1000, i4 = 1000;
+System.out.println(i1 == i2);
+System.out.println(i3 == i4);
+
+System.out.println("Aa".hashCode() == "BB".hashCode());
+System.out.println("Aa".equals("BB"));
 ```
 
 #### Common interview questions
-- "What is the equals/hashCode contract?"
-- "What happens if you override `equals()` but not `hashCode()`?" (Contract violation — equal objects can end up in different hash buckets, so `HashSet`/`HashMap` lookups silently fail even though `.equals()` would return `true`.)
-- "Why use `getClass() != o.getClass()` instead of `instanceof` in `equals()`?" (`instanceof` allows a subclass to be considered equal to a superclass instance, which can break symmetry; `getClass()` comparison enforces exact-type equality — a deliberate design trade-off.)
+- "What is the equals/hashCode contract?" (If `a.equals(b)` then `a.hashCode() == b.hashCode()`; the reverse need not hold — collisions are legal. `hashCode` must be consistent within a run while the compared fields don't change. And `equals` itself must be reflexive, symmetric, transitive, consistent and `false` for `null`. Trap: saying equal hash codes imply equal objects.)
+- "What happens if you override `equals()` but not `hashCode()`?" (Contract violation — equal objects can end up in different hash buckets, so `HashSet`/`HashMap` lookups silently fail even though `.equals()` would return `true`. Tests often miss it because they look up the very instance they inserted, which has the same identity hash.)
+- "Why use `getClass() != o.getClass()` instead of `instanceof` in `equals()`?" (Each answers whether a subclass instance may equal a parent instance. `getClass()` forbids it, so symmetry survives subclasses that add fields — but a subclass that adds nothing, or a framework proxy subclass, can never equal its parent. `instanceof` allows it, which keeps substitutability but breaks symmetry if a subclass adds a field to its own `equals`. Neither is universally right; a `final` class with `instanceof` sidesteps the problem.)
+- "What does the snippet in the Example print?" (`true`, `false`, `true`, `true`, `false`, `true`, `false`. String literals are interned, so `s1` and `s2` are one object; `new String` creates another. `Integer` boxing caches -128 to 127, so 127s share an object and 1000s usually don't. `"Aa"` and `"BB"` collide on hash code 2112 but are not equal — a collision is legal.)
+- "Why must equal objects have equal hash codes, but not the reverse?" (A hash table looks only in the bucket chosen by the hash code; if equal objects could hash differently, the matching element would be in a bucket that is never searched. Unequal objects sharing a code just land in one bucket, where `equals` tells them apart — slower, but correct.)
+- "An entity's `hashCode` uses its database ID, which is null until saved. Objects added to a `HashSet` before saving can't be found after. Why?" (Saving assigned the ID, changing the hash code while the objects sat in the set, so they're filed under their old hash. Use only fields that never change for hashing — for entities, often a constant hash code or a natural business key — or don't put unsaved entities in hash sets.)
 
 #### Follow-up questions
+Interviewers rarely stop at "What is the equals/hashCode contract?" — they drill down from your answer. Answer each step before opening it:
+
+- "How does `HashMap.get` actually use the two methods?" (It computes the key's `hashCode`, spreads it to pick a bucket, then walks that bucket comparing hash codes and calling `equals` on candidates. `equals` is never called on entries in other buckets.)
+- "So what breaks if `hashCode` isn't overridden?" (Two equal keys get different identity hash codes, so `get` with an equal-but-new key searches a different bucket and returns `null` — while `get` with the original instance still works.)
+- "What if a key's fields change after it's inserted?" (Its stored bucket was chosen by the old hash; lookups use the new one, so `containsKey` returns `false` and `remove` can't find it — the entry is stranded until the map is rebuilt. Keys should be immutable.)
+- "How would you write `equals` and `hashCode` today?" (For a plain data carrier, use a `record` — it generates both from all components. Otherwise let the IDE generate them from the identifying fields, make the class `final`, and verify with `EqualsVerifier`. Use `Objects.equals` and `Objects.hash` for nullable fields.)
+
+Other follow-ups:
+
 - "Can two unequal objects have the same hash code?" (Yes — that's a legal hash collision, not a contract violation. The contract only requires equal objects to share a hash code, not the reverse.)
-- "Why does `Objects.hash()` exist, and what does it do internally?" (It's a convenience method that essentially wraps `Arrays.hashCode()` over the boxed arguments — combining multiple fields into one well-distributed hash value.)
+- "Why does `Objects.hash()` exist, and what does it do internally?" (It's a convenience method that essentially wraps `Arrays.hashCode()` over the boxed arguments — combining multiple fields into one well-distributed hash value. The varargs array and boxing cost a little in very hot code, where a hand-written `31 * h + field` loop avoids them.)
 
 #### Edge cases
 - Mutable fields used in `hashCode()`/`equals()` are dangerous: if you mutate an object *after* inserting it into a `HashSet`/`HashMap`, its hash bucket becomes stale and the object may become "lost" (unfindable even via `contains()` on itself).
-- Records (Java 16+, covered in the Modern Features group) auto-generate correct `equals()`/`hashCode()`/`toString()` based on all fields — removing this entire class of bugs for simple data carriers.
+- Records (Java 16+, covered in the Modern Features group) auto-generate `equals()`/`hashCode()`/`toString()` based on all components — removing this entire class of bugs for simple data carriers. Array components are compared by identity, though: two records holding equal-content arrays are not equal.
+- `BigDecimal.equals` compares scale too: `new BigDecimal("1.0").equals(new BigDecimal("1.00"))` is `false`, while `compareTo` returns 0 — so a `HashSet<BigDecimal>` and a `TreeSet<BigDecimal>` disagree about duplicates.
+- `equals` must not throw: return `false` for `null` and for objects of other types.
 
 #### Common mistakes
 - Overriding `equals()` without `hashCode()` (or vice versa) — the single most common real-world violation.
 - Using mutable fields as part of a hash key without understanding the "lost object in a HashSet" trap.
+- Writing `equals(MyType other)` instead of `equals(Object o)`, which overloads rather than overrides.
+- Comparing `String`s or `Integer`s with `==` and getting lucky in tests because of interning and the integer cache.
 
 #### Comparisons
 
 | | Default `Object` behavior | Properly overridden |
 |---|---|---|
 | `equals()` | Reference (`==`) comparison | Logical/value comparison |
-| `hashCode()` | Identity-derived (JVM-specific) | Derived from the same fields used in `equals()` |
+| `hashCode()` | Identity hash code — stable for the object's lifetime; how it's produced is unspecified | Derived from the same fields used in `equals()` |
 | `toString()` | `ClassName@hexHash` | Meaningful, readable representation |
 
 #### Complexity
-`Objects.hash()` is O(n) in the number of fields passed; well-implemented `hashCode()`/`equals()` keep `HashMap`/`HashSet` operations at their expected O(1) average case.
+`Objects.hash()` is O(n) in the number of fields passed; well-implemented `hashCode()`/`equals()` keep `HashMap`/`HashSet` operations at their expected O(1) average case. A `hashCode` that returns a constant is legal but puts every element in one bucket.
 
 #### Frequently confused with
-`equals()` vs. `==` (see Group 1 fundamentals) — this topic revisits and formalizes that distinction at the OOP level.
+`equals()` vs. `==` (see Group 1 fundamentals) — this topic revisits and formalizes that distinction at the OOP level. `equals` vs. `compareTo` — sorted collections use `compareTo`, so the two should agree (`compareTo` returning 0 exactly when `equals` is true).
 
 #### Important facts to remember
 - The equals/hashCode contract: equal objects MUST have equal hash codes; unequal objects MAY share a hash code.
+- `equals` has five properties: reflexive, symmetric, transitive, consistent, `false` for `null`.
 - Never use mutable fields in `hashCode()`/`equals()` for objects stored in hash-based collections, unless you can guarantee they won't be mutated while stored.
-- Records auto-generate a correct, contract-compliant `equals()`/`hashCode()`/`toString()`.
+- Records auto-generate a contract-compliant `equals()`/`hashCode()`/`toString()` — with identity comparison for array components.
+
+---
+
+### 2.21 Immutability
+
+#### Definition
+An immutable object's state cannot change after construction. In Java that is a property of the class's design — private final fields, no mutators, no subclassing, and defensive copies of mutable components — not of any single keyword.
+
+#### Why it exists
+Immutable objects can be shared between threads, used as hash keys and cached without coordination, because nothing can ever change them; their invariants, checked once in the constructor, hold forever.
+
+#### Interview explanation
+**In 30 seconds** — An immutable class has `private final` fields set in the constructor, no setters, is `final` so subclasses can't add mutability, and defensively copies any mutable objects it takes in or gives out. `String`, `Integer`, `LocalDate` and `BigDecimal` are examples. "Modifying" one returns a new object. The payoff is thread safety without locks, safe hash keys and freely shareable values.
+
+**If they push deeper** — A final reference isn't enough: `private final List<String> items` is still mutable through the list unless the class stores an unmodifiable copy and never leaks it. Copy before validating, so a caller can't change the argument between the check and the copy. Immutability is only as deep as the copying — `List.copyOf` of mutable `Date` objects protects the list, not the dates. Records are final with private final fields, but shallow: list components need `List.copyOf` in the compact constructor. Final-field semantics make a properly constructed immutable object safe to publish to other threads, provided `this` didn't escape the constructor.
+
+#### Syntax
+```java
+public final class Money {
+    private final long cents;
+    private final Currency currency;
+
+    public Money(long cents, Currency currency) {
+        this.cents = cents;
+        this.currency = Objects.requireNonNull(currency);
+    }
+    public Money plus(Money other) {
+        if (!currency.equals(other.currency)) throw new IllegalArgumentException("currency mismatch");
+        return new Money(cents + other.cents, currency);   // new object; this one is unchanged
+    }
+    public long cents() { return cents; }
+}
+```
+
+#### Example
+```java
+record Team(String name, List<String> members) {
+    Team {
+        members = List.copyOf(members);   // compact constructor: copy the mutable component
+    }
+}
+```
+
+Predict the output — a question below asks for it:
+
+```java
+String s = "java";
+s.toUpperCase();
+System.out.println(s);
+
+List<String> names = new ArrayList<>(List.of("Ann"));
+List<String> view = Collections.unmodifiableList(names);
+List<String> copy = List.copyOf(names);
+names.add("Bob");
+System.out.println(view.size() + " " + copy.size());
+
+record Box(List<String> items) {}
+Box box = new Box(names);
+names.add("Cid");
+System.out.println(box.items().size());
+```
+
+#### Common interview questions
+- "How do you make a class immutable?" (Make the class `final` (or use private constructors with static factories), make every field `private final`, set them all in the constructor, provide no mutators, and defensively copy mutable inputs and never expose mutable internals. Methods that "change" it return a new instance. Trap: stopping at "make the fields final".)
+- "What is the difference between a final reference and an immutable object?" (A final reference can't be reassigned; an immutable object can't change state. `final List<String> l = new ArrayList<>()` is a final reference to a mutable object. 2.18 has the full comparison.)
+- "Why are immutable objects thread-safe?" (Because there are no writes after construction to race with, and the memory model guarantees that `final` fields are visible with their constructed values to any thread that obtains the reference — provided `this` didn't escape during construction. No locks or `volatile` are needed to share them.)
+- "What does the snippet in the Example print?" (`java`, `2 1`, `3`. `toUpperCase()` returns a new string that is thrown away. The unmodifiable *view* reflects the later `add`; the `List.copyOf` snapshot doesn't. `Box` is a record without a defensive copy, so it holds the caller's list and sees `Cid` — records are only shallowly immutable.)
+- "Why should the class be `final` if all its fields are final and private?" (A subclass could add its own mutable fields or override methods so the object appears to change, and code holding the parent type would trust it as immutable. Preventing subclassing keeps the guarantee for every instance of the type.)
+- "A `Schedule` stores the caller's `List<LocalDate>` after checking it isn't empty. Later the schedule is empty. How?" (The constructor kept the caller's list, and the caller cleared it afterwards — or between the check and the assignment. Copy first (`this.dates = List.copyOf(dates)`), then validate the copy; `LocalDate` itself is immutable, so a shallow copy is enough.)
+
+#### Follow-up questions
+Interviewers rarely stop at "How do you make a class immutable?" — they drill down from your answer. Answer each step before opening it:
+
+- "Is `Collections.unmodifiableList` enough for the getter?" (It stops callers from writing through the returned list, but it's a view: if the class still holds a mutable list and changes it — or the original caller kept a reference — the view shows those changes. Store an immutable copy (`List.copyOf`) and return that.)
+- "What if the list's elements are mutable?" (Then the copy protects the list structure, not the elements; anyone holding an element can change it. Use immutable element types, or deep-copy each element.)
+- "Are records immutable?" (Shallowly: fields are `private final`, the class is `final`, there are no setters. A component of a mutable type still needs a defensive copy in the compact constructor, and an array component is mutable no matter what.)
+- "What does immutability cost, and how do you manage it?" (An allocation per change. That's usually negligible; for long sequences of changes, use a mutable builder (`StringBuilder`, a `Builder` class) and create the immutable object once at the end.)
+
+Other follow-ups:
+
+- "Can reflection change an immutable object?" (For ordinary classes on the classpath, reflection can still overwrite a final instance field — JDK 26 warns when it does (JEP 500) — but not the fields of records. Immutability is a design guarantee, not a defence against hostile code in the same JVM.)
+
+#### Edge cases
+- `String` caches its hash code in a non-final field, yet is immutable: the cached value is a pure function of the characters, so no caller can observe a change. Immutability is about observable state.
+- A constructor that leaks `this` (registers a listener) can expose an "immutable" object before its fields are set, voiding the thread-safety guarantee.
+- `BigInteger` and `BigDecimal` are not `final` — a historical mistake, so code that must trust them should copy arguments that might be untrusted subclasses.
+
+#### Common mistakes
+- Making fields `final` but returning a mutable internal collection or array from a getter.
+- Copying after validating instead of before.
+- Calling `s.trim()` or `date.plusDays(1)` and ignoring the returned object.
+
+#### Comparisons
+
+| | Mutable object | Immutable object |
+|---|---|---|
+| Thread safety | Needs synchronization | Safe to share without locks |
+| As a hash key | Breaks if a hashed field changes | Always safe |
+| Defensive copying when sharing | Required | Not needed |
+| Cost of a change | In place | A new object |
+
+| | `Collections.unmodifiableList(x)` | `List.copyOf(x)` |
+|---|---|---|
+| Kind | Read-only view of `x` | Independent unmodifiable list |
+| Sees later changes to `x` | Yes | No |
+| Null elements | Allowed | Rejected |
+
+#### Complexity
+Each modification allocates a new object, O(size of the object) to copy; reading is identical to a mutable object.
+
+#### Frequently confused with
+Immutable vs. unmodifiable — no one can change it vs. you can't change it through this reference. Immutable vs. `final` — an object property vs. a variable property.
+
+#### Important facts to remember
+- Recipe: final class, private final fields, no mutators, defensive copies in and out.
+- Final reference ≠ immutable object; unmodifiable view ≠ immutable copy.
+- Copy mutable inputs before validating them.
+- Records are shallowly immutable — copy mutable components in the compact constructor.
+
+---
+
+### 2.22 Object Initialization Order
+
+#### Definition
+The fixed sequence in which Java runs initialization code: class initialization (static field initializers and `static` blocks, superclass first, once per class) before first use, then — for every `new` — the constructor chain from the top of the hierarchy down, each class running its instance field initializers and instance blocks just before the rest of its constructor body.
+
+#### Why it exists
+Each level of a hierarchy, and each piece of initialization code, may depend on earlier ones having run. A single deterministic order lets a subclass rely on its parent part being complete and on static state being ready.
+
+#### Interview explanation
+**In 30 seconds** — Two phases. Class initialization happens once, before first use: parent static initializers and blocks, then child's. Object initialization happens on every `new`: the parent's field initializers, instance blocks and constructor body, then the child's. So for `new Child()` the order is parent static, child static, parent instance, parent constructor, child instance, child constructor — and a second `new Child()` skips the static part.
+
+**If they push deeper** — Field initializers and instance blocks run *inside* each constructor, after `super(...)` returns, in textual order. The hole in the order is dynamic dispatch: a parent constructor calling an overridable method runs the child's override before the child's fields are assigned, so it sees `null` or `0` — unless the field is a compile-time constant, which is inlined. Static initialization is triggered by first active use, not by loading; reading a constant variable doesn't trigger it; the JVM makes it thread-safe; and if it throws, the class is unusable — `ExceptionInInitializerError` first, `NoClassDefFoundError` after.
+
+#### Syntax
+```java
+class Example {
+    static int counter = 0;                       // static field initializer
+    static { counter = 10; }                      // static initialization block
+    int id = ++counter;                           // instance field initializer
+    { System.out.println("instance block"); }     // instance initialization block
+    Example() { System.out.println("constructor"); }
+}
+```
+
+#### Example
+```java
+class Parent {
+    Parent() { System.out.println("Parent"); }
+}
+class Child extends Parent {
+    Child() { System.out.println("Child"); }      // implicit super() runs first
+}
+new Child();   // Parent, then Child
+```
+
+Predict the output — a question below asks for it:
+
+```java
+class Parent {
+    static { System.out.println("A"); }
+    { System.out.println("B"); }
+    Parent() { System.out.println("C"); show(); }
+    void show() { System.out.println("D"); }
+}
+class Child extends Parent {
+    static { System.out.println("E"); }
+    private String label = "F";
+    { System.out.println("G"); }
+    Child() { System.out.println("H " + label); }
+    @Override void show() { System.out.println("I " + label); }
+}
+
+new Child();
+new Child();
+```
+
+#### Common interview questions
+- "What is the initialization order in an inheritance hierarchy?" (Once per class, before first use: superclass static initializers and static blocks, then the subclass's, each in textual order. Then for every object: memory zeroed; the superclass constructor chain completes first — for each class, its instance field initializers and instance blocks in textual order, then its constructor body — and the subclass's last. Trap: putting the child's field initializers before the parent's constructor.)
+- "Why does the `Parent` constructor run before `Child`'s?" (Every constructor starts by calling a superclass constructor — `super()` implicitly if nothing is written — so `Child()` can't execute its own code until `Parent()` has finished. That guarantees the inherited part of the object is valid before the subclass builds on it.)
+- "What is the difference between class initialization and object initialization?" (Class initialization runs static initializers and static blocks once per class, triggered by first active use. Object initialization runs instance initializers, instance blocks and constructors on every `new`. A class is initialized before its first object, but can be initialized without any object ever being created — by a static method call.)
+- "What does the snippet in the Example print?" (First object: `A`, `E`, `B`, `C`, `I null`, `G`, `H F`. Second object: `B`, `C`, `I null`, `G`, `H F`. Static blocks run once, parent first. `Parent()` calls `show()`, which dispatches to `Child`'s override before `Child`'s initializer has assigned `label`, so it prints `null`.)
+- "Why does an overridable method called from a constructor see `null`?" (Because dynamic dispatch picks the subclass's override as soon as the object exists, but the subclass's field initializers run only after the superclass constructor returns. The override runs in that gap. Constant fields are the exception — the compiler inlines them.)
+- "A utility class's static block reads a config file. In production the first request fails with `ExceptionInInitializerError` and every later one with `NoClassDefFoundError`. What is happening?" (The static initializer threw during class initialization — the file was missing or malformed. The JVM marks the class as failed, so every later use reports `NoClassDefFoundError: Could not initialize class …` without the original cause. Find the first `ExceptionInInitializerError` in the logs, and move I/O out of static initializers.)
+
+#### Follow-up questions
+Interviewers rarely stop at "What is the initialization order in an inheritance hierarchy?" — they drill down from your answer. Answer each step before opening it:
+
+- "When exactly is a class initialized?" (Immediately before its first active use: creating an instance, calling a static method, assigning a static field, or reading a static field that isn't a constant variable — or via reflection such as `Class.forName`. Initializing a class first initializes its superclass.)
+- "Does reading `Config.MAX` always initialize `Config`?" (Not if `MAX` is a constant variable — a `static final` primitive or `String` initialised with a constant expression. The compiler copies the value into the caller, so `Config` isn't touched. A `static final Integer` or a computed value does trigger initialization.)
+- "What if two threads use the class for the first time simultaneously?" (The JVM lets one thread run the static initializers while the other waits, so they run exactly once. The lazy holder idiom relies on that — and two classes whose static initializers each need the other, triggered from different threads, can deadlock.)
+- "Where do instance initializer blocks fit relative to constructors?" (They are copied into every constructor that calls `super(...)` — right after that call, together with the field initializers, in textual order. A constructor that delegates with `this(...)` gets them through the constructor it delegates to, so they still run once.)
+
+Other follow-ups:
+
+- "In what order do static field initializers and static blocks run within one class?" (Top to bottom, interleaved exactly as written. A static block that reads a static field declared below it — through a method — sees the default value.)
+
+#### Edge cases
+- `static int a = b + 1; static int b = 5;` doesn't compile — an illegal forward reference — but reading `b` through a static method from `a`'s initializer compiles and sees `0`.
+- A `final` instance field initialized with a constant (`final String name = "Rex"`) is inlined, so even an override called from the parent constructor sees the value; a non-constant `final` field still shows `null`.
+- Initializing a class initializes its superclasses, but not the interfaces it implements — except interfaces that declare default methods, which are initialized along with it.
+- An exception thrown by an instance initializer block propagates out of the constructor; instance blocks may throw checked exceptions only if every constructor declares them.
+
+#### Common mistakes
+- Assuming static blocks run when the class is loaded, or once per object.
+- Calling overridable or abstract methods from constructors.
+- Doing heavy work (I/O, network) in static initializers, which turns a transient failure into a permanently unusable class.
+
+#### Comparisons
+
+| | Class initialization | Object initialization |
+|---|---|---|
+| Runs | Static field initializers, `static` blocks | Instance field initializers, instance blocks, constructors |
+| How often | Once per class (per class loader) | On every `new` |
+| Triggered by | First active use of the class | `new` |
+| Hierarchy order | Superclass first | Superclass part first |
+| Failure | `ExceptionInInitializerError`, then `NoClassDefFoundError` | The exception propagates from `new` |
+
+#### Complexity
+Not applicable — but class initialization cost is paid on the first request that touches the class, which is why slow static initializers show up as first-request latency.
+
+#### Frequently confused with
+Class loading vs. class initialization — reading the bytecode vs. running static code. Field initializers vs. constructor body — initializers run inside the constructor, after `super(...)`.
+
+#### Important facts to remember
+- Static (once): parent → child. Instance (every `new`): parent's initializers + constructor → child's initializers + constructor.
+- Instance initializers run after `super(...)` returns, before the rest of the constructor body.
+- Overridable calls from constructors see the subclass's unassigned fields.
+- Constant variables don't trigger class initialization.
 
 ---
 
@@ -5358,7 +7001,7 @@ ByteBuffer.allocateDirect(1024);       // native memory, outside heap
 
 #### Common interview questions
 - "What are the JVM memory areas, and which are shared?" (Heap and metaspace shared; stack, PC register, and native stack per thread.)
-- "Where do local variables live versus objects?" (Locals on the stack; objects always on the heap.)
+- "Where do local variables live versus objects?" (Locals on the thread's stack; objects on the heap, in the JVM specification's model. HotSpot's escape analysis can scalar-replace an object that never leaves its method, so it is never allocated at all — an optimisation the program cannot observe.)
 - "Why does a container get OOM-killed when heap usage looks fine?" (Non-heap memory — metaspace, stacks, code cache, direct buffers — isn't counted in heap metrics but counts toward the container limit.)
 
 #### Follow-up questions

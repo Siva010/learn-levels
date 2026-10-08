@@ -1,0 +1,5 @@
+# Concept pages whose URLs changed when Java's OOP group was restructured (see docs/java-oop-audit.md).
+/java/object-oriented-programming/abstraction-abstract-classes /java/object-oriented-programming/abstract-classes/ 301
+/java/object-oriented-programming/abstraction-abstract-classes/* /java/object-oriented-programming/abstract-classes/:splat 301
+/java/object-oriented-programming/the-object-class-equals-hashcode-tostring /java/object-oriented-programming/the-object-class/ 301
+/java/object-oriented-programming/the-object-class-equals-hashcode-tostring/* /java/object-oriented-programming/the-object-class/:splat 301

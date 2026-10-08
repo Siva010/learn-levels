@@ -142,7 +142,7 @@ flowchart LR
     b --> obj
 ```
 
-**Common mistake:** Assuming `==` compares *values* for reference types the way it does for primitives. For objects, `==` compares references (memory addresses), not content — that's what `.equals()` is for. (Covered in depth in the OOP group.)
+**Common mistake:** Assuming `==` compares *values* for reference types the way it does for primitives. For objects, `==` compares references — whether both sides refer to the same object — not content; that's what `.equals()` is for. (Covered in depth in the OOP group, 2.20.)
 
 **Autoboxing:** Java automatically converts between primitives and their wrapper classes (`int` ↔ `Integer`) when needed — this is convenient but has a performance cost in tight loops, since it creates objects on the heap.
 
@@ -271,72 +271,106 @@ void reassign(StringBuilder sb) {
 - [[#2.1 Classes and Objects]]
 - [[#2.2 Constructors]]
 - [[#2.3 The this and super Keywords]]
-- [[#2.4 Encapsulation]]
-- [[#2.5 Inheritance]]
-- [[#2.6 Polymorphism]]
-- [[#2.7 Abstraction & Abstract Classes]]
-- [[#2.8 Interfaces]]
-- [[#2.9 Access Modifiers]]
-- [[#2.10 Static vs Instance Members]]
-- [[#2.11 The Object Class (equals, hashCode, toString)]]
+- [[#2.4 Static vs Instance Members]]
+- [[#2.5 Encapsulation]]
+- [[#2.6 Inheritance]]
+- [[#2.7 Access Modifiers]]
+- [[#2.8 Composition, Aggregation and Association]]
+- [[#2.9 Method Overloading]]
+- [[#2.10 Method Overriding]]
+- [[#2.11 Overriding vs Hiding]]
+- [[#2.12 Polymorphism]]
+- [[#2.13 Upcasting and Downcasting]]
+- [[#2.14 Abstraction]]
+- [[#2.15 Abstract Classes]]
+- [[#2.16 Interfaces]]
+- [[#2.17 Abstract Class vs Interface]]
+- [[#2.18 The final Keyword]]
+- [[#2.19 The Object Class]]
+- [[#2.20 equals and hashCode]]
+- [[#2.21 Immutability]]
+- [[#2.22 Object Initialization Order]]
 
 ---
 
 ### 2.1 Classes and Objects
 
-**How it works:** A class definition doesn't consume memory for data until you instantiate it with `new`. `new` triggers: (1) memory allocation on the heap sized to hold all instance fields, (2) field defaults applied (0/null/false), (3) constructor runs to set actual values, (4) a reference to the new object is returned.
+**The problem:** A program needs many accounts, orders or dogs at once — each with its own data, all with the same behaviour. Writing the behaviour once and stamping out independent copies of the data is exactly what a class and its objects provide. Because every copy is reached through a reference, you also need to know what a variable actually holds.
+
+**How it works:** So the class is written once and describes the shape; each `new` makes one more copy. A class definition doesn't consume memory for instance data until you instantiate it with `new`. `new` triggers: (1) the class is initialized, if this is its first use (2.22), (2) memory allocation on the heap sized to hold all instance fields — including those declared in superclasses, (3) field defaults applied (0/null/false), (4) the constructor chain runs: superclass constructors first, then this class's field initializers and instance initializer blocks, then the rest of its constructor body (2.2, 2.22), (5) a reference to the new object is returned as the value of the `new` expression.
 
 ```mermaid
 flowchart LR
-    A["Dog rex = new Dog()"] --> B["Allocate memory on heap"]
-    B --> C["Set default field values"]
-    C --> D["Run constructor body"]
-    D --> E["Return reference to rex"]
+    A["Dog rex = new Dog()"] --> B["Initialize class Dog (first use only)"]
+    B --> C["Allocate memory on heap"]
+    C --> D["Set default field values"]
+    D --> E["Run constructor chain"]
+    E --> F["Store reference in rex"]
 ```
+
+**References, not objects:** A variable of a class type holds a reference — a value that leads to an object — never the object itself. Three things follow:
+- `Dog rex;` declares a variable. No object exists until `new` runs.
+- Assignment copies the reference. After `Dog b = rex;` both names lead to one object, so a change made through `b` is visible through `rex` (*aliasing*).
+- A reference can be `null`, meaning it leads to no object. Reading a field or calling an instance method through `null` compiles — the variable's type has that member — and throws `NullPointerException` at runtime.
+
+**Identity, state and behaviour:** Every object has *identity* (it is a distinct object; `==` tests whether two references lead to the same one), *state* (its current field values) and *behaviour* (its methods). Two objects with identical state are still two objects. How the JVM represents a reference is unspecified — your code can compare references but never read one as a memory address.
 
 **Relationships:** Classes are the foundation every other OOP concept builds on — inheritance extends classes, interfaces are implemented by classes, encapsulation controls access to a class's members.
 
 **Example:**
 ```java
 class BankAccount {
-    private double balance;
-    BankAccount(double initial) { this.balance = initial; }
-    void deposit(double amt) { balance += amt; }
+    private long balanceCents;
+    BankAccount(long initialCents) { this.balanceCents = initialCents; }
+    void deposit(long cents) { balanceCents += cents; }
 }
 
-BankAccount acc1 = new BankAccount(100);
-BankAccount acc2 = new BankAccount(500);
+BankAccount acc1 = new BankAccount(100_00);
+BankAccount acc2 = new BankAccount(500_00);
 // acc1 and acc2 are independent objects with separate state
+BankAccount alias = acc1;  // no new object — alias and acc1 lead to the same account
+alias.deposit(50_00);      // acc1's balance is now 150_00
 ```
 
 **Advantages:** Models real-world entities intuitively; groups related data/behavior; supports code reuse via inheritance.
 
 **Disadvantages:** Can lead to over-engineering (too many small classes) if applied dogmatically; deep class hierarchies can become hard to trace.
 
-> ⚠️ **Common misconception:** "A class *is* an object." A class is only the blueprint — no memory is used for instance data until you create an object from it. (Static fields are an exception — they belong to the class itself, not any instance.)
+> ⚠️ **Common misconception:** "A class *is* an object." A class is only the blueprint — no memory is used for instance data until you create an object from it. (Static fields are an exception — they belong to the class itself, not any instance.) At runtime a loaded class is *described* by a `java.lang.Class` object (`Dog.class`), but that object is not a `Dog`.
 
-**Common mistake:** Forgetting that each `new` call creates a fully independent object — mutating one instance's fields never affects another instance's fields (unless they share a reference to the same nested object).
+**Common mistake:** Forgetting that each `new` call creates a fully independent object — mutating one instance's fields never affects another instance's fields (unless they share a reference to the same nested object). The reverse mistake is just as common: assuming `b = a` made a copy, when it only copied the reference.
 
-**Best intuition:** A class is like a cookie cutter; an object is an actual cookie. You can make as many cookies as you want from one cutter, and eating one doesn't affect the others.
+**Predict it:** `Dog a = new Dog(); a.name = "Rex"; Dog b = a; b.name = "Max"; System.out.println(a.name);` — what prints, and how many `Dog` objects exist?
 
-**Terminology:** *Instantiation* = the act of creating an object from a class via `new`. *Instance* = another word for "object." *State* = the current values of an object's fields.
+**`Max`, and one.** `new` ran once, so exactly one object exists. `b = a` copied the reference, so both variables lead to that object, and a change through either is seen through both.
+
+**Best intuition:** A class is like a cookie cutter; an object is an actual cookie. You can make as many cookies as you want from one cutter, and eating one doesn't affect the others. A variable is a label tied to a cookie: several labels can hang on the same cookie, and a `null` label hangs on nothing.
+
+**Terminology:** *Instantiation* = the act of creating an object from a class via `new`. *Instance* = another word for "object." *State* = the current values of an object's fields. *Reference* = the value a variable of class type holds. *Aliasing* = two references to one object. *Identity* = what makes an object distinct from every other, whatever its state.
 
 ---
 
 ### 2.2 Constructors
 
-**How it works:** If you don't write any constructor, the compiler silently inserts a public no-argument **default constructor**. The moment you write *any* constructor yourself, that free default constructor disappears — a very common trap.
+**The problem:** Allocation gives every field its default value, but a `Dog` with a `null` name or an `Account` with no owner is not a valid object. The class needs code that runs at creation time — before the caller gets the reference — to fill in real values and refuse bad ones.
 
-**Constructor chaining:** `this(...)` calls another constructor in the same class; `super(...)` calls a constructor in the parent class. Every constructor's first line implicitly calls `super()` (the parent's no-arg constructor) unless you explicitly call `this(...)` or `super(...)` yourself.
+**How it works:** So every `new` runs a constructor. If you don't write any constructor, the compiler silently inserts a no-argument **default constructor**, with the same access as the class (`public` for a `public` class, package-private for a package-private one), whose only action is to call `super()`. The moment you write *any* constructor yourself, that free default constructor disappears — a very common trap.
+
+**Constructor chaining:** `this(...)` calls another constructor in the same class; `super(...)` calls a constructor in the parent class. Every constructor (except `Object`'s) begins by implicitly calling `super()` (the parent's no-arg constructor) unless you explicitly call `this(...)` or `super(...)` yourself. A constructor can contain at most one of these explicit calls, never both. Up to Java 24 the call had to be the first statement; since Java 25 (JEP 513, flexible constructor bodies) statements may come before it, provided they do not use the object under construction — they may validate arguments, and may assign the class's own fields that have no initializer.
 
 ```mermaid
 flowchart TD
-    A["new Dog() constructor called"] --> B{"First line explicit super or this?"}
-    B -- No --> C["Implicit super called"]
-    B -- Yes --> D["Explicit call executes first"]
-    C --> E["Constructor body runs"]
-    D --> E
+    A["new Dog() constructor called"] --> B{"Explicit this(...) or super(...) call?"}
+    B -->|"neither"| C["Implicit super() called"]
+    B -->|"super(...)"| D["Explicit super(...) executes"]
+    B -->|"this(...)"| G["Other constructor runs, initializers included"]
+    C --> F["Field initializers and instance blocks run"]
+    D --> F
+    F --> E["Rest of constructor body runs"]
+    G --> E
 ```
+
+After the superclass constructor returns, this class's field initializers and instance initializer blocks run, and only then the rest of the constructor body. (When the explicit call is `this(...)`, they run inside the constructor it delegates to, so they still run exactly once.) 2.22 gives the full order.
 
 **Example:**
 ```java
@@ -352,23 +386,53 @@ class Dog extends Animal {
 new Dog(); // prints: "Animal created" then "Dog created"
 ```
 
-**Advantages:** Guarantees valid object initialization; supports multiple ways to construct an object via overloading.
+**Overloading and delegation:** A class can declare several constructors with different parameter lists (constructor overloading, resolved like method overloading — 2.9). Make one of them do the real work and have the others delegate with `this(...)`, so validation lives in one place:
+
+```java
+class Point {
+    final int x, y;
+    Point() { this(0, 0); }                    // delegates
+    Point(int x, int y) { this.x = x; this.y = y; }
+}
+```
+
+**When a constructor throws:** The `new` expression completes abruptly and the caller never receives a reference, so a constructor that throws on bad arguments prevents a broken object from reaching the caller. That protection holds only if the constructor has not already leaked `this` — registered it as a listener, stored it in a static field — before throwing.
+
+**Advantages:** One place to establish the invariants of every normally constructed object; supports multiple ways to construct an object via overloading.
 
 **Disadvantages:** Constructor overloading can get unwieldy with many optional parameters (the classic motivation for the Builder pattern).
 
 > ⚠️ **Common misconception:** "A class always has a default constructor available." False — the moment you define any constructor (even a parameterized one), Java stops providing the free no-arg default.
 
-**Common mistake:** Writing a constructor with the wrong casing or a return type by accident — this silently becomes a regular method instead of a constructor (a constructor must exactly match the class name and specify no return type, not even `void`).
+> ⚠️ **Common misconception:** "Every object that exists has passed through its class's constructor." Every `new` runs one, but `clone()` copies an object without a constructor, and deserialization skips the constructors of `Serializable` classes. Constructors guard normal creation, not every way an object can come to exist.
 
-**Best intuition:** A constructor is like a factory assembly line's final inspection step — nothing leaves the factory without going through it, ensuring every unit meets baseline requirements before it's usable.
+**Common mistake:** Giving a constructor a return type by accident — even `void` turns it into a regular method that happens to share the class's name and is never called by `new`. (A misspelled name with no return type does not compile: "invalid method declaration; return type required".) A constructor must exactly match the class name and specify no return type, not even `void`.
 
-**Terminology:** *No-arg constructor*, *parameterized constructor*, *constructor overloading*, *constructor chaining*.
+**Predict it:** `class Parent { Parent(int x) {} }` and `class Child extends Parent { }`. Does `Child` compile?
+
+**No.** `Child` declares no constructor, so the compiler gives it a default one whose only statement is `super()` — and `Parent` has no no-arg constructor to call. Declaring `Child(int x) { super(x); }` fixes it.
+
+**Best intuition:** A constructor is like a factory assembly line's final inspection step — every unit that comes off the normal line goes through it, which is why the baseline checks belong there. Units can still arrive by other routes (cloning, deserialization), so the inspection is a strong convention, not a guarantee about every object.
+
+**Terminology:** *No-arg constructor*, *default constructor* (the compiler-supplied one), *parameterized constructor*, *constructor overloading*, *constructor chaining*, *explicit constructor invocation* (`this(...)`/`super(...)`), *invariant*.
 
 ---
 
 ### 2.3 The this and super Keywords
 
-**How it works:** `this` is an implicit reference to the current object, automatically available inside every instance method and constructor. `super` gives explicit access to the parent class's members — needed specifically when a subclass overrides a method but still wants to invoke the parent's version.
+**The problem:** A constructor parameter called `name` hides the field called `name`, so `name = name;` assigns the parameter to itself. And a subclass that overrides a method (2.10) has replaced the parent's version for every caller — including itself, when it still wants that version to run. Both need a way to say *which* member is meant.
+
+**How it works:** So Java gives two keywords that change where a name is looked up. `this` is an implicit reference to the current object, automatically available inside every instance method, constructor and instance initializer. `super` gives explicit access to the parent class's members — needed when a subclass overrides a method but still wants to invoke the parent's version, when it hides a parent field, and to call a parent constructor.
+
+| Form | Means |
+|---|---|
+| `this` | The current object, as a value — can be returned, passed or compared |
+| `this.x` / `this.m()` | Field `x` / method `m` of the current object (skipping any local variable named `x`) |
+| `this(...)` | Another constructor of the same class |
+| `super.x` / `super.m()` | The member as the superclass defines it — lookup starts in the direct superclass — applied to the current object |
+| `super(...)` | A constructor of the direct superclass |
+
+**super is not an object:** `this` is a value; `super` is not. `return this;` and `register(this)` are legal, but `Object o = super;` does not compile. `super.m()` means "call the superclass's implementation of `m`, on this same object" — there is no separate parent object to point at.
 
 **Example:**
 ```java
@@ -390,31 +454,118 @@ class Manager extends Employee {
 }
 ```
 
-**Relationships:** `super` is the primary tool for **extending** rather than fully **replacing** inherited behavior when overriding methods.
+**Relationships:** `super` is the primary tool for **extending** rather than fully **replacing** inherited behavior when overriding methods. `this(...)` and `super(...)` are the two forms of constructor chaining (2.2).
 
-**Advantages:** Removes ambiguity; enables clean "extend, don't duplicate" overriding patterns.
+**Neither exists in static code:** A static method runs without any object, so there is no current object for `this` to name and no superclass part for `super` to reach (2.4).
+
+**Advantages:** Removes ambiguity; enables clean "extend, don't duplicate" overriding patterns; `return this;` enables fluent, chainable APIs such as builders.
 
 **Disadvantages:** Overuse of `super` calls scattered through deep hierarchies can make control flow hard to trace.
 
-> ⚠️ **Common misconception:** "`super` refers to the immediate parent's parent (grandparent) if called from an overridden method." No — `super` always refers to exactly one level up, the direct parent class, regardless of how deep the hierarchy is.
+> ⚠️ **Common misconception:** "`super` can reach any ancestor, or `super.super.m()` reaches the grandparent." No — you cannot skip your parent. `super.m()` starts the lookup in the direct parent class: if the parent declares `m`, that version runs; if it only inherited `m`, the inherited version (perhaps the grandparent's) runs. What you can never do is bypass the parent's own override.
 
 **Common mistake:** Calling `super.method()` in the *middle* or *end* of an overriding method when the intended behavior actually required parent logic to run *first* (or vice versa) — ordering matters and is a frequent source of subtle bugs.
 
-**Best intuition:** `this` is "me, right now." `super` is "my parent, one level up" — never further.
+**Predict it:** `class A { void m() { System.out.println("A"); } }`, `class B extends A { }`, `class C extends B { @Override void m() { super.m(); System.out.println("C"); } }`. What does `new C().m()` print?
 
-**Terminology:** *Constructor chaining via `super(...)`*, *method overriding with parent delegation*.
+**`A` then `C`.** `super.m()` in `C` looks in `B` first; `B` declares no `m` but inherits `A`'s, so `A`'s version runs. `super` means "my parent's version of this member", which may itself be inherited.
+
+**Best intuition:** `this` is "me, right now." `super` is "my parent's version of this member, applied to me" — and you can't skip past your parent.
+
+**Terminology:** *Constructor chaining via `super(...)`*, *method overriding with parent delegation*, *shadowing* (a local name hiding a field), *explicit constructor invocation*.
 
 ---
 
-### 2.4 Encapsulation
+### 2.4 Static vs Instance Members
 
-**How it works:** Fields are declared `private`, and access is mediated through public getter/setter methods (or, in modern Java, through immutable `record` types — covered in the Modern Features group). This lets a class validate or transform data on the way in/out, and change its internal representation later without breaking callers.
+**The problem:** Instance fields give every object its own copy — right for a dog's name, wrong for a count of all dogs, a shared constant or a helper like `Math.max` that needs no object at all. Those belong to the class, and code that belongs to the class has no particular object to work on.
+
+**How it works:** So a member declared `static` belongs to the class. A static field exists once per class — strictly, once per class per class loader — and is created and initialized when the class is initialized (2.22); instance members are allocated fresh for every object created with `new`. Where the JVM keeps static fields is an implementation detail. A static method runs without an object, so it has no `this`: it can use static members directly, and reaches instance members only through an explicit object reference.
+
+```mermaid
+flowchart TD
+    subgraph ClassLevel["Class: Dog (initialized once)"]
+    S["static int totalDogs"]
+    end
+    subgraph Instance1["Instance 1"]
+    F1["String name = Rex"]
+    end
+    subgraph Instance2["Instance 2"]
+    F2["String name = Fido"]
+    end
+```
+
+**Example:**
+```java
+class Dog {
+    static int totalDogs = 0; // shared across all instances
+    String name;              // unique per instance
+    Dog(String name) {
+        this.name = name;
+        totalDogs++;
+    }
+}
+new Dog("Rex");
+new Dog("Fido");
+System.out.println(Dog.totalDogs); // 2
+```
+
+**Who can use what:**
+
+```java
+class Test {
+    int x;
+    static int y;
+
+    void instanceMethod() {
+        x++;          // own instance field
+        y++;          // static field — shared
+    }
+
+    static void staticMethod() {
+        y++;
+        // x++;       // compile error: non-static variable x cannot be referenced from a static context
+        Test t = new Test();
+        t.x++;        // fine: an explicit object
+    }
+}
+```
+
+**Initializer blocks:** A `static { ... }` block runs once, when the class is initialized; an instance initializer block `{ ... }` runs for every object, as part of each constructor (2.22). Static field initializers and static blocks run together in textual order, and so do instance field initializers and instance blocks.
+
+**Static nested classes:** A class declared `static` inside another class is a top-level-like class that lives in the outer class's namespace — it needs no outer object. A nested class without `static` (an *inner* class) has an implicit reference to an instance of the outer class, so creating one requires that instance.
+
+**Static members and inheritance:** Static methods and fields are inherited (`Child.parentStaticMethod()` compiles), but they are never overridden. A subclass that declares a static method or field with the same name *hides* the parent's, and the version used is chosen at compile time from the type the code names — 2.11 covers this.
+
+**Advantages:** Static members are perfect for shared counters, constants, utility methods (`Math.sqrt()`), and factory methods that don't need per-instance state.
+
+**Disadvantages:** Static state is effectively global, mutable state shared across the whole JVM — this makes static fields a common source of hidden coupling and thread-safety bugs in concurrent code.
+
+> ⚠️ **Common misconception:** "Static methods can access instance fields directly." They can't — a static method has no implicit `this`, so it can only access other static members directly (it would need an explicit object reference to reach instance members).
+
+**Common mistake:** Using a mutable static field as a cache or counter in a multi-threaded application without synchronization — this is one of the most common sources of race conditions in real Java code (full detail in the Concurrency group). `totalDogs++` in the example above is exactly such a race when two threads create dogs at once.
+
+**Predict it:** `Dog d = null; System.out.println(d.totalDogs);` — `NullPointerException` or not?
+
+**Not.** A static member accessed through a variable is resolved from the variable's *declared type* at compile time — the value is never consulted, so `null` is never dereferenced. That is also why `javac -Xlint` warns to write `Dog.totalDogs` instead: access through an instance suggests a per-object value that doesn't exist.
+
+**Best intuition:** Instance members are like each student's individual notebook; static members are like the one shared whiteboard at the front of the classroom that everyone sees and can affect.
+
+**Terminology:** *Class members* (another name for static members), *instance members*, *static initialization block*, *instance initializer block*, *class variable*, *static nested class* vs *inner class*.
+
+---
+
+### 2.5 Encapsulation
+
+**The problem:** An object usually has rules that must always hold — a balance never negative, an order's total equal to the sum of its lines. Those rules are *invariants*. If outside code can assign fields directly, every one of those places must remember every rule, and one that forgets breaks the object for everyone.
+
+**How it works:** So the class takes sole control of its state. Fields are declared `private` (2.7), and callers change the object only through methods that express meaningful operations — `deposit`, `withdraw`, `addLine` — each of which checks the invariants before changing anything. Accessors exist where callers genuinely need to read a value; mutators exist only for changes the object allows. This lets a class validate or transform data on the way in/out, and change its internal representation later without breaking callers.
 
 ```mermaid
 classDiagram
     class BankAccount {
-        -double balance
-        +getBalance() double
+        -BigDecimal balance
+        +getBalance() BigDecimal
         +deposit(amount) void
         +withdraw(amount) void
     }
@@ -423,14 +574,38 @@ classDiagram
 **Example:**
 ```java
 class BankAccount {
-    private double balance;
-    void withdraw(double amount) {
-        if (amount > balance) throw new IllegalArgumentException("Insufficient funds");
-        balance -= amount;
+    private BigDecimal balance = BigDecimal.ZERO;
+
+    void deposit(BigDecimal amount) {
+        requirePositive(amount);
+        balance = balance.add(amount);
     }
-    double getBalance() { return balance; }
+
+    void withdraw(BigDecimal amount) {
+        requirePositive(amount);
+        if (amount.compareTo(balance) > 0) throw new IllegalArgumentException("Insufficient funds");
+        balance = balance.subtract(amount);
+    }
+
+    BigDecimal getBalance() { return balance; }  // safe: BigDecimal is immutable
+
+    private static void requirePositive(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("Amount must be positive");
+    }
 }
 ```
+
+**Three related ideas, not one:**
+
+| Idea | What it is about | In Java |
+|---|---|---|
+| Encapsulation | Bundling state with the behaviour that changes it, and controlling access to both | A class with `private` fields and purposeful methods |
+| Information hiding | Hiding *design decisions* that may change — the representation, the algorithm — behind a stable interface | Callers never learn that `balance` is a `BigDecimal` rather than `long` cents |
+| Abstraction | Exposing the essential operations of a concept and leaving out irrelevant detail (2.14) | `withdraw(amount)` instead of "check, subtract, log" |
+
+Encapsulation is the mechanism; information hiding is the goal it usually serves; abstraction decides *which* operations the interface offers in the first place.
+
+**Records are the opposite choice:** A `record` (Modern Features group) is a deliberately *transparent* carrier — its components are its public API. It gives immutability, not representation hiding; reach for one when the data *is* the interface, and for an encapsulated class when invariants and hidden representation matter. A record can still validate in its compact constructor.
 
 **Advantages:** Protects invariants (e.g., balance can never go negative); allows internal implementation to change freely; centralizes validation logic.
 
@@ -438,17 +613,23 @@ class BankAccount {
 
 > ⚠️ **Common misconception:** "Encapsulation just means making fields `private` and adding getters/setters for all of them." True encapsulation means exposing only the *behavior* needed, and only where mutation should actually be allowed — a getter/setter pair for every field, with no validation logic, provides no real protection at all (it's just a private field with extra steps).
 
-**Common mistake:** Returning a direct reference to a mutable internal field (e.g., a `List` or array) from a getter — callers can then mutate your object's internal state without going through any of your validation logic. Return a defensive copy or unmodifiable view instead.
+**Common mistake:** Returning a direct reference to a mutable internal field (e.g., a `List` or array) from a getter — callers can then mutate your object's internal state without going through any of your validation logic. Return a defensive copy (`List.copyOf(items)`) or an unmodifiable view (`Collections.unmodifiableList(items)`) instead — and copy mutable arguments on the way *in* too, or the caller keeps a handle to your internals.
+
+**Predict it:** A class stores `private final List<String> tags` and has `List<String> getTags() { return tags; }`. Can a caller break its invariant "at most five tags"?
+
+**Yes.** `getTags().add("sixth")` adds straight to the internal list — `private` stopped access to the *field*, not to the *object* it refers to. Encapsulation holds only if no reference to mutable internal state escapes.
 
 **Best intuition:** Encapsulation is like a capsule of medicine — you don't manipulate the raw chemicals directly; you interact through a controlled, safe interface (swallowing the capsule) that manages exposure for you.
 
-**Terminology:** *Information hiding*, *invariant*, *defensive copy*, *getter/setter (accessor/mutator)*.
+**Terminology:** *Information hiding*, *invariant*, *defensive copy*, *getter/setter (accessor/mutator)*, *tell, don't ask* (ask the object to do the work rather than pulling its data out and deciding for it).
 
 ---
 
-### 2.5 Inheritance
+### 2.6 Inheritance
 
-**How it works:** `class Dog extends Animal` means `Dog` automatically has all non-private fields/methods of `Animal`, plus whatever it adds or overrides. Java supports **single inheritance** for classes (one direct parent only) but **multiple inheritance of interfaces** (a class can implement many interfaces).
+**The problem:** A payroll system needs to treat salaried and hourly employees alike — pay them, list them, sort them — while each computes pay its own way. Code written against "employee" must accept every kind of employee, including kinds added next year. That requires a type relationship: each specific class must count as an `Employee`.
+
+**How it works:** So `class Dog extends Animal` declares that `Dog` *is an* `Animal`. Two things follow. First, *subtyping*: a `Dog` can be used wherever an `Animal` is expected, which is what makes polymorphism work (2.12). Second, *inheritance of members*: `Dog` automatically has the members of `Animal` that are accessible to it — `public` and `protected` ones always, package-private ones only when both classes are in the same package — plus whatever it adds or overrides. `private` fields still exist inside every `Dog` object; they are simply not members of `Dog`, so `Dog`'s code can't name them. Constructors are never inherited (2.2). Java supports **single inheritance** for classes (one direct parent only) but **multiple inheritance of interfaces** (a class can implement many interfaces); every class without `extends` implicitly extends `Object`.
 
 ```mermaid
 classDiagram
@@ -478,23 +659,362 @@ d.eat();  // inherited from Animal
 d.bark(); // defined in Dog
 ```
 
-**Advantages:** Code reuse; models natural "is-a" relationships (a Dog *is an* Animal); enables polymorphism.
+**Why only one superclass:** A class inherits *state* — fields and the constructors that initialize them. With two superclasses, each would bring its own fields, constructor chain and initialization order, and two different `eat()` implementations would need a rule to pick one. Java avoids all of it by allowing one superclass, and lets a class implement many interfaces, which carry no instance state; since Java 8 those may carry default methods, with explicit conflict rules (2.16).
+
+**The fragile base class problem:** A subclass depends on how its parent's methods call each other, which is rarely documented. A classic case: a subclass of `HashSet` counts insertions by overriding both `add` and `addAll`. `HashSet.addAll` is implemented by calling `add` for each element, so every element is counted twice. Nothing in the subclass is wrong; it broke because of a detail of the parent's implementation, and a parent change can break it again.
+
+**Closing a class to inheritance:** A `final` class cannot be extended (`String`, `Integer`), and a `final` method cannot be overridden (2.18). A `sealed` class (Java 17, Modern Features group) names exactly which classes may extend it.
+
+**Advantages:** Models natural "is-a" relationships (a Dog *is an* Animal); enables subtype polymorphism; code reuse of the parent's implementation comes with it.
 
 **Disadvantages:** Tight coupling between parent and child — changes to a parent class can silently break subclasses (the "fragile base class" problem); deep hierarchies become hard to reason about.
 
 > ⚠️ **Common misconception:** "Java supports multiple inheritance of classes." It does not — a class can extend only one other class. Multiple inheritance of *behavior* is achieved through interfaces (including default methods), not classes.
 
-**Common mistake:** Using inheritance purely for code reuse when there's no real "is-a" relationship (e.g., making `Stack extends Vector` in the old Java collections, widely considered a design mistake) — prefer composition ("has-a") in these cases.
+> ⚠️ **Common misconception:** "Inheritance is mainly for code reuse." Inheritance models an IS-A relationship and enables subtype polymorphism; reuse is a side benefit. Code reuse alone is not sufficient justification — composition (2.8) reuses code without promising that one type *is* another.
+
+**Common mistake:** Using inheritance purely for code reuse when there's no real "is-a" relationship (e.g., making `Stack extends Vector` in the old Java collections, widely considered a design mistake) — prefer composition ("has-a") in these cases. The cost is visible: a `Stack` inherits `insertElementAt` and `remove(int)`, so any caller can break its last-in-first-out rule.
+
+**Predict it:** `Stack<Integer> s = new Stack<>(); s.push(1); s.push(2); s.add(0, 99);` — what does `s.pop()` return, and what is left?
+
+**`2`, leaving `[99, 1]`.** `add(int, E)` is inherited from `Vector`, so a "stack" lets anyone insert at the bottom. The subclass promised a stack but inherited a list's whole interface, which is exactly why reuse alone is the wrong reason to inherit.
 
 **Best intuition:** Inheritance models "is-a" relationships. If you can't honestly say "a Dog *is an* Animal," inheritance is probably the wrong tool — reach for composition instead.
 
-**Terminology:** *Superclass/parent/base class*, *subclass/child/derived class*, *"is-a" relationship*, *single inheritance*, *composition over inheritance*.
+**Terminology:** *Superclass/parent/base class*, *subclass/child/derived class*, *"is-a" relationship*, *single inheritance*, *subtype*, *fragile base class*, *composition over inheritance*.
 
 ---
 
-### 2.6 Polymorphism
+### 2.7 Access Modifiers
 
-**How it works:** Runtime polymorphism (also called dynamic dispatch) happens through **method overriding**: a reference of the parent type can point to a child object, and calling an overridden method invokes the *child's* version — decided at runtime based on the object's actual type, not the reference's declared type.
+**The problem:** Encapsulation (2.5) only works if the language stops other code from reaching around the methods to the fields. And "other code" comes in degrees: the class itself, its close collaborators in the same package, subclasses written by other teams, and everyone else. One on/off switch can't express that.
+
+**How it works:** So Java has four access levels, each wider than the last. Every member and constructor has exactly one; a member with no modifier is package-private.
+
+**Full visibility table:**
+
+| Modifier | Same class | Same package | Subclass (different package) | Everywhere |
+|---|---|---|---|---|
+| `private` | ✅ | ❌ | ❌ | ❌ |
+| (default/package-private) | ✅ | ✅ | ❌ | ❌ |
+| `protected` | ✅ | ✅ | ✅ through its own type only | ❌ |
+| `public` | ✅ | ✅ | ✅ | ✅ |
+
+
+**Who checks it:** The compiler rejects inaccessible access at compile time. The JVM checks again when it links a class's references to other classes' members, so a class compiled against a member that later became `private` fails with `IllegalAccessError` instead of silently reaching it. Reflection performs its own runtime check, which `setAccessible(true)` can suppress — except, since Java 16/17, for packages a named module does not open. (The Security Manager, a different mechanism permanently disabled in JDK 24, is not involved.)
+
+**protected across packages:** A subclass in another package can use an inherited `protected` member through `this`, or through a reference whose type is the subclass (or one of *its* subclasses) — but not through an arbitrary reference of the superclass type, because that object might be some unrelated subclass whose state isn't its business.
+
+```java
+package com.bank;
+public class Account {
+    protected long balance;
+    protected Account() {}
+}
+```
+```java
+package com.bank.premium;
+import com.bank.Account;
+
+public class PremiumAccount extends Account {
+    void ok(PremiumAccount other) {
+        balance += 1;                 // ✅ own inherited member
+        other.balance += 1;           // ✅ through the subclass type
+    }
+    void notOk(Account someAccount) {
+        // someAccount.balance += 1;  // ❌ balance has protected access in Account
+        // new Account();             // ❌ protected constructor from another package
+    }
+}
+```
+
+**private is per class, not per object:** Code inside a class can read the private fields of *any* instance of that class — `equals(Object o)` compares `this.balance` with `other.balance` that way. `private` is scoped to the top-level class body, so nested classes within it can also reach each other's private members.
+
+**Top-level classes:** A top-level class is either `public` (and javac requires its file to be named after it) or package-private. `private` and `protected` apply only to members, including nested classes.
+
+**Relationships:** Access modifiers are the language-level enforcement mechanism behind encapsulation — encapsulation is the *principle*, access modifiers are the *tool*. Overriding (2.10) may keep or widen a method's access but never narrow it. Modules (JPMS group) add a layer above: a `public` class in a package the module doesn't export is invisible outside the module.
+
+**Advantages:** Prevents accidental misuse of internal implementation details from unrelated code; documents intent (this is "for internal use only" vs. "part of the public API").
+
+**Disadvantages:** Overly restrictive defaults can force awkward workarounds (e.g., excessive public getters just to expose something for testing).
+
+> ⚠️ **Common misconception:** "Package-private (default access) is rarely useful." It's actually a deliberate, useful middle ground — commonly used to expose helper classes/methods to other classes in the same package (e.g., same module/feature) while still hiding them from the rest of the codebase.
+
+> ⚠️ **Common misconception:** "`protected` is narrower than package-private." It is wider: `protected` includes the whole package *and* subclasses elsewhere.
+
+**Common mistake:** Making fields `public` for convenience "just for now" during prototyping — this bypasses encapsulation entirely and is a common source of tightly-coupled, hard-to-refactor code later.
+
+**Predict it:** Class `Money` has `private final long cents;` and a method `boolean sameAs(Money other) { return cents == other.cents; }`. Does it compile?
+
+**Yes.** Access is checked per class, not per object: code inside `Money` may read the private field of any `Money`. `private` keeps *other classes* out.
+
+**Best intuition:** Think of access modifiers as concentric rings of trust: `private` (only me), package-private (my close neighborhood), `protected` (my neighborhood, plus my descendants who moved away), `public` (anyone).
+
+**Terminology:** *Package-private/default access*, *visibility*, *API surface*, *accessibility* (the JLS term), *module export*.
+
+---
+
+### 2.8 Composition, Aggregation and Association
+
+**The problem:** Inheritance (2.6) hands you another class's code only by making you its subtype — coupled to its internals, exposing its entire API, fixed at compile time. Most of the time a class just needs to *use* another object: a car needs an engine, a service needs a repository. It needs that object's behaviour without becoming that object's kind, and it may want to swap the object later.
+
+**How it works:** So the class holds the other object in a field and calls it — *delegation*. Callers see only the methods the outer class chooses to offer, the part is reached only through its public API, and because the field's type can be an interface, the part can be any implementation.
+
+```java
+interface Engine { void start(); }
+
+class PetrolEngine implements Engine {
+    public void start() { System.out.println("Petrol engine started"); }
+}
+class ElectricEngine implements Engine {
+    public void start() { System.out.println("Electric motor started"); }
+}
+
+class Car {
+    private final Engine engine;                 // Car HAS-A Engine
+    Car(Engine engine) { this.engine = engine; }
+    void start() {
+        System.out.println("Checking doors");
+        engine.start();                          // delegation
+    }
+}
+
+new Car(new ElectricEngine()).start();           // same Car code, different part
+```
+
+**Three strengths of HAS-A:**
+
+| | Association | Aggregation | Composition |
+|---|---|---|---|
+| Meaning | One object knows or uses another | A whole groups parts | A whole owns its parts |
+| Lifetimes | Independent | Parts can outlive the whole, or be shared | Parts live and die with the whole |
+| Example | `Driver` — `Car` | `Team` — `Player` | `Order` — `OrderLine` |
+| Typical Java shape | A field or a method parameter | A field holding objects passed in from outside | A field holding objects the whole creates or copies and never hands out |
+
+**Java does not enforce the difference:** All three are a reference in a field; the language has no "owns" keyword and no lifetime rule. Ownership is a convention the class keeps: if `Order` creates its `OrderLine`s (or copies the ones it is given) and never returns them, nothing else can reach them, so they become unreachable together with the order. The distinction is still worth naming because it drives real decisions — who may mutate the part, who closes a resource, and whether copying the whole should copy its parts.
+
+**Choosing IS-A or HAS-A:** Say both sentences aloud. "A car *is a* vehicle" — a type relationship, so `Car extends Vehicle` (or implements `Vehicle`). "A car *has an* engine" — a field. When both sound plausible, prefer HAS-A: a field can be changed later; a superclass is fixed for every subclass forever.
+
+**Composition over inheritance, concretely:** 2.6 showed a `HashSet` subclass double-counting because `HashSet.addAll` calls `add`. Wrapping the set instead removes the dependency on that detail:
+
+```java
+class CountingSet<E> {
+    private final Set<E> inner;
+    private int added;
+    CountingSet(Set<E> inner) { this.inner = inner; }
+    boolean add(E e) { added++; return inner.add(e); }
+    boolean addAll(Collection<? extends E> c) { added += c.size(); return inner.addAll(c); }
+    int added() { return added; }
+}
+```
+
+`inner.addAll` now calls `inner`'s own `add`, not the wrapper's, so each element is counted once. To make the wrapper usable wherever a `Set` is expected, it would also implement `Set<E>` and forward the remaining methods — the *forwarding* or *decorator* shape.
+
+**Relationships:** Composition is how most reuse happens in Java — services hold repositories, decorators hold the object they decorate, strategies are fields (2.12). Inheritance remains right for genuine IS-A hierarchies.
+
+**Advantages:** Loose coupling to the part's public API only; parts can be swapped at runtime or in tests; a class can hold many parts but extend only one class; immune to the fragile base class problem.
+
+**Disadvantages:** Forwarding methods are boilerplate; the wrapper is not automatically a subtype of the part — it must implement the part's interface to stand in for it; and a wrapped object that passes `this` to a callback hands out itself, not the wrapper (the "self problem").
+
+> ⚠️ **Common misconception:** "Aggregation and composition are different Java features." They are design relationships. The Java code for both is a field; the difference is whether the class owns the part's lifetime and keeps it to itself.
+
+> ⚠️ **Common misconception:** "Composition over inheritance means never use inheritance." It means don't use inheritance *only* to reuse code. When one type genuinely is a kind of another and must be substitutable for it, inheritance (or implementing an interface) is the right tool.
+
+**Common mistake:** Exposing an owned part — `List<OrderLine> getLines()` returning the internal list. Callers can now add lines that bypass the order's total, and the "composition" has quietly become shared ownership.
+
+**Predict it:** Using the wrapping `CountingSet` above, `CountingSet<String> s = new CountingSet<>(new HashSet<>()); s.addAll(List.of("x", "y", "z"));` — what does `s.added()` return?
+
+**`3`.** The wrapper counts the three elements in its own `addAll`, then calls `inner.addAll`, whose internal calls go to `HashSet.add` — never back to the wrapper. Composition depends on what the part promises, not on how it is implemented, so the parent's self-use can't double-count.
+
+**Best intuition:** Inheritance is *being* something; composition is *having* something and asking it to do the work.
+
+**Terminology:** *HAS-A* vs *IS-A*, *association*, *aggregation*, *composition*, *delegation*, *forwarding*, *wrapper / decorator*, *composition over inheritance*.
+
+---
+
+### 2.9 Method Overloading
+
+**The problem:** One operation often makes sense for several kinds of input — print a number, print some text. Separate names (`printInt`, `printString`) clutter the API; a single method taking `Object` gives up type checking and forces casts inside. The caller should write `print(x)` and get the version that fits `x`.
+
+**How it works:** So a class may declare several methods with the same name and different *signatures* — a signature is the name plus the parameter types. The overloads can come from the same class or be inherited. At each call site the compiler chooses one overload using the *declared* (static) types of the arguments, and writes that choice into the bytecode. The runtime types of the arguments never change which overload runs — that is why overloading is called compile-time polymorphism.
+
+**How the compiler chooses:** The Java Language Specification (15.12.2) tries three phases and stops at the first that finds any applicable method:
+1. **No boxing, no varargs** — exact matches and widening only: `byte` → `short` → `int` → `long` → `float` → `double`, `char` → `int`, and subclass → superclass.
+2. **Boxing and unboxing allowed** — `int` ↔ `Integer`.
+3. **Varargs allowed** — `int...`.
+
+If a phase finds several candidates, the **most specific** one wins: the one whose parameter types could be passed on to all the others. If none is more specific than the rest, the call is ambiguous and doesn't compile.
+
+| Overloads | Call | Chosen | Why |
+|---|---|---|---|
+| `print(int)`, `print(double)`, `print(String)` | `print('a')` | `print(int)` | `char` widens to `int` |
+| same | `print(5L)` | `print(double)` | no `long` overload; `long` widens to `double` |
+| `m(long)`, `m(Integer)` | `m(5)` | `m(long)` | widening (phase 1) beats boxing (phase 2) |
+| `v(int...)`, `v(Integer)` | `v(5)` | `v(Integer)` | boxing (phase 2) beats varargs (phase 3) |
+| `o(Object)`, `o(String)` | `o(null)` | `o(String)` | both apply; `String` is more specific |
+| `s(String)`, `s(StringBuilder)` | `s(null)` | compile error | both apply, neither is more specific |
+
+**What is not an overload:**
+- Same parameter types, different return type — "method is already defined": a compile error.
+- Different parameter *names* only — the signature is the same.
+- Generic parameters that erase to the same type, such as `f(List<String>)` and `f(List<Integer>)` — a name clash (Generics group).
+- A subclass method with the *same* signature as an inherited one — that overrides it (2.10). With a *different* parameter list it overloads it, and both are callable on a subclass reference.
+
+**Overloading with overriding:** The two combine in two steps. At compile time, the overload — the signature — is chosen from the argument types. At runtime, the implementation of that signature is chosen from the receiver object's class (2.12). An argument's runtime type plays no part in either step.
+
+**Advantages:** Natural, readable APIs (`println`, `Math.max`, `List.of`); alternative ways to construct an object.
+
+**Disadvantages:** The resolution rules surprise people — boxing, varargs and `null` arguments in particular — and overloads with the same number of parameters and convertible types invite calling the wrong one.
+
+> ⚠️ **Common misconception:** "Java picks the overload that matches the object the argument really is." It picks from the argument's declared type at compile time. `Object x = "hi"; describe(x);` calls `describe(Object)` even though a `describe(String)` exists.
+
+> ⚠️ **Common misconception:** "Methods can be overloaded by return type." They can't — the call `m(5)` gives the compiler no way to know which return type you wanted.
+
+**Common mistake:** Calling `list.remove(i)` on a `List<Integer>` expecting to remove the value `i`. `remove(int index)` matches in phase 1, before `remove(Object)` could match through boxing, so it removes the element *at index* `i`. Write `list.remove(Integer.valueOf(i))` to remove the value.
+
+**Predict it:** Overloads `describe(Object o)` and `describe(String s)`. What does `Object x = "hello"; describe(x);` print — the `Object` version or the `String` version?
+
+**The `Object` version.** The compiler sees only that `x` is declared `Object`, so `describe(String)` is not applicable at all. Overload choice is fixed before the program runs; the string inside `x` is never consulted.
+
+**Best intuition:** The compiler chooses an overload by reading the labels on the boxes — the declared types — and never looks inside them.
+
+**Terminology:** *Signature*, *overload resolution*, *most specific method*, *widening primitive conversion*, *boxing/unboxing*, *varargs*, *compile-time (static) polymorphism*, *ad hoc polymorphism*.
+
+---
+
+### 2.10 Method Overriding
+
+**The problem:** A subclass inherits its parent's methods, but some of them must work differently for it — a `SavingsAccount` calculates interest its own way. Callers holding an `Account` reference must still get the savings behaviour, without checking what kind of account they have.
+
+**How it works:** So a subclass may declare an instance method with the same signature as an inherited one; the new method *overrides* the old one. A call to that method on an object runs the version from the object's own class — or the nearest superclass that overrides it — whatever the declared type of the reference (dynamic dispatch, 2.12). To keep that substitution safe, the compiler enforces rules that stop an override from breaking what callers of the parent were promised.
+
+**The rules:**
+
+| Rule | Why |
+|---|---|
+| Same name and parameter types | Otherwise it's a new overload (2.9), not a replacement |
+| Return type the same, or a subtype for reference types (*covariant return*) | A caller expecting the parent's return type still gets one |
+| Access the same or wider — never narrower | A caller allowed to call the parent's method must be allowed to call the override |
+| May throw fewer or narrower *checked* exceptions, never new or broader ones; unchecked exceptions are unrestricted | A caller's `catch` blocks were written against the parent's `throws` clause |
+| Only accessible, inherited instance methods can be overridden | `private` methods aren't inherited; a package-private method is inherited only inside its package |
+| `final` methods cannot be overridden | The parent has fixed that behaviour (2.18) |
+| `static` methods are not overridden — they are hidden (2.11) | Static calls have no object to dispatch on |
+
+```java
+class Parent {
+    protected Number value() throws IOException { return 1; }
+}
+class Child extends Parent {
+    @Override
+    public Integer value() { return 2; }   // wider access, covariant return, no checked exception: all allowed
+}
+```
+
+**What @Override does:** It asks the compiler to confirm that the method overrides or implements an inherited one. Without it, a typo or a slightly different parameter type creates a new, unrelated method that compiles silently and never runs where you expected.
+
+```java
+class Point {
+    final int x, y;
+    Point(int x, int y) { this.x = x; this.y = y; }
+    public boolean equals(Point other) {    // overloads equals(Object) — does not override it
+        return other != null && x == other.x && y == other.y;
+    }
+}
+// List.of(new Point(1, 2)).contains(new Point(1, 2)) is false: List calls equals(Object)
+```
+
+With `@Override` on that method, the compiler reports "method does not override or implement a method from a supertype".
+
+**Calling the parent's version:** An override replaces the parent's method for every caller, including the subclass itself. `super.method()` inside the override runs the parent's implementation on the same object (2.3).
+
+**Relationships:** Overriding is the mechanism behind runtime polymorphism (2.12) and abstract methods (2.15). It applies only to instance methods: static methods and fields are hidden, which is resolved at compile time (2.11).
+
+**Advantages:** Subclasses specialise behaviour without changing callers; the compiler's rules keep every override substitutable for the parent's method.
+
+**Disadvantages:** Reading `account.interest()` no longer tells you which code runs — you need the object's runtime class. Overrides also couple the subclass to when and how the parent calls the method (the fragile base class problem, 2.6).
+
+> ⚠️ **Common misconception:** "A subclass can override a private method." A private method isn't inherited, so a same-signature method in the subclass is a new method. The parent's own code keeps calling its private version.
+
+> ⚠️ **Common misconception:** "The override can't throw any exception the parent didn't declare." The restriction applies only to checked exceptions. Any unchecked exception may be thrown — though throwing one the parent's contract never mentions still surprises callers.
+
+**Common mistake:** Overriding `equals` with a parameter of the class's own type, `equals(Point other)`, as in the example above. It overloads `equals(Object)`, and every collection keeps calling `Object`'s identity version.
+
+**Predict it:** `class P { private void hello() { System.out.println("P"); } void greet() { hello(); } }` and `class C extends P { void hello() { System.out.println("C"); } }`. What does `new C().greet()` print?
+
+**`P`.** `P.hello()` is private, so `C.hello()` doesn't override it — it is a separate method. `greet()` is compiled inside `P`, where `hello()` means `P`'s private method, and private methods aren't dispatched dynamically.
+
+**Best intuition:** An override is a replacement part that must fit the same socket: same shape (signature), no stricter requirements (access, checked exceptions), and a result the old socket accepts (covariant return).
+
+**Terminology:** *Override*, *overridden method*, *covariant return type*, *`@Override`*, *dynamic dispatch*, *method hiding* (the static counterpart).
+
+---
+
+### 2.11 Overriding vs Hiding
+
+**The problem:** Overriding chooses an implementation by looking at the object. A static method is called on a class — `Parent.kind()` — so there is no object to look at. A field is storage, not behaviour: the parent's methods were compiled to read the parent's field, and they would break if a subclass could swap that slot for one of a different type. So when a subclass reuses the name of a static method or a field, Java needs a different rule.
+
+**How it works:** So the subclass's member doesn't replace the parent's — it *hides* it. Both exist side by side, and every access is resolved at compile time from the declared type of the expression (or the class named). Only instance methods are chosen by the object at runtime.
+
+| Member reused in a subclass | Called | Decided by | Decided when |
+|---|---|---|---|
+| Instance method | Overriding | The object's runtime class | Runtime |
+| Static method | Hiding | The declared type of the expression, or the class named | Compile time |
+| Field (static or instance) | Hiding | The declared type of the expression | Compile time |
+
+```java
+class Parent {
+    String name = "parent";
+    static String kind() { return "Parent.kind"; }
+    String who() { return "Parent.who"; }
+    String describe() { return name; }        // compiled to read Parent.name
+}
+class Child extends Parent {
+    String name = "child";
+    static String kind() { return "Child.kind"; }
+    @Override String who() { return "Child.who"; }
+}
+
+Parent p = new Child();
+System.out.println(p.who());            // Child.who   — overriding
+System.out.println(p.kind());           // Parent.kind — hiding (and a compiler warning)
+System.out.println(p.name);             // parent      — hiding
+System.out.println(((Child) p).name);   // child       — same object, different declared type
+System.out.println(p.describe());       // parent      — Parent's code reads Parent's field
+```
+
+**Two fields, one object:** A `Child` object above contains *both* `name` fields — two separate slots. Code typed against `Parent` reads one, code typed against `Child` reads the other, and inside `Child` the parent's is still reachable as `super.name`. Nothing is replaced.
+
+**Static methods are inherited, not overridden:** If `Child` declared no `kind()`, then `Child.kind()` would compile and run `Parent.kind()` — static methods are inherited. Declaring one in `Child` hides the parent's for code that names `Child`. A call through an instance (`p.kind()`) is compiled as a call on `p`'s declared type, so the object is ignored — even a `null` reference works.
+
+**Rules for hiding:** A static method can only hide a static method: a subclass static method matching a parent instance method, or the reverse, doesn't compile. The return type and access rules of overriding (2.10) apply to hiding too. `@Override` on a static method is a compile error, because nothing is overridden. A field can hide any inherited field with the same name, whatever the types or `static` modifiers.
+
+**Relationships:** Hiding is the static counterpart of overriding (2.10). It explains the interview classic "fields are not polymorphic" (2.12), and why static methods should always be called through the class name (2.4). Interface static methods go further: they aren't inherited by implementing classes at all (2.16).
+
+**Advantages:** Predictable compile-time binding — static utility methods and constants never depend on an object.
+
+**Disadvantages:** The same expression shape (`p.name` vs `p.who()`) follows two different rules, so hidden members are a constant source of confusion, and a hidden field doubles the state an object carries.
+
+> ⚠️ **Common misconception:** "Static methods aren't inherited." They are — `Child.parentStaticMethod()` compiles. They just can't be overridden.
+
+> ⚠️ **Common misconception:** "A subclass field with the same name overrides the parent's." Fields are never overridden. The object holds both, and the declared type picks one.
+
+**Common mistake:** Redeclaring a field in a subclass to "change the default" — `protected int maxRetries = 5;` in a subclass of a class whose field is `3`. The parent's retry loop reads the parent's field and still retries three times. Set the inherited field in the subclass constructor, or make the value come from an overridable method or a constructor parameter.
+
+**Predict it:** Using the classes above, what does `Child c = new Child(); Parent p = c; System.out.println(p.name + " " + c.name + " " + c.describe());` print?
+
+**`parent child parent`.** `p.name` and `c.name` read different fields of the same object because their declared types differ. `describe()` is inherited from `Parent` and its body was compiled against `Parent.name`, so it reads the parent's field even when called on a `Child`.
+
+**Best intuition:** Overriding asks the object "who are you?". Hiding asks only the label on the reference "what type are you declared as?".
+
+**Terminology:** *Method hiding*, *field hiding*, *static binding* (choice fixed at compile time), *dynamic dispatch*, *declared (static) type* vs *runtime class*.
+
+---
+
+### 2.12 Polymorphism
+
+**The problem:** A billing loop over "accounts" must charge each kind of account its own way. Written with `if (a instanceof Savings) … else if (a instanceof Checking) …`, every new kind of account means finding and editing every such chain. The loop should say `a.charge()` once and let each object bring its own behaviour.
+
+**How it works:** So Java separates two questions about every call — *which methods may I call?* and *which code runs?* — and answers them at different times. A reference has a **declared type** (fixed in the source, `Animal a`) and points at an object with a **runtime class** (`new Dog()`). The compiler checks every call against the declared type and fixes which *signature* is called, choosing among overloads by argument types (2.9). At runtime, the JVM finds the implementation of that signature in the object's runtime class — the nearest override walking up from that class (2.10). This runtime choice is **dynamic dispatch** (also called dynamic method dispatch); the behaviour it produces is **runtime polymorphism**. Overload selection is **compile-time polymorphism**.
 
 ```mermaid
 flowchart LR
@@ -514,7 +1034,26 @@ Animal[] animals = { new Dog(), new Cat() };
 for (Animal a : animals) a.makeSound(); // "Woof" then "Meow"
 ```
 
-**Time/space complexity:** Not applicable directly, though **virtual method dispatch** does add a small runtime cost (a vtable-style lookup) compared to a direct, non-polymorphic call — usually negligible and often eliminated by JIT inlining for monomorphic call sites.
+**Declared type limits what you can call:**
+```java
+class Dog extends Animal {
+    @Override void makeSound() { System.out.println("Woof"); }
+    void fetch() { System.out.println("Fetching"); }
+}
+
+Animal a = new Dog();
+a.makeSound();      // ✅ Animal declares makeSound(); Dog's version runs
+// a.fetch();       // ❌ compile error: cannot find symbol — Animal has no fetch()
+((Dog) a).fetch();  // ✅ after a downcast (2.13)
+```
+
+The object *is* a `Dog`, but the compiler only knows the reference is an `Animal`, and must reject any call that wouldn't work for every possible `Animal`.
+
+**What is and isn't dispatched dynamically:** Only overridable instance methods. Static methods and fields are resolved from the declared type at compile time (hiding, 2.11); private methods and constructors are not inherited, so there is nothing to override. Calling an instance method through `null` compiles and throws `NullPointerException` — dispatch needs an object.
+
+**Language rule vs. JVM technique:** The Java Language Specification (15.12.4) defines *what* is selected: the implementation from the receiver's runtime class. *How* the JVM finds it is an implementation choice. HotSpot uses per-class method tables plus inline caches, and its JIT compiler inlines a call site directly when it has seen only one or two receiver classes there — so a polymorphic call usually costs about the same as a direct one. None of those techniques is required by the language.
+
+**Time/space complexity:** Not applicable directly. A call whose target is chosen at runtime can cost slightly more than a direct call, but the JIT usually removes the difference at call sites that see one or two receiver classes; only "megamorphic" sites with many receiver classes keep a measurable indirect-call cost.
 
 **Advantages:** Lets you write code against an abstraction (`Animal`) that automatically works for any current or future subtype, without modification.
 
@@ -522,17 +1061,138 @@ for (Animal a : animals) a.makeSound(); // "Woof" then "Meow"
 
 > ⚠️ **Common misconception:** "Overloading and overriding are the same kind of polymorphism." They're not — overloading is resolved at **compile time** based on the declared parameter types (static/compile-time polymorphism); overriding is resolved at **runtime** based on the actual object type (dynamic polymorphism).
 
+> ⚠️ **Common misconception:** "Java uses vtables for polymorphism." Java specifies dynamic dispatch behaviour; method tables are one technique a JVM may use, alongside inline caches and inlining.
+
 **Common mistake:** Forgetting `@Override` and accidentally *overloading* instead of *overriding* (e.g., mismatched parameter types) — the compiler won't catch this without the annotation, and the "override" silently becomes a separate, unrelated method.
 
-**Best intuition:** Polymorphism is like a universal remote button labeled "power" — pressing it does the right thing whether it's plugged into a TV, a stereo, or a fan; the caller doesn't need to know which.
+**Predict it:** `Animal` declares `greet(Animal a)` and `greet(Dog d)`; `Dog extends Animal` overrides both. With `Animal x = new Dog(); Animal y = new Dog();`, which method runs for `x.greet(y)`?
 
-**Terminology:** *Dynamic dispatch*, *virtual method*, *upcasting*, *runtime/dynamic polymorphism* vs. *compile-time/static polymorphism*.
+**`Dog.greet(Animal)`.** Two choices, made at two times: the compiler picks the overload from `y`'s *declared* type, `Animal`, so the signature is `greet(Animal)`; the JVM then runs that signature's override from `x`'s *runtime* class, `Dog`. The fact that `y` is really a `Dog` is never consulted — Java dispatches on the receiver only (single dispatch).
+
+**Best intuition:** Polymorphism is like a universal remote button labeled "power" — pressing it does the right thing whether it's plugged into a TV, a stereo, or a fan; the caller doesn't need to know which. The label on the button (declared type) decides which buttons exist; the device (runtime object) decides what pressing one does.
+
+**Terminology:** *Dynamic dispatch*, *declared (static) type* vs *runtime class*, *upcasting*, *runtime/dynamic polymorphism* vs. *compile-time/static polymorphism*, *subtype polymorphism*, *parametric polymorphism* (generics — Generics group), *single dispatch*, *virtual method* (an informal name for an overridable method).
 
 ---
 
-### 2.7 Abstraction & Abstract Classes
+### 2.13 Upcasting and Downcasting
 
-**How it works:** An `abstract` class can mix fully implemented methods with `abstract` methods (no body — subclasses must implement them). It cannot be instantiated directly with `new`; only concrete subclasses that implement all abstract methods can be instantiated.
+**The problem:** Polymorphic code holds objects through parent-type references (2.12), and a parent type exposes only the parent's methods. Occasionally code genuinely needs a subclass method back — and the language must allow that without ever letting a `Cat` be used as a `Dog`.
+
+**How it works:** So Java checks conversions between reference types at two points. An **upcast** (subtype → supertype, including an interface the class implements) can never fail, so the compiler applies it implicitly and nothing is checked at runtime. A **downcast** (supertype → subtype) might fail, so it must be written explicitly; the compiler allows it only if it *could* succeed, and the JVM checks the actual object when the cast runs, throwing `ClassCastException` if the object's class is neither the target type nor a subtype of it. A reference cast never creates, converts or modifies an object — unlike a primitive cast such as `(int) 3.9`, which produces a new value.
+
+| | Upcast | Downcast |
+|---|---|---|
+| Direction | Subtype → supertype | Supertype → subtype |
+| Written as | Implicit: `Animal a = dog;` | Explicit: `(Dog) a` |
+| Compile-time check | Always allowed | Allowed only if the types are related |
+| Runtime check | None needed | Yes — `ClassCastException` if the object doesn't fit |
+| Effect on the object | None | None |
+
+**Three possible outcomes:**
+```java
+Animal a = new Dog();
+Dog ok = (Dog) a;            // ✅ the object is a Dog
+
+Animal b = new Cat();
+Dog bad = (Dog) b;           // ⚠️ compiles; ClassCastException at runtime
+
+String s = "text";
+// Integer i = (Integer) s;  // ❌ compile error: String can never be an Integer
+```
+
+**Interfaces are looser:** A cast from a non-`final` class type to an interface type compiles even if the class doesn't implement the interface — some subclass might — and is checked at runtime. If the class is `final` and doesn't implement it, the compiler rejects the cast, because no object could ever pass.
+
+**instanceof and patterns:** `x instanceof Dog` is `true` when `x` refers to a `Dog` or a subclass of `Dog`, and `false` for `null`. Since Java 16, `if (x instanceof Dog d)` tests and binds a variable in one step, so the cast can't drift away from the check; Java 21's `switch` with type patterns does the same across several types (Modern Features group).
+
+**null and casts:** `(Dog) null` succeeds — `null` fits every reference type — and the failure, if any, comes later as a `NullPointerException` when the reference is used.
+
+**Upcasting loses nothing:** After `Animal a = new Dog();` the object is still a complete `Dog` with all its fields, and overridden methods still run `Dog`'s versions. What the upcast removes is only the compiler's permission to call `Dog`-only members through `a`.
+
+**Generic casts are only partly checked:** Because of erasure, `(List<String>) obj` checks only that `obj` is a `List` — the compiler warns that the cast is unchecked, and a wrong element type surfaces later as a `ClassCastException` somewhere else (Generics group).
+
+**Advantages:** Upcasting is what lets one method accept a whole family of types; downcasting gives an explicit, checked escape hatch when a subtype's extra API is genuinely needed.
+
+**Disadvantages:** Every downcast is a runtime check that can fail, and a downcast usually means type information was lost somewhere upstream — often a sign that the behaviour should have been a polymorphic method.
+
+> ⚠️ **Common misconception:** "Upcasting turns a `Dog` into an `Animal`." The object stays a `Dog`; only the reference's type changes. That is why `a.makeSound()` still barks.
+
+> ⚠️ **Common misconception:** "If a downcast compiles, it will work." The compiler only rules out casts that could *never* succeed; whether this particular object fits is checked at runtime.
+
+**Common mistake:** Downcasting without a check — `(Dog) animal` because "it's always a dog here" — until a new subclass reaches that code. Use `instanceof` with a pattern, or better, move the behaviour into the type hierarchy.
+
+**Predict it:** `Animal a = new Dog(); Animal c = new Cat();` What do `a instanceof Dog`, `c instanceof Dog`, `null instanceof Dog` and `((Animal) new Dog()).makeSound()` give?
+
+**`true`, `false`, `false`, and `Woof`.** `instanceof` asks about the object, and `null` is no object at all. The cast to `Animal` changes only the reference's type, so dispatch still finds `Dog.makeSound()`.
+
+**Best intuition:** A cast is a pair of glasses for the compiler: upcasting puts on blurrier glasses (see only the `Animal` parts), downcasting sharper ones — and the JVM checks that the sharper view matches what's really there.
+
+**Terminology:** *Upcast* (widening reference conversion), *downcast* (narrowing reference conversion), *`ClassCastException`*, *`instanceof`*, *type pattern*, *unchecked cast*.
+
+---
+
+### 2.14 Abstraction
+
+**The problem:** Code that uses a component depends on everything it touches. If a checkout service calls `smtp.connect()`, `buildMimeMessage()` and `retryOnTimeout()` itself, every caller depends on how email is sent — and switching to SMS, or just changing the retry policy, means editing all of them.
+
+**How it works:** So you design the surface before the implementation. Choose the essential operations of the concept, named in the caller's vocabulary — `notifier.send(to, message)` — and put everything else behind them. Callers now depend on a small, stable *what*, and the *how* can change freely. Abstraction is the act of choosing that surface; encapsulation and access modifiers (2.5, 2.7) are what keep everything behind it out of reach.
+
+```java
+interface Notifier {
+    void send(String to, String message);
+}
+
+class CheckoutService {
+    private final Notifier notifier;               // depends on the what
+    CheckoutService(Notifier notifier) { this.notifier = notifier; }
+
+    void complete(Order order) {
+        // ... charge, save ...
+        notifier.send(order.email(), "Your order is confirmed");
+    }
+}
+// EmailNotifier, SmsNotifier and a test's RecordingNotifier all fit — CheckoutService never changes.
+```
+
+**Abstraction comes in levels:** A method is an abstraction too. `order.total()` hides the loop over lines and the rounding rules, and a method that reads at one level — `validate(order); charge(order); confirm(order);` — is easier to follow than one mixing business steps with string formatting.
+
+**Mechanisms Java provides:**
+
+| Mechanism | What it offers | Fits when |
+|---|---|---|
+| A class's public methods | One implementation behind a chosen API | There is, and will be, one implementation |
+| Interface (2.16) | A type with no state, optionally with default methods | Several implementations, or a boundary you want to be able to swap |
+| Abstract class (2.15) | A partial implementation with abstract steps and shared state | Related implementations that share code and fields |
+
+**Abstraction vs. encapsulation vs. information hiding:** Abstraction decides *what to expose* — the essential operations. Information hiding decides *what to keep secret* — the design decisions likely to change. Encapsulation is the *mechanism* that bundles state with behaviour and blocks outside access (2.5). A class can be encapsulated yet poorly abstracted (private fields, but forty methods mirroring them), and an interface is an abstraction with nothing to encapsulate.
+
+**Every abstraction leaks a little:** `List.get(i)` looks the same for `ArrayList` (constant time) and `LinkedList` (linear time); a repository's `findAll()` looks like a list but is a database query. A useful abstraction states what callers can rely on — results, errors, cost — so the implementation details that do leak are documented rather than discovered.
+
+**Advantages:** Callers are simpler and insulated from change; implementations can be swapped, including test doubles; teams can work on either side of a stable boundary.
+
+**Disadvantages:** Every layer of indirection is one more place to look; an abstraction chosen too early, or with only one implementation ever, adds names and files without adding flexibility.
+
+> ⚠️ **Common misconception:** "Abstraction means using abstract classes and interfaces." Those are mechanisms for it. A plain class with a small, well-named public API is an abstraction too, and an interface that mirrors one class's implementation method-for-method abstracts nothing.
+
+> ⚠️ **Common misconception:** "Abstraction and encapsulation are the same thing." Abstraction is about which operations to present; encapsulation is about bundling state with behaviour and restricting access to it. Each is possible without the other.
+
+**Common mistake:** Naming an abstraction after its implementation — `interface MySqlUserStore`, `sendViaSmtp(...)`. The name leaks the *how*, so the abstraction can't outlive it.
+
+**Predict it:** Checkout code uses only `interface PriceSource { BigDecimal priceOf(String sku); }`. Prices move from a local database to a remote HTTP service. How many lines of checkout code must change?
+
+**None — in principle.** A new `HttpPriceSource` implements the same interface. But the abstraction leaks: a remote call can be slow or fail in new ways, so if `PriceSource` never said what happens on failure, the checkout code may still need a timeout or fallback. Good abstractions specify errors and cost, not just signatures.
+
+**Best intuition:** A car's dashboard: wheel, pedals and a fuel gauge are the abstraction; the engine bay is the implementation. You can swap a petrol engine for an electric one without retraining the driver.
+
+**Terminology:** *Abstraction*, *interface* (in the general sense: the surface a component offers), *implementation*, *information hiding*, *leaky abstraction*, *level of abstraction*.
+
+---
+
+### 2.15 Abstract Classes
+
+**The problem:** Several related classes share real code and state — every `Shape` can print its area, every `Employee` has a name and a payslip format — but one step differs for each and has no sensible default. A normal superclass would have to invent a fake `area()` returning 0, and nothing would stop someone creating a meaningless plain `Shape`.
+
+**How it works:** So the superclass is marked `abstract`. An `abstract` class can mix fully implemented methods with `abstract` methods (no body — subclasses must implement them). It cannot be instantiated directly with `new`; only concrete subclasses that implement all abstract methods can be instantiated. A subclass that leaves any abstract method unimplemented must itself be declared `abstract`.
 
 ```java
 abstract class Shape {
@@ -546,25 +1206,52 @@ class Circle extends Shape {
 }
 ```
 
-**Relationships:** Abstract classes sit between concrete classes (fully implemented) and interfaces (traditionally, no implementation at all) — they let you share *some* common implementation while still forcing subclasses to fill in specifics.
+**What an abstract class may contain:** Everything an ordinary class may — instance and static fields, constructors, concrete methods (including `final` ones), static methods, nested types, any access level — plus abstract methods. An abstract method has no body and cannot be `private`, `static` or `final`, since each of those would make it impossible to override; and a class cannot be both `abstract` and `final`.
 
-**Advantages:** Enforces a consistent structure across related subclasses while still allowing shared code (avoiding duplication that a pure interface can't provide as naturally).
+**Constructors still run:** `new Circle(2)` runs `Shape`'s constructor through `super()`, so the abstract class can initialise its own fields and check its own invariants. It is never instantiated *on its own*, but its part of every subclass object is real.
 
-**Disadvantages:** Java's single-inheritance rule means a class can extend only one abstract class — this can be limiting compared to implementing multiple interfaces.
+**Template method:** The concrete method `printArea()` calls the abstract `area()`. Because `area()` dispatches on the object (2.12), the shared algorithm runs each subclass's step — a fixed skeleton with pluggable steps, the *template method* pattern. Making the skeleton `final` stops subclasses from changing the order of the steps.
+
+**Relationships:** Abstract classes sit between concrete classes (fully implemented) and interfaces — which, since Java 8, can contain default methods but never instance state or constructors — and let you share *some* common implementation and state while still forcing subclasses to fill in specifics. They are one mechanism for abstraction (2.14); 2.17 compares them with interfaces.
+
+**Advantages:** Enforces a consistent structure across related subclasses while still allowing shared code and fields (avoiding duplication that a pure interface can't provide, since interfaces hold no instance state).
+
+**Disadvantages:** Java's single-inheritance rule means a class can extend only one abstract class — this can be limiting compared to implementing multiple interfaces. Subclasses are also coupled to the base class's implementation, with all of inheritance's fragility (2.6).
 
 > ⚠️ **Common misconception:** "Abstract classes can't have constructors." They can, and often do — a subclass's constructor implicitly calls the abstract parent's constructor via `super()`, useful for initializing shared fields.
 
-**Common mistake:** Making a class abstract just to prevent instantiation, without actually declaring any abstract methods — if there's nothing to force subclasses to implement, a private constructor or final class might express the intent more clearly.
+> ⚠️ **Common misconception:** "An abstract class must have at least one abstract method." It needn't have any. `abstract` only forbids direct instantiation; a class *with* an abstract method must be declared abstract, not the other way round.
+
+**Common mistake:** Making a class abstract just to prevent instantiation, without actually declaring any abstract methods — if there's nothing to force subclasses to implement, a private constructor or final class might express the intent more clearly. An abstract class with only static helpers still invites people to subclass it; a `final` class with a private constructor doesn't.
+
+**Predict it:** `abstract class Report { Report() { System.out.println("Report()"); } abstract String body(); void print() { System.out.println(body()); } }` and `class Sales extends Report { String body() { return "sales"; } }`. What does `new Sales().print()` print?
+
+**`Report()` then `sales`.** The abstract class's constructor runs as part of building every `Sales` object, and `print()` — shared code in the abstract class — calls the subclass's `body()` through dynamic dispatch.
 
 **Best intuition:** An abstract class is like a recipe template that says "cook the protein your own way, but here's the shared plating instructions everyone follows."
 
-**Terminology:** *Abstract method*, *concrete class/method*, *template method pattern* (a common design pattern built directly on this concept).
+**Terminology:** *Abstract method*, *concrete class/method*, *template method pattern* (a common design pattern built directly on this concept), *skeletal implementation* (an abstract class implementing most of an interface, such as `AbstractList`).
 
 ---
 
-### 2.8 Interfaces
+### 2.16 Interfaces
 
-**How it works:** Traditionally, an interface could only declare method signatures (no bodies) plus `public static final` constants. Since Java 8, interfaces can also include **default methods** (with a body, providing shared implementation) and **static methods**. A class `implements` one or more interfaces and must provide implementations for all abstract (non-default) methods.
+**The problem:** Single class inheritance (2.6) gives each class one family. But capabilities cut across families: a `Duck` (an animal) and a `Drone` (a machine) both fly, and a `File` and a `Socket` both need closing. Code that wants "anything closeable" needs a type that unrelated classes can all join — without dragging in anyone's fields or constructors.
+
+**How it works:** So an interface is a type with no instance state that any class can add to itself with `implements`. Traditionally, an interface could only declare method signatures (no bodies) plus `public static final` constants. Since Java 8, interfaces can also include **default methods** (with a body, providing shared implementation) and **static methods**; since Java 9, **private methods** (helpers for the default methods). A class `implements` one or more interfaces and must provide implementations for all abstract (non-default) methods — unless the class is itself abstract.
+
+**What the compiler adds for you:**
+
+| Member | Implicit modifiers | Notes |
+|---|---|---|
+| Field | `public static final` | Must be initialised; final, but not necessarily a compile-time constant |
+| Method with no body | `public abstract` | Implementations must be `public` |
+| `default` method | `public` | Inherited by implementing classes; can be overridden |
+| `static` method | `public` unless declared `private` | Called only as `InterfaceName.method()`; not inherited by implementing classes |
+| `private` method (Java 9+) | — | Helper for default/static methods; not part of the contract |
+| Nested type | `public static` | — |
+
+`protected` members and constructors are not allowed.
 
 ```mermaid
 classDiagram
@@ -596,113 +1283,226 @@ class Duck implements Flyable, Swimmable {
 }
 ```
 
+**When two inherited methods collide:** A class can receive the same method from several places. Java resolves it with three rules, in order:
+1. **Classes win.** A method declared in the class or inherited from a superclass beats any default method.
+2. **The more specific interface wins.** If `B extends A` and both define `m()`, `B`'s default is used.
+3. **Otherwise the class must decide.** It overrides `m()` itself — the compiler reports "types A and B are incompatible" until it does — and may call either parent's version with `A.super.m()`.
+
+```java
+interface A { default String hello() { return "A"; } }
+interface B { default String hello() { return "B"; } }
+class C implements A, B {
+    @Override public String hello() { return A.super.hello() + B.super.hello(); }   // "AB"
+}
+```
+
+**Interfaces extend interfaces:** `interface Pet extends Animal, Named` — an interface may extend any number of interfaces, combining their contracts. A `sealed` interface (Java 17) can restrict which classes implement it.
+
 **Advantages:** Enables multiple inheritance of *type* (a class can implement many interfaces) and *behavior* (via default methods); decouples "what" from "how," supporting flexible, testable design (e.g., programming to an interface, not an implementation).
 
-**Disadvantages:** Default methods can introduce the "diamond problem" if two interfaces provide conflicting default implementations for the same method — the implementing class must explicitly resolve the conflict.
+**Disadvantages:** Default methods can introduce the "diamond problem" when two interfaces provide default implementations of the same method — resolved by the rules above, and by an explicit override when neither interface is more specific. Adding an abstract method to a published interface breaks every implementation, which is why such additions arrive as default methods.
 
 > ⚠️ **Common misconception:** "Interfaces still can't have any implementation." This was true before Java 8. Modern Java interfaces can have default methods, static methods, and even private helper methods (Java 9+) — they're much closer to abstract classes than many developers realize, minus instance fields and constructors.
 
-**Common mistake:** Assuming an interface can hold mutable instance state — it can't; interface fields are implicitly `public static final` (constants), not per-instance data.
+> ⚠️ **Common misconception:** "A default method can provide `equals`, `hashCode` or `toString` for every implementation." It can't — a default method that overrides a public `Object` method is a compile error, because the class's inherited `Object` version would always win anyway (rule 1).
+
+**Common mistake:** Assuming an interface can hold mutable instance state — it can't; interface fields are implicitly `public static final`, one shared value per interface, not per-instance data. `final` isn't the same as immutable, either: a `List` constant in an interface is one global, mutable list.
+
+**Predict it:** `interface Greeter { default String greet() { return "Hello"; } }`, `class Base { public String greet() { return "Hi"; } }`, `class Child extends Base implements Greeter { }`. What does `new Child().greet()` return?
+
+**`"Hi"`.** Rule 1: a method inherited from a class beats a default method from an interface. Defaults only fill gaps; they never override what the class hierarchy already provides.
 
 **Best intuition:** An interface is a contract — "if you sign this, you promise to provide these capabilities." Default methods are like a contract that also comes with some pre-filled clauses you can accept as-is or override.
 
-**Terminology:** *Default method*, *static interface method*, *functional interface* (an interface with exactly one abstract method — foundational to lambdas, covered in the Streams/Lambdas group), *diamond problem*.
+**Terminology:** *Default method*, *static interface method*, *private interface method*, *functional interface* (an interface with exactly one abstract method — foundational to lambdas, covered in the Streams/Lambdas group), *diamond problem*, *marker interface* (an interface with no methods, such as `Serializable`).
 
 ---
 
-### 2.9 Access Modifiers
+### 2.17 Abstract Class vs Interface
 
-**Full visibility table:**
+**The problem:** Before Java 8 the rule was easy: an interface had no code, an abstract class had some. Default, static and private interface methods erased that line, yet the two still behave very differently — and choosing wrongly either locks unrelated classes into one hierarchy or scatters shared state across every implementation.
 
-| Modifier | Same class | Same package | Subclass (different package) | Everywhere |
-|---|---|---|---|---|
-| `private` | ✅ | ❌ | ❌ | ❌ |
-| (default/package-private) | ✅ | ✅ | ❌ | ❌ |
-| `protected` | ✅ | ✅ | ✅ | ❌ |
-| `public` | ✅ | ✅ | ✅ | ✅ |
+**How it works:** So decide by what really differs: *state*, *construction* and *how many a class can have*.
 
-**How it works:** Access modifiers are enforced entirely at **compile time** by the compiler checking the caller's location against the declared visibility — there's no runtime access-control check for ordinary field/method access (unlike, say, a security manager, which is a different, largely deprecated mechanism).
+| Feature | Abstract class | Interface |
+|---|---|---|
+| Instance fields | Yes | No — fields are implicitly `public static final` |
+| Constructors | Yes | No |
+| Abstract methods | Yes | Yes (implicitly `public abstract`) |
+| Methods with bodies | Yes — ordinary methods | Yes — `default`, `static` (Java 8+) and `private` (Java 9+) methods |
+| `default` keyword | Not used | Used for inherited instance methods with a body |
+| Static methods | Yes, inherited by subclasses | Yes, but not inherited by implementing classes |
+| Private methods | Yes | Yes (Java 9+) |
+| `protected` / package-private members | Yes | No — members are `public`, or `private` methods |
+| `final` methods | Yes | No — a default method can always be overridden |
+| How many a class can have | One (`extends`) | Any number (`implements`) |
+| Can itself extend | One class, any number of interfaces | Any number of interfaces |
+| Usable as a lambda target | No | Yes, if it has exactly one abstract method |
+| Instance state shared by implementations | Yes | No |
 
-**Relationships:** Access modifiers are the language-level enforcement mechanism behind encapsulation — encapsulation is the *principle*, access modifiers are the *tool*.
+**Deciding:**
+- A role that unrelated classes should be able to play, or one of several roles per class → **interface**.
+- A family of closely related classes sharing fields, constructor logic or `protected` hooks → **abstract class**.
+- An algorithm whose order must not change (a `final` template method) → **abstract class**.
+- Behaviour you want to pass as a lambda → **functional interface**.
+- A type other people will implement, plus convenience for them → **both**: an interface for the type and an abstract *skeletal implementation* (`List` + `AbstractList`). Callers depend only on the interface; implementers may extend the abstract class or not.
 
-**Advantages:** Prevents accidental misuse of internal implementation details from unrelated code; documents intent (this is "for internal use only" vs. "part of the public API").
+**Why the interface is usually the type:** Any class can implement an interface after the fact, whatever it already extends, so an interface never forces a class into your hierarchy. An abstract class used as the type consumes the implementer's only superclass slot. That is why Effective Java advises preferring interfaces to abstract classes for defining types, with abstract classes as optional helpers.
 
-**Disadvantages:** Overly restrictive defaults can force awkward workarounds (e.g., excessive public getters just to expose something for testing).
+**Evolving each:** Adding a concrete method to an abstract class doesn't break subclasses (unless one already has a method with that signature). Adding an abstract method to either breaks every implementation; for interfaces, a `default` method is the compatible route — which is exactly why default methods were introduced.
 
-> ⚠️ **Common misconception:** "Package-private (default access) is rarely useful." It's actually a deliberate, useful middle ground — commonly used to expose helper classes/methods to other classes in the same package (e.g., same module/feature) while still hiding them from the rest of the codebase.
+**Relationships:** Both are mechanisms for abstraction (2.14). Abstract classes come with inheritance's coupling (2.6); interfaces with the default-method conflict rules (2.16).
 
-**Common mistake:** Making fields `public` for convenience "just for now" during prototyping — this bypasses encapsulation entirely and is a common source of tightly-coupled, hard-to-refactor code later.
+**Advantages:** Knowing the real differences makes the choice mechanical: state and construction → abstract class; roles and multiplicity → interface.
 
-**Best intuition:** Think of access modifiers as concentric rings of trust: `private` (only me), package-private (my close neighborhood), `protected` (my family/descendants), `public` (anyone).
+**Disadvantages:** Combining both adds a type and a class for one concept; for a small, internal hierarchy one of them alone is usually enough.
 
-**Terminology:** *Package-private/default access*, *visibility*, *API surface*.
+> ⚠️ **Common misconception:** "Since Java 8, interfaces and abstract classes are basically the same." An interface still has no instance state, no constructors, no `protected` members and no `final` methods, and a class can implement many interfaces but extend one class.
+
+> ⚠️ **Common misconception:** "An interface can't have private or static methods." Static methods arrived in Java 8 and private ones in Java 9.
+
+**Common mistake:** Using an abstract class for a capability that unrelated classes need (`abstract class Auditable`). Every class that wants to be auditable must now give up its superclass, and classes that already extend something can't join at all.
+
+**Predict it:** `class Robot extends Machine` must also be usable wherever a `Worker` is expected. Does that work if `Worker` is an abstract class? If it's an interface?
+
+**Abstract class: no — `Robot` can't extend both `Machine` and `Worker`. Interface: yes — `class Robot extends Machine implements Worker`.** The superclass slot is already taken, and only interfaces can be added on top of it.
+
+**Best intuition:** An interface is a job title anyone can hold alongside their other titles; an abstract class is a family you're born into — it gives you an inheritance, but you only get one.
+
+**Terminology:** *Skeletal implementation*, *default method*, *functional interface*, *multiple inheritance of type*, *template method*.
 
 ---
 
-### 2.10 Static vs Instance Members
+### 2.18 The final Keyword
 
-**How it works:** Static members are allocated once, associated with the `Class` object itself (loaded once by the class loader); instance members are allocated fresh for every object created with `new`.
+**The problem:** Code often relies on something *not* changing: a field holding an injected dependency, a method whose steps protect an invariant, a class like `String` whose callers assume it can never be subclassed into something mutable. Without a way to say so, any later assignment or subclass can quietly break the assumption.
 
-```mermaid
-flowchart TD
-    subgraph ClassLevel["Class: Dog (loaded once)"]
-    S["static int totalDogs"]
-    end
-    subgraph Instance1["Instance 1"]
-    F1["String name = Rex"]
-    end
-    subgraph Instance2["Instance 2"]
-    F2["String name = Fido"]
-    end
-```
+**How it works:** So `final` locks one thing, and the thing depends on where it's written:
 
-**Example:**
+| Applied to | Rule | Typical use |
+|---|---|---|
+| Local variable or parameter | Assigned exactly once | Clarity; a lambda can capture only *effectively final* locals |
+| Instance field | Assigned exactly once — by its initializer, an instance initializer, or on every constructor path | Dependencies, value objects, immutability |
+| Static field | Assigned exactly once, during class initialization | Constants (`static final`) |
+| Method | Can't be overridden; a `static final` method can't be hidden | Template methods, invariant-protecting steps |
+| Class | Can't be extended | Value types, security-sensitive types (`String`, `Integer`) |
+
+**Blank finals and definite assignment:** A `final` field with no initializer is a *blank final*. The compiler proves it is assigned exactly once before each constructor finishes — miss it on one path, or assign it twice, and the class doesn't compile. No method can assign it afterwards.
+
 ```java
-class Dog {
-    static int totalDogs = 0; // shared across all instances
-    String name;              // unique per instance
-    Dog(String name) {
-        this.name = name;
-        totalDogs++;
+class Order {
+    private final long id;
+    private final List<String> lines = new ArrayList<>();
+
+    Order(long id) {
+        this.id = id;              // must happen on every constructor path
+    }
+    void addLine(String sku) {
+        lines.add(sku);            // fine: the list changes, the reference doesn't
+        // lines = new ArrayList<>();  // compile error
+        // id = 2;                     // compile error
     }
 }
-new Dog("Rex");
-new Dog("Fido");
-System.out.println(Dog.totalDogs); // 2
 ```
 
-**Advantages:** Static members are perfect for shared counters, constants, utility methods (`Math.sqrt()`), and factory methods that don't need per-instance state.
+**final reference ≠ immutable object:** `final` constrains the variable, never the object it refers to. A `final` array's elements, a `final` list's contents and a `final StringBuilder`'s text can all change. To make the object unchangeable you need an immutable type or an unmodifiable copy (`List.copyOf`) — and a class designed for it (2.21).
 
-**Disadvantages:** Static state is effectively global, mutable state shared across the whole JVM — this makes static fields a common source of hidden coupling and thread-safety bugs in concurrent code.
+**Constants are inlined:** A `static final` field of a primitive type or `String`, initialised with a constant expression, is a *constant variable*. The compiler copies its value into every class that uses it. Two consequences: reading it doesn't trigger the declaring class's initialization (2.4), and if a library changes the value, code compiled against the old version keeps the old value until it is recompiled.
 
-> ⚠️ **Common misconception:** "Static methods can access instance fields directly." They can't — a static method has no implicit `this`, so it can only access other static members directly (it would need an explicit object reference to reach instance members).
+**final fields and threads:** The Java Memory Model gives `final` fields a special guarantee: once a constructor finishes, any thread that obtains a reference to the object sees the final fields' values as the constructor set them, even without synchronization — provided `this` didn't escape during construction. That guarantee is what makes properly built immutable objects safe to share (Concurrency group).
 
-**Common mistake:** Using a mutable static field as a cache or counter in a multi-threaded application without synchronization — this is one of the most common sources of race conditions in real Java code (full detail in the Concurrency group).
+**final vs. sealed:** `final` allows no subclasses; `sealed` (Java 17) allows exactly the listed ones; `non-sealed` reopens a branch of a sealed hierarchy.
 
-**Best intuition:** Instance members are like each student's individual notebook; static members are like the one shared whiteboard at the front of the classroom that everyone sees and can affect.
+**Relationships:** `final` methods and classes limit inheritance (2.6) and overriding (2.10); `final` fields are one ingredient of immutability (2.21), not the whole of it.
 
-**Terminology:** *Class members* (another name for static members), *instance members*, *static initialization block*, *class variable*.
+**Advantages:** States intent the compiler enforces; makes classes safe to reason about and to share; protects invariants from subclasses.
+
+**Disadvantages:** A `final` class or method can't be extended later — including by frameworks that work by generating subclasses, such as proxy-based Spring features and Hibernate's lazy-loading proxies.
+
+> ⚠️ **Common misconception:** "`final` makes an object immutable." It makes a *variable* unassignable. The object it refers to is as mutable as its class allows.
+
+> ⚠️ **Common misconception:** "Marking methods `final` makes them faster." HotSpot's JIT already inlines calls it can prove have one target, and deoptimizes if a new subclass appears. Use `final` for design, not speed.
+
+**Common mistake:** Treating a `final` collection field as read-only and returning it from a getter. Callers can't replace the list, but they can clear it.
+
+**Predict it:** `final StringBuilder sb = new StringBuilder("a"); sb.append("b"); System.out.println(sb);` — does it compile, and what prints? What about adding `sb = new StringBuilder("c");`?
+
+**It compiles and prints `ab`; the extra line does not compile.** `final` stops the variable from being reassigned; it says nothing about the `StringBuilder` object, which `append` changes in place.
+
+**Best intuition:** `final` nails down a *name*, not the *thing* it names. A final variable is a label glued to one box — you can still rearrange what's inside the box.
+
+**Terminology:** *Blank final*, *definite assignment*, *constant variable*, *effectively final*, *final class*, *final method*, *sealed / non-sealed*.
 
 ---
 
-### 2.11 The Object Class (equals, hashCode, toString)
+### 2.19 The Object Class
 
-**How it works:** Every class implicitly `extends Object` if it doesn't extend anything else. `Object` provides default implementations: `equals()` compares references (`==`), `hashCode()` derives a number from the object's memory identity (implementation-dependent), and `toString()` prints the class name plus a hash in hex (e.g., `Dog@1b6d3586`).
+**The problem:** Collections must compare and hash any element, logging must turn any object into text, and code sometimes needs to ask an object what it really is. If each class had to remember to supply those operations, generic code couldn't rely on them.
+
+**How it works:** So every class implicitly `extends Object` if it doesn't extend anything else, making `Object` the root of every class hierarchy; arrays are objects too, and an interface-typed reference can call `Object`'s public methods. `Object` provides default implementations:
+
+| Method | Default behaviour | Override it? |
+|---|---|---|
+| `equals(Object)` | Identity: `this == obj` | Yes, for value-like classes — with `hashCode` (2.20) |
+| `hashCode()` | The object's *identity hash code*: fixed for its lifetime and consistent with identity `equals`. How the JVM produces it is unspecified | Whenever `equals` is overridden (2.20) |
+| `toString()` | `getClass().getName() + "@" + Integer.toHexString(hashCode())` — e.g. `com.example.Dog@1b6d3586` | Usually |
+| `getClass()` | The object's runtime class, as a `Class` object | Can't — it's `final` |
+| `clone()` | `protected`; a shallow field-by-field copy if the class implements `Cloneable`, otherwise `CloneNotSupportedException` | Rarely — prefer a copy constructor or factory |
+| `finalize()` | Called by the garbage collector at some point before reclaiming the object — or never | Never — deprecated for removal (JEP 421) |
+| `wait()`, `notify()`, `notifyAll()` | Coordinate threads using the object's monitor | Can't — `final` (Concurrency group) |
+
+**The identity hash code is not an address:** The API only promises that `Object.hashCode()` is stable for the object's lifetime and, "as far as is reasonably practical", distinct for distinct objects — two different objects may share one. HotSpot, for instance, generates the value on first request and stores it in the object's header, because the garbage collector moves objects around. `System.identityHashCode(obj)` returns this value even when a class overrides `hashCode()`.
+
+**Why clone() is avoided:** `clone()` creates an object without running a constructor, copies fields shallowly (so a cloned object shares its mutable fields' contents with the original), relies on the `Cloneable` marker interface that declares no `clone` method, and throws a checked exception. A copy constructor (`new Order(other)`) or a static factory (`Order.copyOf(other)`) is explicit and type-safe. Arrays are the exception: `array.clone()` is public, typed and convenient.
+
+**Why finalize() is gone:** It might run late or never, ran on an unspecified thread, could resurrect objects and slowed garbage collection. Finalization has been deprecated since Java 9 and deprecated *for removal* since Java 18. Release resources explicitly with `AutoCloseable` and try-with-resources; use `java.lang.ref.Cleaner` only as a safety net.
+
+**Advantages:** Overriding these methods — chiefly `equals`, `hashCode` and `toString` — makes objects behave correctly and meaningfully inside collections, logs, and debugging output.
+
+**Disadvantages:** The defaults are identity-based, which is wrong for value-like classes and easy to forget; `clone` and `finalize` are historical designs that are best avoided.
+
+> ⚠️ **Common misconception:** "`Object.hashCode()` returns the object's memory address." The specification promises no such thing, and in HotSpot it isn't: objects move during garbage collection, so the value is generated and remembered instead.
+
+**Common mistake:** Logging an object that doesn't override `toString()` and getting `Order@6d06d69c` in production logs — useless during an incident. Override `toString()` on domain classes, leaving out sensitive fields.
+
+**Predict it:** `class Dog { @Override public int hashCode() { return 42; } }` in the default package. What does `System.out.println(new Dog())` print?
+
+**`Dog@2a`.** The default `toString()` is the class name plus `hashCode()` in hexadecimal, and it calls the overridden `hashCode()` — 42 is `2a` in hex. So the "@…" part is not an address, and changes whenever `hashCode` does.
+
+**Best intuition:** `Object` is the minimum contract every object signs: "you can compare me, hash me, print me and ask my class" — with identity-based defaults until a class says otherwise.
+
+**Terminology:** *Root class*, *identity hash code*, *shallow copy*, *`Cloneable`* (a marker interface), *finalization*, *`Cleaner`*, *runtime class*.
+
+---
+
+### 2.20 equals and hashCode
+
+**The problem:** `Object.equals` treats every object as unique, but value-like classes — `Money`, `Point`, `EmailAddress` — need two objects with the same contents to count as the same. And hash-based collections don't compare against every element: they compute a hash code to pick a bucket, then call `equals` only inside that bucket. If equal objects produced different hash codes, a lookup would search the wrong bucket and never find a match.
+
+**How it works:** So a class that redefines equality overrides both methods, together, from the same fields. `equals` defines the equivalence; `hashCode` must give equal objects equal codes so they land in the same bucket.
+
+**The equals contract:** For non-null references `x`, `y`, `z`:
+- **Reflexive:** `x.equals(x)` is `true`.
+- **Symmetric:** `x.equals(y)` is `true` exactly when `y.equals(x)` is.
+- **Transitive:** if `x.equals(y)` and `y.equals(z)`, then `x.equals(z)`.
+- **Consistent:** repeated calls give the same answer while the fields used in the comparison don't change.
+- **Non-null:** `x.equals(null)` is `false`.
 
 **The equals/hashCode contract (critical for interviews):**
 - If `a.equals(b)` is `true`, then `a.hashCode() == b.hashCode()` **must** also be true.
-- The reverse is *not* required — two unequal objects *can* share a hash code (a "hash collision"), which is legal and expected.
+- The reverse is *not* required — two unequal objects *can* share a hash code (a "hash collision"), which is legal and expected: `"Aa"` and `"BB"` both hash to 2112.
+- `hashCode()` must return the same value on repeated calls within one run of the program while the fields used by `equals` are unchanged — it need not be the same across runs.
 - Overriding one without the other breaks the contract and causes subtle bugs in hash-based collections (`HashMap`, `HashSet`) — objects can "disappear" from a `HashSet` or fail lookups in a `HashMap`.
 
 ```java
-class Point {
-    int x, y;
+final class Point {
+    private final int x, y;
     Point(int x, int y) { this.x = x; this.y = y; }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Point p)) return false;
+        if (!(o instanceof Point p)) return false;   // also handles null
         return x == p.x && y == p.y;
     }
 
@@ -718,17 +1518,196 @@ class Point {
 }
 ```
 
-**Advantages:** Overriding these three methods makes objects behave correctly and meaningfully inside collections, logs, and debugging output.
+The class is `final` and its fields are `final`: no subclass can add state that breaks symmetry, and the hash code can't change while the point sits in a `HashSet`.
+
+**== vs. equals():**
+
+| Comparing | `==` | `equals()` |
+|---|---|---|
+| Primitives (`int`, `double`) | Compares values | Not applicable |
+| Object references | Same object? | Whatever the class defines — `Object`'s default is `==` |
+| `String` | Same object? — literals are interned, so equal literals often *are* the same object, which hides bugs | Same characters |
+| Boxed numbers (`Integer`) | Same object? — values from -128 to 127 are always cached, so `==` "works" for small numbers and usually fails for larger ones | Same value |
+| Your value class | Same object? | Your definition |
+
+**getClass() or instanceof in equals:** Both are legitimate; they answer "may a subclass instance equal a parent instance?" differently.
+- `if (o == null || getClass() != o.getClass()) return false;` — only objects of exactly the same class can be equal. Symmetry is safe even with subclasses, but a subclass that adds nothing — or a framework proxy subclass — can never equal its parent, which breaks substitutability.
+- `if (!(o instanceof Point p)) return false;` — subclass instances can be equal to parent instances. That respects substitutability, but if a subclass adds a field to its own `equals` (a `ColorPoint` comparing color), symmetry breaks: `point.equals(colorPoint)` is true while `colorPoint.equals(point)` is false.
+- There is no way to extend an instantiable class, add a value field and keep the full contract — so make value classes `final` and use `instanceof`, or prefer composition (a `ColorPoint` *has a* `Point`).
+
+**Mutable keys get lost:** The hash code decides the bucket when an object is inserted. If a field used by `hashCode` changes afterwards, the object stays in its old bucket while lookups search the new one, so `set.contains(obj)` returns `false` for an object that is plainly inside.
+
+**Advantages:** Overriding these methods makes objects behave correctly and meaningfully inside collections, comparisons and caches.
 
 **Disadvantages:** Easy to get subtly wrong (asymmetric `equals`, forgetting `hashCode`, not handling `null` or type-mismatches safely) — this is one of the most bug-prone areas of everyday Java.
 
 > ⚠️ **Common misconception:** "If I override `equals()`, `hashCode()` will still work fine by default." False — this is the single most common real-world violation of the equals/hashCode contract, and it silently breaks `HashMap`/`HashSet` behavior.
 
-**Common mistake:** Implementing `equals()` using `==` for a field comparison when the field is itself an object (e.g., comparing two `String` fields with `==` instead of `.equals()` inside your own `equals()` override).
+> ⚠️ **Common misconception:** "Equal hash codes mean equal objects." Different objects may share a hash code; only the reverse is guaranteed.
 
-**Best intuition:** `equals()`/`hashCode()` are a matched pair, like a lock and key made in the same batch — using one from a different batch (overriding only one) breaks the whole system.
+**Common mistake:** Implementing `equals()` using `==` for a field comparison when the field is itself an object (e.g., comparing two `String` fields with `==` instead of `.equals()` inside your own `equals()` override). Use `Objects.equals(a, b)` for fields that may be `null`. And declare the parameter as `Object` — `equals(Point p)` is an overload that collections never call (2.10).
 
-**Terminology:** *equals/hashCode contract*, *hash collision*, *reflexive/symmetric/transitive/consistent* (the four formal properties `equals()` must satisfy).
+**Predict it:** A class overrides `equals` to compare an `id` field but keeps `Object`'s `hashCode`. After `set.add(new Customer(7))`, what does `set.contains(new Customer(7))` return — and `set.contains` with the *same* instance?
+
+**`false`, and `true`.** The new instance has a different identity hash code, so `HashSet` searches a different bucket and never calls `equals`. The same instance has the same identity hash and is found — which is why such bugs pass tests that reuse the inserted object.
+
+**Best intuition:** `equals()`/`hashCode()` are a matched pair, like a lock and key made in the same batch — using one from a different batch (overriding only one) breaks the whole system. The hash code is the shelf number, `equals` is the check on the shelf: equal books must always be filed on the same shelf.
+
+**Terminology:** *equals/hashCode contract*, *hash collision*, *reflexive/symmetric/transitive/consistent/non-null* (the five formal properties `equals()` must satisfy), *value object*, *string interning*, *integer cache*.
+
+---
+
+### 2.21 Immutability
+
+**The problem:** A mutable object can change between the moment code checks it and the moment code uses it — changed by another thread, by a caller still holding a reference, by a cache that handed the same object to someone else. Every piece of code that touches it must then coordinate, and the bugs surface far from the change that caused them.
+
+**How it works:** So an immutable class removes every path by which its state could change after construction. Effective Java's recipe (Item 17):
+1. **No mutators** — no setters, no method that modifies state.
+2. **No subclasses** — make the class `final` (or give it only private constructors and static factories), so no subclass can add mutable state or override methods to fake change.
+3. **All fields `final`** — the compiler enforces single assignment, and the memory model guarantees other threads see the constructed values (2.18).
+4. **All fields `private`** — callers can't reach the state at all.
+5. **Exclusive access to mutable components** — copy mutable arguments in the constructor, and never hand out a reference to a mutable field.
+
+```java
+public final class Period {
+    private final LocalDate start;               // LocalDate is immutable: no copy needed
+    private final List<String> tags;
+
+    public Period(LocalDate start, List<String> tags) {
+        this.tags = List.copyOf(tags);           // copy first...
+        if (this.tags.size() > 5) throw new IllegalArgumentException("too many tags");  // ...then validate the copy
+        this.start = Objects.requireNonNull(start);
+    }
+    public LocalDate start() { return start; }
+    public List<String> tags() { return tags; }  // List.copyOf result is unmodifiable
+    public Period plusDays(int days) { return new Period(start.plusDays(days), tags); }
+}
+```
+
+**Copy, then validate:** Validating the caller's list and then copying it leaves a window in which the caller — or another thread — can change it after the check. Copying first means the object validates exactly what it keeps.
+
+**Immutability is as deep as the copying:** `List.copyOf(dates)` gives a list nobody can add to, but if the elements are mutable `java.util.Date` objects, they can still be changed through other references. Prefer immutable element types (`LocalDate`, `String`, records) so a shallow copy is enough.
+
+**Unmodifiable is not immutable:** `Collections.unmodifiableList(list)` is a read-only *view*: it blocks writes through the view, but shows every change made to the underlying list. `List.of(...)` and `List.copyOf(...)` produce lists that nothing can change — though their elements are only as immutable as their own classes.
+
+**"Changing" an immutable value:** Methods return a new object — `s.toUpperCase()`, `date.plusDays(1)`, `money.add(other)` — and the original stays as it was. Ignoring the return value is a classic bug: `s.trim();` on its own does nothing.
+
+**Records:** A `record` is `final`, its fields are `private final`, and it has no setters — but it is only shallowly immutable. A component of type `List` still needs a defensive copy, written in the compact constructor: `nicknames = List.copyOf(nicknames);`.
+
+**Advantages:**
+- Thread-safe with no locking, thanks to final-field semantics, provided `this` doesn't escape the constructor.
+- Safe as `HashMap` keys and `HashSet` elements — the hash code can never change (2.20).
+- Freely shareable and cacheable: no defensive copies are needed when passing one around, and one instance can serve everyone.
+- Valid forever: invariants checked in the constructor can't be broken later.
+
+**Disadvantages:** Every "change" allocates a new object. That is cheap for typical value objects; for many small steps, build with a mutable companion (`StringBuilder` for `String`, a builder) and freeze the result once.
+
+> ⚠️ **Common misconception:** "A class with `final` fields is immutable." Not if a field refers to a mutable object that callers can reach, or if the class can be subclassed. `final` stops reassignment; immutability needs the whole recipe.
+
+> ⚠️ **Common misconception:** "Immutable objects are too slow for real systems." Short-lived allocations are cheap on modern collectors, and immutable objects save the locking and copying mutable shared state needs. `String` is immutable and used everywhere.
+
+**Common mistake:** Returning an internal array from an "immutable" class — `return this.values;`. Arrays are always mutable; return `values.clone()` or store a `List.copyOf` instead.
+
+**Predict it:** With the `Person` class from Foundation (constructor stores `List.copyOf(nicknames)`): `List<String> names = new ArrayList<>(List.of("Sam")); Person p = new Person("Samuel", names); names.add("Sammy");` What is `p.nicknames().size()`, and what does `p.nicknames().add("S")` do?
+
+**`1`, and it throws `UnsupportedOperationException`.** The constructor took its own copy, so later changes to the caller's list don't reach the person, and the copy `List.copyOf` returns can't be modified at all.
+
+**Best intuition:** An immutable object is a printed document: to "edit" it you print a new version, and everyone holding the old one can keep trusting what it says.
+
+**Terminology:** *Immutable*, *defensive copy*, *unmodifiable view*, *value object*, *wither* (a `withX` method returning a modified copy), *failure atomicity*, *shallow vs. deep immutability*.
+
+---
+
+### 2.22 Object Initialization Order
+
+**The problem:** One hierarchy can hold static fields, static blocks, instance fields with initializers, instance blocks and constructors, and each may depend on others having run already — a child's constructor on the parent's fields, an instance block on a static constant. Without one fixed order, every class would be a guessing game. And where the order has a gap, it shows up as an unexpected `null`.
+
+**How it works:** So Java separates two phases that are easy to blur: initializing a *class* and initializing an *object*.
+
+**Class initialization — once per class (per class loader):** Just before a class's first active use — creating an instance, calling a static method, assigning a static field, or reading a static field that isn't a compile-time constant — the JVM initializes it. It first initializes the superclass if that hasn't happened yet, then runs this class's static field initializers and `static` blocks, in the order they appear in the source. *Loading* the class file can happen earlier and runs none of this code.
+
+**Object initialization — on every new:**
+1. Memory for all instance fields, inherited ones included, is allocated and set to defaults (`0`, `false`, `null`).
+2. The chosen constructor starts. If it begins with `this(...)`, that constructor runs first, all the way through these steps, and only the rest of this body remains. Otherwise:
+3. The superclass constructor runs — `super(...)`, explicit or implicit — recursively, all the way up to `Object`.
+4. This class's instance field initializers and instance initializer blocks run, in textual order.
+5. The rest of the constructor body runs.
+
+```mermaid
+flowchart TD
+    A["new Child()"] --> B["Initialize Parent, then Child, if not done yet: static initializers and blocks"]
+    B --> C["Allocate all fields, set defaults"]
+    C --> D["Child() starts: super() first"]
+    D --> E["Parent: field initializers and instance blocks"]
+    E --> F["Parent constructor body"]
+    F --> G["Child: field initializers and instance blocks"]
+    G --> H["Child constructor body"]
+```
+
+**The full order, traced:**
+```java
+class Parent {
+    static { System.out.println("1. Parent static block"); }
+    int p = log("3. Parent field initializer");
+    { System.out.println("4. Parent instance block"); }
+    Parent() {
+        System.out.println("5. Parent constructor");
+        describe();                                  // overridable call — dispatches to Child
+    }
+    void describe() { System.out.println("Parent.describe"); }
+    static int log(String s) { System.out.println(s); return 1; }
+}
+class Child extends Parent {
+    static { System.out.println("2. Child static block"); }
+    String name = "Rex";
+    int c = log("6. Child field initializer");
+    { System.out.println("7. Child instance block"); }
+    Child() {
+        super();
+        System.out.println("8. Child constructor, name=" + name);
+    }
+    @Override void describe() { System.out.println("Child.describe sees name=" + name); }
+}
+
+new Child();
+// 1. Parent static block
+// 2. Child static block
+// 3. Parent field initializer
+// 4. Parent instance block
+// 5. Parent constructor
+// Child.describe sees name=null
+// 6. Child field initializer
+// 7. Child instance block
+// 8. Child constructor, name=Rex
+```
+
+A second `new Child()` prints the same lines except 1 and 2: classes are initialized once.
+
+**The overridable-call trap:** `Parent`'s constructor calls `describe()`, which dispatches to `Child`'s override (2.12) — but `Child`'s field initializers haven't run yet, so `name` is still `null`. The same happens with any overridable method, abstract template steps included. Constructors should call only `private`, `static` or `final` methods.
+
+**Constants don't trigger initialization:** `static final int MAX = 10` is a constant variable that the compiler copies into callers, so reading `Config.MAX` does not initialize `Config` and runs none of its static blocks. A `static final Integer` or any value computed at runtime does.
+
+**Class initialization is thread-safe:** If several threads trigger it at once, one runs the static initializers and the others wait. The lazy "holder" idiom relies on this: a nested `Holder` class with a `static final` instance is initialized — exactly once — the first time `Holder.INSTANCE` is read.
+
+**When a static initializer fails:** The first use throws `ExceptionInInitializerError`, wrapping the cause. The class is then marked erroneous, and every later use throws `NoClassDefFoundError: Could not initialize class …` — without the original cause.
+
+**Advantages:** A deterministic, top-down order: every class can rely on its superclass part being complete and its own static state being ready before its constructor body runs.
+
+**Disadvantages:** The order has one hole — overridable calls from constructors see unset fields — and static initialization happens implicitly, at first use, which makes its failures and costs appear in unexpected places.
+
+> ⚠️ **Common misconception:** "Static blocks run when the class is loaded." They run when the class is *initialized*, on first active use. A class can be loaded long before that, or loaded and never initialized.
+
+> ⚠️ **Common misconception:** "Field initializers run before the constructor is called." They run *inside* the constructor, after the `super(...)` call returns and before the rest of the body — which is why they can rely on inherited state.
+
+**Common mistake:** Calling an overridable or abstract method from a constructor, then getting `NullPointerException` from a subclass whose fields aren't initialized yet. JDK 21's `javac -Xlint:this-escape` warns about such calls in public classes.
+
+**Predict it:** In the traced example, change `Child`'s field to `String name = "Rex";` → `final String name = "Rex";`. Does `Child.describe` still see `null`?
+
+**No — it prints `Rex`.** A `final` field initialized with a compile-time constant is a constant variable, and the compiler replaces reads of it with the value itself, so `describe()` never reads the unset field. Any non-constant initializer — `final String name = computeName();` — would still show `null`. The trap is about *when fields are assigned*; constants just aren't fields the code reads at runtime.
+
+**Best intuition:** Build the house from the foundation up: the class's shared utilities (static setup) are installed once for the whole street, then each house is built floor by floor — parent's floor first — and you don't move furniture into a floor that isn't finished.
+
+**Terminology:** *Class initialization*, *object (instance) initialization*, *static initializer*, *instance initializer block*, *constant variable*, *initialization-on-demand holder*, *`ExceptionInInitializerError`*.
 
 ---
 

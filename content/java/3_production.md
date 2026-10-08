@@ -234,14 +234,25 @@ public int[] getScores() { return Arrays.copyOf(this.scores, this.scores.length)
 - [[#2.1 Classes and Objects]]
 - [[#2.2 Constructors]]
 - [[#2.3 The this and super Keywords]]
-- [[#2.4 Encapsulation]]
-- [[#2.5 Inheritance]]
-- [[#2.6 Polymorphism]]
-- [[#2.7 Abstraction & Abstract Classes]]
-- [[#2.8 Interfaces]]
-- [[#2.9 Access Modifiers]]
-- [[#2.10 Static vs Instance Members]]
-- [[#2.11 The Object Class (equals, hashCode, toString)]]
+- [[#2.4 Static vs Instance Members]]
+- [[#2.5 Encapsulation]]
+- [[#2.6 Inheritance]]
+- [[#2.7 Access Modifiers]]
+- [[#2.8 Composition, Aggregation and Association]]
+- [[#2.9 Method Overloading]]
+- [[#2.10 Method Overriding]]
+- [[#2.11 Overriding vs Hiding]]
+- [[#2.12 Polymorphism]]
+- [[#2.13 Upcasting and Downcasting]]
+- [[#2.14 Abstraction]]
+- [[#2.15 Abstract Classes]]
+- [[#2.16 Interfaces]]
+- [[#2.17 Abstract Class vs Interface]]
+- [[#2.18 The final Keyword]]
+- [[#2.19 The Object Class]]
+- [[#2.20 equals and hashCode]]
+- [[#2.21 Immutability]]
+- [[#2.22 Object Initialization Order]]
 
 ---
 
@@ -250,12 +261,17 @@ public int[] getScores() { return Arrays.copyOf(this.scores, this.scores.length)
 **Best practices:**
 - Favor small, focused classes with a single responsibility (Single Responsibility Principle) — large "god classes" doing everything are a top code-review red flag and a major source of merge conflicts and regressions in shared codebases.
 - Prefer immutable objects (`final` fields, no setters) wherever the domain allows it — dramatically simplifies reasoning in multi-threaded services and eliminates a whole class of state-corruption bugs.
+- Copy deliberately. `Order copy = original;` shares one object; when a caller needs its own, provide a copy constructor or a static factory (`Order.copyOf(original)`) so the intent is visible at the call site.
 
 **Real-world use case:** Domain-driven design (DDD) relies heavily on well-modeled classes (Entities, Value Objects) to represent business concepts directly in code — a `Money` class, not a raw `double`, is the standard example of this in financial systems.
 
-**Memory considerations:** Every object carries a JVM object header overhead (typically 12-16 bytes on 64-bit JVMs with compressed oops) before any field data — at massive scale (millions of small objects), this overhead is a real factor in heap sizing and GC pause time, motivating patterns like object pooling or primitive collections in latency-sensitive systems.
+**Memory considerations:** Every object carries a header before its field data. Its size is a HotSpot detail, not a language rule: on a 64-bit HotSpot JVM it is 12 bytes with compressed class pointers (the default) and 16 without, and JDK 25's opt-in compact object headers (`-XX:+UseCompactObjectHeaders`, JEP 519) shrink it to 8. At massive scale (millions of small objects) this overhead is a real factor in heap sizing and GC time, which motivates primitive collections and flatter data layouts in latency-sensitive systems. Pooling ordinary small objects rarely helps on a modern collector; pool only objects that are genuinely expensive to create, such as connections.
 
-**Common production bugs:** Mutable objects shared across threads without synchronization, leading to visibility/race-condition bugs that are hard to reproduce (full detail in the Concurrency group).
+**Common production bugs:**
+- Mutable objects shared across threads without synchronization, leading to visibility/race-condition bugs that are hard to reproduce (full detail in the Concurrency group).
+- Accidental aliasing: a service caches an object, a caller "edits its copy", and every other request sees the edit — because there was only ever one object.
+
+**Anti-pattern:** Returning `null` from a method that returns an object to mean "nothing found". Every caller must remember the check, and the one that forgets fails far from the cause. Return an empty collection or an `Optional`, or throw.
 
 **Testing advice:** Keep classes small enough to unit test in isolation — a class requiring extensive mocking to test is often a sign it's doing too much (a maintainability smell, not just a testing inconvenience).
 
@@ -264,8 +280,10 @@ public int[] getScores() { return Arrays.copyOf(this.scores, this.scores.length)
 ### 2.2 Constructors
 
 **Best practices:**
-- Prefer **constructor injection** over field/setter injection in Spring — it allows `final` fields, makes required dependencies explicit at the type level, and makes unit testing trivial (no reflection-based mocking framework needed).
+- Validate in the constructor and fail fast. An object that rejects bad arguments at creation never has to be checked again, and the stack trace points at the code that supplied the bad value rather than at a later use.
+- Prefer **constructor injection** over field/setter injection in Spring — it allows `final` fields, makes required dependencies explicit at the type level, and makes unit testing trivial: a test passes collaborators (real, fake or mock) straight to the constructor, with no reflection-based injection.
 - For classes with many optional constructor parameters, use the **Builder pattern** instead of telescoping constructor overloads — far more readable and less error-prone at call sites.
+- Consider a static factory method when a name explains more than a parameter list (`Duration.ofSeconds(5)` and `Duration.ofMillis(5)` say what a bare `new Duration(5)` could not), or when you may want to return a cached instance or a subtype.
 
 > ✅ **Best Practice:**
 ```java
@@ -280,9 +298,11 @@ Pizza pizza = new Pizza.Builder()
     .build();
 ```
 
-**Framework relevance:** Spring strongly recommends constructor injection since version 4.3+ (it became even more ergonomic — no `@Autowired` annotation needed for a single constructor). Lombok's `@RequiredArgsConstructor` is commonly used in production Spring codebases to reduce constructor boilerplate for `final` fields.
+**Framework relevance:** Spring strongly recommends constructor injection since version 4.3+ (it became even more ergonomic — no `@Autowired` annotation needed for a single constructor). Lombok's `@RequiredArgsConstructor` is commonly used in production Spring codebases to reduce constructor boilerplate for `final` fields. Frameworks that create objects reflectively (JPA, Jackson) often need a no-arg constructor — JPA requires one with `public` or `protected` access — which is a common reason to add one deliberately.
 
-**Common production bugs:** Constructors that perform expensive work (network calls, file I/O) — this violates the expectation that object construction is cheap and fast, and can cause surprising latency spikes or failures during dependency-injection container startup.
+**Common production bugs:**
+- Constructors that perform expensive work (network calls, file I/O) — this violates the expectation that object construction is cheap and fast, and can cause surprising latency spikes or failures during dependency-injection container startup.
+- Publishing `this` from a constructor — registering with an event bus, starting a thread that uses the object — so another thread sees the object before its fields are set.
 
 **Anti-pattern:** Calling overridable instance methods from within a constructor — the subclass override may execute before subclass fields are initialized, a real source of `NullPointerException`s in production that's hard to trace back to its root cause.
 
@@ -296,31 +316,55 @@ Pizza pizza = new Pizza.Builder()
 
 **Debugging tips:** When behavior seems to "skip" expected logic in an overridden method, check whether `super.method()` was omitted (a common bug when a new override is added without realizing the parent had important shared logic).
 
-**Common production bugs:** Refactoring a parent class's method — changing internal call order — can silently change subclass behavior anywhere `super.method()` was called, especially if the parent's contract (what it guarantees) was never explicitly documented.
+**Common production bugs:**
+- Refactoring a parent class's method — changing internal call order — can silently change subclass behavior anywhere `super.method()` was called, especially if the parent's contract (what it guarantees) was never explicitly documented.
+- Leaking `this` from a constructor: `eventBus.register(this)` or `executor.submit(this::poll)` inside a constructor lets another thread use the object before its fields are assigned. Register from a factory method or an explicit `start()` after construction instead.
+
+**Real-world use case:** `return this;` is what makes fluent APIs work — builders (`new StringBuilder().append(a).append(b)`) and configuration objects return the current object from each call so calls chain.
 
 ---
 
-### 2.4 Encapsulation
+### 2.4 Static vs Instance Members
+
+**Best practices:** Avoid mutable static state in production services entirely where possible — it's effectively global, shared, mutable state across the whole JVM, and a very common source of race conditions and hard-to-reproduce bugs in concurrent, multi-threaded server applications (e.g., a Spring Boot service handling many requests concurrently). Static is the right choice for constants (`static final` of immutable values), pure functions, and static factory methods.
+
+> ⚠️ **Warning:** A `static` mutable field (a cache, counter, or "current context" holder) in a web service is one of the most common real-world sources of subtle data leakage between concurrent requests — different threads (requests) can silently interfere with each other's state.
+
+**Performance considerations:** Static utility methods (stateless, e.g., `Math.sqrt()`, `StringUtils.isBlank()`) are cheap to call and safe to share across threads — the concern is specifically *mutable* static state, not static methods themselves.
+
+**Scalability concerns:** Static caches without proper eviction/synchronization don't scale safely in high-throughput services — prefer well-tested caching libraries (Caffeine, Guava Cache) or externalized caches (Redis) over ad-hoc static `HashMap` caches.
+
+**Common production bugs:**
+- A static field used as an application-wide cache or singleton without thread-safety, causing rare, hard-to-reproduce data corruption under production load that doesn't show up in single-threaded local testing.
+- A static initializer that reads configuration or opens a connection fails once at startup — and every later use of the class throws `NoClassDefFoundError: Could not initialize class …`, which hides the original cause. Look for the first `ExceptionInInitializerError` in the log; keep static initializers trivial.
+
+**Testing advice:** Static state makes unit tests less isolated — tests can accidentally leak state into each other via shared static fields, causing flaky, order-dependent test failures. Prefer dependency injection over static singletons for anything with meaningful state.
+
+---
+
+### 2.5 Encapsulation
 
 **Best practices:**
 - Default to package-private or `private` visibility, and only widen (`protected`/`public`) when there's a concrete need — this is the "principle of least privilege" applied to API design, and it keeps refactoring options open.
 - Use immutable value objects (or Java `record`s, covered later) for data that shouldn't change after creation — eliminates an entire category of encapsulation-violation bugs from mutable getters returning live internal state.
+- Model operations, not setters. A domain object such as `Order` exposes `addLine`, `cancel` and `ship`, each enforcing its rules; a data-transfer object at the edge of the system can be a transparent `record`. Mixing the two — an entity with a public setter for every column — is how business rules end up scattered across services.
 
-**Security implications:** Encapsulation boundaries are a compile-time convention, not a security boundary — reflection (`setAccessible(true)`) can bypass `private` access entirely. In security-sensitive code, don't rely on encapsulation alone to protect genuinely sensitive data (secrets, keys) — combine it with proper access control, sandboxing, or the Java Platform Module System's stronger encapsulation (covered in the JPMS group).
+**Security implications:** Encapsulation boundaries are a design convention enforced by the compiler and JVM, not a security boundary — reflection (`setAccessible(true)`) can bypass `private` access for classes on the classpath. In security-sensitive code, don't rely on encapsulation alone to protect genuinely sensitive data (secrets, keys) — combine it with proper access control, sandboxing, or the Java Platform Module System's stronger encapsulation (covered in the JPMS group), which refuses reflective access to packages a module does not open.
 
 **Common production bugs:** A getter returning a direct reference to an internal mutable collection (`List`, `Map`) — callers mutate it directly, corrupting the object's internal state in ways that bypass all validation logic. This is a genuinely common, hard-to-trace production bug in codebases with many contributors.
 
-> ⚠️ **Warning:** `return this.items;` on a private `List<Item> items` field is a broken-encapsulation bug hiding in plain sight — always return `Collections.unmodifiableList(items)` or a defensive copy.
+> ⚠️ **Warning:** `return this.items;` on a private `List<Item> items` field is a broken-encapsulation bug hiding in plain sight. Return `List.copyOf(items)` for a snapshot, or `Collections.unmodifiableList(items)` for a read-only view that reflects later changes — and remember that neither stops callers from mutating the `Item` objects themselves if those are mutable.
 
 **Testing advice:** Write tests that specifically attempt to mutate objects returned from getters, to catch encapsulation leaks early — a cheap, high-value test pattern for shared library code.
 
 ---
 
-### 2.5 Inheritance
+### 2.6 Inheritance
 
 **Best practices:**
 - Favor composition over inheritance by default in production system design — inheritance should be reserved for genuine, stable "is-a" relationships that are unlikely to need restructuring later.
 - Document a parent class's overridable methods clearly (what invariants must hold, what order things happen in) if you expect subclassing — undocumented "protected extension points" are a major source of fragile-base-class bugs in large codebases.
+- Design for inheritance or prohibit it. A class not meant to be extended should be `final` (or `sealed` with an explicit `permits` list), so nobody builds on implementation details you never promised.
 
 **Anti-pattern:** Deep inheritance hierarchies (4+ levels) in application/business logic — these are notoriously hard to test, reason about, and safely refactor. Most modern architectural guidance (including Effective Java) favors shallow hierarchies or composition instead.
 
@@ -328,57 +372,13 @@ Pizza pizza = new Pizza.Builder()
 
 **Testing advice:** Subclasses inheriting complex parent behavior often require testing both in isolation *and* integrated with the parent's actual behavior (not just mocked) — pure unit tests can miss bugs that only appear in the full inheritance chain's interaction.
 
-**Common production bugs:** Upgrading a shared parent/base class in a large codebase (or a third-party library) silently changes behavior for every subclass — a classic "fragile base class" incident, especially dangerous in large monorepos or widely-used internal shared libraries.
+**Common production bugs:** Upgrading a shared parent/base class in a large codebase (or a third-party library) silently changes behavior for every subclass — a classic "fragile base class" incident, especially dangerous in large monorepos or widely-used internal shared libraries. Extending a library class you don't own (a collection, an HTTP client) is the riskiest form: its self-use can change in any release.
 
 ---
 
-### 2.6 Polymorphism
+### 2.7 Access Modifiers
 
-**Best practices:** Design method contracts (via interfaces or abstract base classes) so that overriding subclasses can be substituted without surprising callers — this is the essence of the **Liskov Substitution Principle**, a core production design guideline: a subclass should never weaken preconditions or strengthen postconditions in a way that breaks callers relying on the parent's contract.
-
-**Real-world use case:** The Strategy design pattern is polymorphism applied directly to production code — e.g., a payment service with a `PaymentStrategy` interface and multiple implementations (`CreditCardStrategy`, `PayPalStrategy`) selected at runtime based on user choice, without the calling code needing `if/else` chains checking payment type.
-
-**Common production bugs:** Violating the Liskov Substitution Principle — a subclass override that throws an exception the parent's contract never mentioned, or silently does nothing where the parent guaranteed an effect — breaks calling code that was written trusting the parent's documented behavior.
-
-**Debugging tips:** When debugging unexpected behavior in polymorphic code, always check the *actual runtime type* of the object (e.g., via a debugger or `getClass()`), not just the declared/static type visible in the code — the bug is often in a specific override you didn't expect to be invoked.
-
-**Anti-pattern:** Using `instanceof` checks and casting instead of proper polymorphic dispatch (`if (shape instanceof Circle) { ... } else if (shape instanceof Square) { ... }`) — this defeats the purpose of polymorphism, is fragile to new subtypes, and is a common code-smell flagged in reviews.
-
----
-
-### 2.7 Abstraction & Abstract Classes
-
-**Best practices:** Use abstract classes for the **Template Method** design pattern in production — define a fixed algorithm skeleton in the abstract class, with specific steps deferred to subclasses (e.g., a base `DataImportJob` class defining `run() { extract(); transform(); load(); }` where subclasses implement each step differently per data source).
-
-**Real-world use case:** Many framework base classes across the Spring ecosystem use exactly this pattern — providing shared, boilerplate-reducing infrastructure while leaving specific business logic to be implemented by the concrete subclass.
-
-**Maintainability:** Abstract classes work well when the shared logic is genuinely stable, but become a liability if the "shared skeleton" needs frequent changes — every change risks affecting all subclasses simultaneously, unlike more isolated composition-based designs.
-
-**Common production bugs:** Forgetting to call a required setup/teardown method that the abstract parent class's contract implicitly expects (but doesn't enforce via the type system) — a common source of subtle bugs when the parent's documentation is incomplete or out of date.
-
-**Modern recommendations:** For many "template method"-style use cases, modern Java increasingly favors composition with functional interfaces (passing behavior as a lambda/`Function` parameter) over abstract classes, since it avoids the rigidity of a fixed single-inheritance hierarchy — covered further in the Streams/Lambdas group.
-
----
-
-### 2.8 Interfaces
-
-**Best practices:**
-- Design interfaces around the *client's* needs, not the implementation's convenience (Interface Segregation Principle) — many small, focused interfaces are preferred over one large interface with methods most implementers don't need.
-- Use default methods sparingly in production interfaces — they're most appropriate for genuinely optional, backward-compatible additions to an existing widely-implemented interface (their original motivating use case in the JDK collections), not as a general substitute for abstract classes.
-
-**Real-world use case:** Spring's extensive use of interfaces (`Repository`, `Service` layer contracts) enables dependency injection and easy test-double substitution — production code depends on the interface type, and Spring wires in the concrete implementation (or a mock, in tests) at runtime.
-
-**Testing advice:** Programming against interfaces (rather than concrete classes) throughout a codebase is what makes mocking frameworks (Mockito, etc.) practical in unit tests — a class that only accepts concrete types is significantly harder to test in isolation.
-
-**Common production bugs:** Two default methods from unrelated interfaces conflicting when a class implements both — caught at compile time (a forced override), so this is more of a compile-time nuisance than a runtime bug, but it can require awkward resolution code in practice.
-
-**Deprecated approaches to avoid:** Avoid using marker interfaces (empty interfaces with no methods) as a general design tool in new code — annotations are now the preferred, more expressive mechanism for tagging/metadata purposes in modern Java and frameworks.
-
----
-
-### 2.9 Access Modifiers
-
-**Best practices:** Apply the "principle of least privilege" rigorously — start every new field/method as `private`, and only widen visibility when there's a proven, concrete need from calling code. This keeps the true public API surface small and refactorable.
+**Best practices:** Apply the "principle of least privilege" rigorously — start every new field/method as `private`, and only widen visibility when there's a proven, concrete need from calling code. This keeps the true public API surface small and refactorable. Package-private is a good default for classes too: organise packages by feature (`order`, `billing`) rather than by layer, and most classes can then stay invisible outside their feature.
 
 **Maintainability:** A large public API surface (many public methods/fields) is expensive to maintain long-term — every public member is effectively a promise to external callers that changing or removing it may break them. Static analysis tools (e.g., ArchUnit, Checkstyle) are commonly configured in production codebases to flag unnecessarily broad visibility.
 
@@ -388,39 +388,270 @@ Pizza pizza = new Pizza.Builder()
 
 **Common production bugs:** Making a field `public` "temporarily" during a hotfix or prototype, which then gets relied upon elsewhere and becomes very difficult to safely tighten later without a coordinated refactor across the codebase.
 
----
-
-### 2.10 Static vs Instance Members
-
-**Best practices:** Avoid mutable static state in production services entirely where possible — it's effectively global, shared, mutable state across the whole JVM, and a very common source of race conditions and hard-to-reproduce bugs in concurrent, multi-threaded server applications (e.g., a Spring Boot service handling many requests concurrently).
-
-> ⚠️ **Warning:** A `static` mutable field (a cache, counter, or "current context" holder) in a web service is one of the most common real-world sources of subtle data leakage between concurrent requests — different threads (requests) can silently interfere with each other's state.
-
-**Performance considerations:** Static utility methods (stateless, e.g., `Math.sqrt()`, `StringUtils.isBlank()`) are cheap to call and safe to share across threads — the concern is specifically *mutable* static state, not static methods themselves.
-
-**Scalability concerns:** Static caches without proper eviction/synchronization don't scale safely in high-throughput services — prefer well-tested caching libraries (Caffeine, Guava Cache) or externalized caches (Redis) over ad-hoc static `HashMap` caches.
-
-**Common production bugs:** A static field used as an application-wide cache or singleton without thread-safety, causing rare, hard-to-reproduce data corruption under production load that doesn't show up in single-threaded local testing.
-
-**Testing advice:** Static state makes unit tests less isolated — tests can accidentally leak state into each other via shared static fields, causing flaky, order-dependent test failures. Prefer dependency injection over static singletons for anything with meaningful state.
+**Testing advice:** Test through the public API where you can. When a test needs a package-private hook, keep the test in the same package rather than widening the member to `public` — a member made public "for tests" becomes API.
 
 ---
 
-### 2.11 The Object Class (equals, hashCode, toString)
+### 2.8 Composition, Aggregation and Association
 
 **Best practices:**
-- Use an IDE generator, Lombok's `@EqualsAndHashCode`, or (best of all, for simple data carriers) Java `record` types to generate correct `equals()`/`hashCode()`/`toString()` — hand-writing these invites subtle contract violations.
+- Compose services from collaborators passed into the constructor: an `OrderService` HAS-A `OrderRepository` and a `PaymentGateway`, held in `private final` fields. The dependencies are visible in one place, and tests pass fakes through the same constructor.
+- Add cross-cutting behaviour by wrapping, not subclassing. A `CachingPriceService implements PriceService` that holds another `PriceService` can be stacked with retry or metrics wrappers in any order, and none of them depends on another's internals.
+- Keep owned parts private. An aggregate such as `Order` exposes operations (`addLine`, `removeLine`) and read-only snapshots, never its internal list.
+
+**Maintainability:** Avoid reaching through parts — `order.getCustomer().getAddress().getCity()` couples the caller to three classes' structure. Ask the object that has the information (`order.shippingCity()`), so the internal composition can change without touching callers.
+
+**Real-world use case:** Resource ownership follows the aggregation/composition line. A class that *creates* a resource — a connection, an executor, a stream — owns it and must close it, typically by implementing `AutoCloseable`. A class that is *given* one (the shared connection pool, the application's `HttpClient`) merely uses it and must not close it.
+
+**Common production bugs:** A component closes a resource it was handed — the shared pool or client — and every other user fails afterwards with "pool closed" or "executor shut down". The opposite bug leaks: a class creates an executor or client per instance and nothing ever closes it.
+
+**Anti-pattern:** "Base service" superclasses that every service extends to inherit a logger, a repository and some helpers. Each service now depends on all of them, and changing the base class touches the whole codebase. Inject the collaborators each service actually uses instead.
+
+**Testing advice:** Composition makes test seams natural: pass an in-memory implementation of the part's interface rather than mocking a superclass. If a class is hard to test without subclassing it, that usually means a collaborator should become a field.
+
+---
+
+### 2.9 Method Overloading
+
+**Best practices:**
+- Use overloading judiciously (Effective Java, Item 52). Avoid two overloads with the same number of parameters whose types are convertible to each other — callers can't tell which one runs. Different names are clearer: `ObjectOutputStream.writeInt`/`writeLong`, `Duration.ofSeconds`/`ofMillis`.
+- If overloads do exist, make them behave the same when an argument fits both — typically by having one forward to the other — so the choice never matters to the caller.
+- Be careful adding an overload to a published API: a new overload can make existing calls ambiguous (`null` arguments) or silently switch them to the new method on recompilation.
+
+**Common production bugs:**
+- `List<Integer>.remove(i)` removing by index instead of by value — it compiles, passes tests that happen to use small lists, and deletes the wrong record in production.
+- `Arrays.asList(intArray)` producing a one-element `List<int[]>`, so a `contains` check is always false.
+- An overload taking a primitive (`setTimeout(long)`) called with a null wrapper from a config object, throwing `NullPointerException` during unboxing far from where the value went missing.
+
+**Maintainability:** Overloads that take `Object` alongside specific types (`log(Object)`, `log(String)`) are especially fragile — which one runs depends on the declared type at each call site, so refactoring a variable's type can change behaviour without any error.
+
+**Anti-pattern:** Overloads that differ in meaning, not just input — `delete(long id)` deletes by key while `delete(Long id)` deletes "matching" records. Boxing decides which one runs. Give different behaviours different names.
+
+---
+
+### 2.10 Method Overriding
+
+**Best practices:**
+- Put `@Override` on every overriding and implementing method; most teams enforce it with Checkstyle or Error Prone. It turns a renamed parent method or a mistyped parameter into a compile error instead of a silent behaviour change.
+- Honour the parent's contract, not just its signature. The compiler checks types, access and checked exceptions; it cannot check that an override still does what the parent promised (no new preconditions, no weaker results — the Liskov Substitution Principle, 2.12).
+- Make methods `final` (or the class `final`) when overriding them would break an invariant, and document the ones meant to be overridden — what they're called for, and what they may and may not do.
+
+**Common production bugs:**
+- A parent method is `synchronized` but the override isn't, so the subclass silently loses the parent's thread-safety — overrides don't inherit `synchronized`.
+- A subclass "override" that stopped overriding after the parent method's signature changed in a library upgrade — without `@Override`, the old method just stops being called.
+- `equals(MyType)` written as an overload, so `HashSet`, `List.contains` and JPA dirty checking all use identity equality.
+
+**Framework relevance:** Subclass-based proxies (CGLIB, used by Spring for `@Transactional` and `@Cacheable` on classes) work by overriding your methods. A `final` or `private` method can't be overridden, so the proxy can't intercept it and the annotation is silently ignored.
+
+**Debugging tips:** When a method "isn't being called", check which class actually declares the running version — the debugger's step-into or a stack trace shows it. An override in a subclass, or a missing one, is often the answer.
+
+---
+
+### 2.11 Overriding vs Hiding
+
+**Best practices:**
+- Always call static members through the class name (`Parent.kind()`), never through a variable. Enable `javac -Xlint:static` or the equivalent IDE inspection so instance-qualified static access is flagged.
+- Don't redeclare inherited fields. If subclasses need a different value, pass it to the parent's constructor or expose it through an overridable (or abstract) method — behaviour dispatches, fields don't.
+- Keep fields `private` (2.5). A private field can't be hidden by accident in a way that confuses callers, because nobody outside the class can name it.
+
+**Common production bugs:** A subclass redeclares a configuration field (`timeoutSeconds`, `maxRetries`, `logger`) to customise it. The subclass's own methods use the new value, the inherited ones use the old, and the class behaves inconsistently depending on which code path runs. Static analysis tools such as SonarQube flag fields that hide a parent's field.
+
+**Maintainability:** Same-named static factories in a parent and child class (`Shape.of(...)` and `Circle.of(...)`) are fine when always called through the class name — and confusing when called any other way. Prefer distinct names when the methods do different things.
+
+**Debugging tips:** When a value looks right in one method and stale in another, check whether the class declares a field with the same name as one in a superclass — debuggers show both fields on the object, often as `name` and `Parent.name`.
+
+---
+
+### 2.12 Polymorphism
+
+**Best practices:** Design method contracts (via interfaces or abstract base classes) so that overriding subclasses can be substituted without surprising callers — this is the essence of the **Liskov Substitution Principle**, a core production design guideline: a subclass must not strengthen preconditions (demand more of callers than the parent did) or weaken postconditions (promise less than the parent did). It may accept more and promise more.
+
+**Real-world use case:** The Strategy design pattern is polymorphism applied directly to production code — e.g., a payment service with a `PaymentStrategy` interface and multiple implementations (`CreditCardStrategy`, `PayPalStrategy`) selected at runtime based on user choice, without the calling code needing `if/else` chains checking payment type.
+
+**Common production bugs:** Violating the Liskov Substitution Principle — a subclass override that throws an exception the parent's contract never mentioned, or silently does nothing where the parent guaranteed an effect — breaks calling code that was written trusting the parent's documented behavior. The JDK shows the trade-off: `List.add` is documented as an *optional* operation precisely so that read-only lists (`List.of(...)`) can throw `UnsupportedOperationException` without breaking the contract — which moves the failure to runtime for any method that receives one as "a `List`" and adds to it.
+
+**Debugging tips:** When debugging unexpected behavior in polymorphic code, always check the *actual runtime type* of the object (e.g., via a debugger or `getClass()`), not just the declared/static type visible in the code — the bug is often in a specific override you didn't expect to be invoked.
+
+**Anti-pattern:** Using `instanceof` checks and casting instead of proper polymorphic dispatch over an open hierarchy (`if (shape instanceof Circle) { ... } else if (shape instanceof Square) { ... }`) — this defeats the purpose of polymorphism, is fragile to new subtypes, and is a common code-smell flagged in reviews. The exception is a *closed* set of types: over a `sealed` interface, a Java 21 `switch` with type patterns is exhaustive — the compiler reports any subtype you forgot — so it is a sound design when the operation doesn't belong inside the types.
+
+**Performance considerations:** Polymorphic calls are not a performance problem in typical services — the JIT inlines call sites that see one or two receiver classes. Measure before replacing an interface call with a type switch "for speed".
+
+---
+
+### 2.13 Upcasting and Downcasting
+
+**Best practices:**
+- Upcast freely at boundaries: declare parameters, fields and return types as the most general type that offers what you need (`List`, not `ArrayList`; `PaymentMethod`, not `CardPayment`).
+- Avoid downcasting in business code. When you need subtype behaviour, add a method to the supertype; when the set of subtypes is closed, model it as a `sealed` interface and use an exhaustive `switch` with type patterns.
+- When a downcast is unavoidable — framework callbacks, `Object` parameters, deserialized payloads — always pair it with `instanceof` pattern matching and handle the "none of the above" case explicitly.
+
+**Common production bugs:**
+- A new subtype reaches code that blindly downcasts (`(OrderEvent) event`), and a feature that has nothing to do with the new type starts failing with `ClassCastException`.
+- ORM lazy-loading proxies: a lazily loaded reference to an entity in an inheritance hierarchy can be a proxy of the *base* class, so `(CardPayment) order.getPayment()` fails even though the row is a card payment. Load the concrete entity or unwrap the proxy rather than casting.
+- Unchecked generic casts (`(List<Order>) cache.get(key)`) that compile with a warning and fail later, far from the cast, when an element of the wrong type is read.
+
+**Maintainability:** Each downcast is a hidden dependency on a concrete subtype. Grep for casts when reviewing a hierarchy change — they are where new subtypes break things.
+
+**Modern recommendations:** Prefer `if (x instanceof Foo foo)` over `if (x instanceof Foo) { Foo foo = (Foo) x; … }` — the pattern form can't get out of sync with its check — and prefer a pattern `switch` over a sealed type to a chain of `instanceof` tests (Modern Features group).
+
+---
+
+### 2.14 Abstraction
+
+**Best practices:**
+- Abstract at boundaries that change independently of your core logic: persistence, messaging, external APIs, clocks and randomness. Name the operations in domain terms (`findOverdueInvoices()`), not in the technology's terms (`selectWhereDueDateLessThanNow()`).
+- Make failures part of the abstraction. Translate low-level exceptions (`SQLException`, an HTTP client's timeout) into ones that mean something to the caller (`PaymentDeclinedException`, `PriceUnavailableException`); otherwise the abstraction leaks its implementation through every `catch` block.
+- Start concrete inside a module. Extract an interface when a second implementation, a test double that can't be built otherwise, or a module boundary actually appears — renaming a class to an interface later is a cheap refactoring.
+
+**Common production bugs:** A leaky abstraction hiding cost — an entity getter that silently triggers a database query per call (the N+1 problem), or a "local" method that makes a remote call inside a loop. The code looks innocent because the abstraction hides exactly the detail that matters at scale.
+
+**Maintainability:** Layers that only forward (`Controller → Service → Manager → Repository`, each method a one-line pass-through) add files and stack frames without hiding anything. Each layer should own a decision; if it doesn't, merge it.
+
+**Real-world use case:** Hexagonal ("ports and adapters") architecture is abstraction applied to a whole service: the core declares interfaces such as `PaymentPort` in its own vocabulary, and adapters implement them for Stripe, a database or a message broker. The core can then be tested without any infrastructure.
+
+**Testing advice:** A good abstraction is easy to fake. If a test double for an interface needs to reproduce SQL behaviour or HTTP status codes, the abstraction is exposing implementation details and should be raised to the domain's level.
+
+---
+
+### 2.15 Abstract Classes
+
+**Best practices:**
+- Use abstract classes for the **Template Method** design pattern in production — define a fixed algorithm skeleton in the abstract class, with specific steps deferred to subclasses (e.g., a base `DataImportJob` class defining `run() { extract(); transform(); load(); }` where subclasses implement each step differently per data source). Declare the skeleton method `final` so no subclass can reorder or skip the steps.
+- Keep the extension surface small and explicit: `abstract` for steps every subclass must supply, `protected` hook methods with empty defaults for optional ones, and `private` for everything else.
+- Give the abstract class `protected` constructors that validate shared fields, so every subclass object starts with the base class's invariants in place.
+
+**Real-world use case:** Many framework base classes across the Spring ecosystem use exactly this pattern — providing shared, boilerplate-reducing infrastructure while leaving specific business logic to be implemented by the concrete subclass. The JDK's `AbstractList` and `AbstractMap` are *skeletal implementations*: extend one and implement two or three methods to get a complete collection.
+
+**Maintainability:** Abstract classes work well when the shared logic is genuinely stable, but become a liability if the "shared skeleton" needs frequent changes — every change risks affecting all subclasses simultaneously, unlike more isolated composition-based designs.
+
+**Common production bugs:** Forgetting to call a required setup/teardown method that the abstract parent class's contract implicitly expects (but doesn't enforce via the type system) — a common source of subtle bugs when the parent's documentation is incomplete or out of date. A `final` template method that calls setup and teardown itself removes the possibility.
+
+**Modern recommendations:** For many "template method"-style use cases, modern Java increasingly favors composition with functional interfaces (passing behavior as a lambda/`Function` parameter) over abstract classes, since it avoids the rigidity of a fixed single-inheritance hierarchy — covered further in the Streams/Lambdas group.
+
+---
+
+### 2.16 Interfaces
+
+**Best practices:**
+- Design interfaces around the *client's* needs, not the implementation's convenience (Interface Segregation Principle) — many small, focused interfaces are preferred over one large interface with methods most implementers don't need.
+- Use default methods sparingly in production interfaces — they're most appropriate for genuinely optional, backward-compatible additions to an existing widely-implemented interface (their original motivating use case in the JDK collections), not as a general substitute for abstract classes.
+- Introduce an interface where it buys something: several implementations, a module or service boundary, or a dependency you want to replace in tests with a hand-written fake. A single implementation inside one module is usually better injected as a concrete class.
+
+**Real-world use case:** Interfaces at architectural boundaries — `PaymentGateway`, `OrderRepository`, `Clock` — let the core code depend on a contract while the infrastructure behind it changes. Spring wires in whichever implementation is configured (or a test double in tests). Spring doesn't *require* interfaces for injection, though — it injects concrete classes just as well — so add them for the boundary, not for the container.
+
+**Testing advice:** Interfaces make hand-written fakes and in-memory implementations easy, which often gives clearer tests than mocks. They are not needed for mocking: Mockito mocks concrete classes, and since Mockito 5 its default inline mock maker mocks `final` classes too. A class that is hard to test usually has too many dependencies, not too few interfaces.
+
+**Common production bugs:** Two default methods from unrelated interfaces conflicting when a class implements both — caught at compile time (a forced override), so this is more of a compile-time nuisance than a runtime bug, but it can require awkward resolution code in practice. A subtler one: a default method added to a library interface silently takes effect in every implementation that didn't override it, including ones whose state it doesn't understand (a synchronized collection whose new default method isn't synchronized).
+
+**Deprecated approaches to avoid:** The "constant interface" — an interface holding only constants, implemented by classes to get unqualified access to them. It leaks those constants into every implementing class's public API; use a `final` class with a private constructor and `import static` instead. Marker interfaces themselves (no methods, such as `Serializable`) are still a sound tool when you want a *type* the compiler can check — a method can accept only marked objects. Prefer an annotation when marking methods or fields, or when the mark is metadata for a framework rather than a type (Effective Java, Item 41).
+
+---
+
+### 2.17 Abstract Class vs Interface
+
+**Best practices:**
+- Define types as interfaces, especially at boundaries other teams implement or depend on (Effective Java, Item 20: prefer interfaces to abstract classes). Offer an abstract skeletal implementation alongside when implementing the interface from scratch is tedious.
+- Reach for an abstract class when the shared part is *state and its invariants* — an entity base with a validated identifier, a job base with a fixed lifecycle — not merely a few shared helper methods, which can live in default methods or a composed helper.
+- Keep abstract base classes shallow and few. One level of abstract base per family is usually enough; more becomes the deep hierarchy problem from 2.6.
+
+**Real-world use case:** A closed domain model often uses neither hierarchy style alone: a `sealed interface PaymentMethod permits Card, BankTransfer, Wallet` with `record` implementations gives a fixed set of immutable types, and an exhaustive `switch` over them handles each case (Modern Features group).
+
+**Maintainability:** Interfaces are easier to evolve for *callers* but harder for *implementers*: an added abstract method breaks every implementation, and an added default method changes behaviour in all of them. Abstract classes are the reverse — you can add concrete methods freely, but every subclass is bound to your implementation. Choose based on who you expect to change more.
+
+**Anti-pattern:** A "base class for everything" — `AbstractService`, `BaseController` — used to share utilities rather than model a family. It forces every class into one hierarchy, and every change to it touches them all. Inject the utilities instead (2.8).
+
+**Testing advice:** Tests should depend on the interface, so the same test suite can be run against every implementation (a contract test). Abstract base classes for *test* fixtures are a reasonable exception: a shared abstract test class whose abstract method creates the implementation under test.
+
+---
+
+### 2.18 The final Keyword
+
+**Best practices:**
+- Make every field `final` unless it genuinely changes. Constructor-injected dependencies (`private final OrderRepository repository;`) are the everyday case: the compiler guarantees each is set once, and the object can't be left half-wired.
+- Make value classes and utility classes `final`. A value type such as `Money` stays trustworthy only if nobody can subclass it into something mutable; a utility class with a private constructor and `final` can't be instantiated or extended by accident.
+- Expose library constants that might change through a method (`static int defaultTimeout()`), not a `public static final int`, so callers pick up new values without recompiling.
+
+**Framework relevance:** Subclass-based proxies need non-final classes and methods. Spring's CGLIB proxies — behind `@Transactional`, `@Cacheable` and `@Configuration` classes — can't subclass a `final` class (startup fails) and can't override a `final` method (the annotation is silently ignored on that method). Hibernate likewise needs non-final entity classes and methods to create lazy-loading proxies.
+
+**Common production bugs:**
+- A `final` field holding a mutable collection exposed through a getter, mistaken for read-only.
+- A changed constant in a shared library that half the services still see with its old value, because only some were rebuilt.
+- `@Transactional` on a `final` method of a Spring bean: the proxy can't intercept it, so no transaction starts and nothing reports the problem.
+
+**Maintainability:** `final` on locals and parameters is a style choice — useful in long methods, noise in short ones. Teams usually agree on one convention and let the IDE apply it; what matters is `final` on fields.
+
+---
+
+### 2.19 The Object Class
+
+**Best practices:**
 - Override `toString()` on all meaningful domain objects — dramatically improves log readability and debugging speed in production incident response, where you're often staring at logged object dumps under time pressure.
+- Copy with a copy constructor or a static factory (`Order.copyOf(other)`), not `clone()`, so the copy runs constructor validation and you decide how deep it goes.
+- Release resources with `AutoCloseable` and try-with-resources. Never override `finalize()`; treat `Cleaner` as a last-resort safety net, not the cleanup mechanism.
 
 **Security implications:** Be careful not to include sensitive fields (passwords, tokens, PII) in an overridden `toString()` — since logging frameworks frequently call `toString()` implicitly (e.g., logging an exception with an object as context), an unguarded `toString()` is a common, real source of sensitive data leaking into logs.
 
 > ⚠️ **Warning:** `toString()` on an entity with a `password` or `ssn` field, used carelessly in logging statements, is a genuine, recurring compliance/security issue in production codebases — audit domain objects for this specifically.
 
-**Common production bugs:** Overriding `equals()` without `hashCode()` on an entity later stored in a `HashSet`/`HashMap` (or used as a cache key) — this passes code review and local testing easily, then causes "missing" entries in production only once real, larger datasets with hash collisions are involved.
+**Common production bugs:**
+- A generated `toString()` (Lombok `@ToString`, IDE templates) on a JPA entity walks lazy associations, triggering extra queries — or a `LazyInitializationException` outside a transaction, or infinite recursion between two entities that reference each other. Exclude associations from entity `toString()`.
+- Code comparing `obj.getClass() == Order.class` fails for framework proxies, whose runtime class is a generated subclass.
 
-**Testing advice:** Use dedicated contract-testing libraries (e.g., `EqualsVerifier`) in unit tests to programmatically verify `equals()`/`hashCode()` satisfy the full formal contract (reflexive, symmetric, transitive, consistent) — this catches subtle violations that manual test cases often miss.
+**Modern recommendations:** For data carriers, Java `record` types (Java 16+) generate `toString()`, `equals()` and `hashCode()` from their components (Modern Features group) — redact sensitive components by overriding `toString()` in the record.
 
-**Modern recommendations:** For simple immutable data carriers, prefer Java `record` types (Java 16+) over hand-written classes — records auto-generate a correct `equals()`, `hashCode()`, and `toString()` for free, removing this entire bug category (full detail in the Modern Java Features group).
+---
+
+### 2.20 equals and hashCode
+
+**Best practices:**
+- Use an IDE generator, Lombok's `@EqualsAndHashCode`, or (best of all, for simple data carriers) Java `record` types to generate correct `equals()`/`hashCode()` — hand-writing these invites subtle contract violations.
+- Base equality on what identifies the object. Value objects (`Money`, `Address`) compare all their fields; entities compare their identity. For JPA entities, avoid all-field equality and generated `@Data`/`@EqualsAndHashCode` — they touch lazy associations and change when fields change. A common pattern compares the database ID when both are non-null and returns a constant `hashCode()`, which stays stable before and after the entity is saved.
+- Make classes used as map keys or set elements immutable, or at least never mutate the fields their `hashCode` uses while they are stored.
+
+**Common production bugs:** Overriding `equals()` without `hashCode()` on an entity later stored in a `HashSet`/`HashMap` (or used as a cache key). It passes code review and tests that look up the same instance they inserted — that instance's identity hash matches — then fails in production as soon as a logically equal *new* instance is used: one re-read from the database or built from a request has a different identity hash, so the lookup searches the wrong bucket and misses. Duplicates appear and cache hits vanish at any data size.
+
+**Testing advice:** Use dedicated contract-testing libraries (e.g., `EqualsVerifier`) in unit tests to programmatically verify `equals()`/`hashCode()` satisfy the full formal contract (reflexive, symmetric, transitive, consistent, non-null) — this catches subtle violations that manual test cases often miss.
+
+**Modern recommendations:** For simple immutable data carriers, prefer Java `record` types (Java 16+) over hand-written classes — records auto-generate a correct `equals()`, `hashCode()`, and `toString()` for free, removing this entire bug category (full detail in the Modern Java Features group). Watch for array components, which records compare by identity; store a `List` instead, or override `equals` and `hashCode`.
+
+---
+
+### 2.21 Immutability
+
+**Best practices:**
+- Make value objects and DTOs immutable — `Money`, `Address`, request and response bodies, events, configuration. Records are the default tool; Jackson and most modern frameworks construct them directly.
+- Use `java.time` (`Instant`, `LocalDate`) instead of the mutable `Date` and `Calendar`, so date fields need no defensive copies.
+- Return immutable collections from APIs (`List.copyOf`, `Map.copyOf`) and accept any collection as input, copying it on the way in.
+- Share immutable objects freely — a single `static final` instance of an immutable configuration or lookup table is safe for every request thread.
+
+**Real-world use case:** Events and messages. An `OrderPlaced` event passed to several listeners, queued, logged and retried must look the same to all of them; if one listener could mutate it, the others would process a different event than the one that was published.
+
+**Common production bugs:**
+- A "read-only" configuration object whose getter returns its internal `Map`, which one component modifies at runtime — changing behaviour for every other component.
+- A record holding a `List` built by the caller, which the caller keeps adding to after handing it over.
+- Mutable objects used as cache keys, which are lost once mutated (2.20).
+
+**Performance considerations:** Allocation of short-lived immutable objects is cheap on modern collectors, and immutable objects avoid the locks, copies and cache invalidation that shared mutable state needs. Where a hot path performs thousands of incremental changes, build with a mutable builder and freeze once.
+
+**Maintainability:** Not everything should be immutable. Entities with a lifecycle — an `Order` that is placed, paid and shipped — are naturally mutable, and JPA expects that; protect them with encapsulation (2.5) instead. Keep the immutable/mutable split deliberate: values immutable, entities encapsulated.
+
+---
+
+### 2.22 Object Initialization Order
+
+**Best practices:**
+- Keep constructors to assignment and validation. Call only `private`, `static` or `final` methods from them, so no subclass code runs against a half-built object.
+- Keep static initializers trivial — constants and pure computation. Configuration, files, network and database access belong in objects created at startup by the application (or its dependency-injection container), where failures are reported clearly and can be retried.
+- For an expensive lazily-created singleton, use the holder idiom: `private static class Holder { static final Service INSTANCE = new Service(); }` — the JVM's class-initialization guarantee makes it lazy and thread-safe without locks.
+
+**Common production bugs:**
+- `NoClassDefFoundError: Could not initialize class …` on every request after one transient failure in a static initializer (a config file that wasn't mounted yet, a DNS lookup). The real cause is the first `ExceptionInInitializerError` in the log; the class stays unusable until the JVM restarts.
+- A subclass override invoked from a framework base class's constructor reads its own `@Autowired` or initialized fields as `null`.
+- Class-initialization deadlock at startup: two classes whose static initializers reference each other, first touched from two different threads, each waiting for the other to finish initializing.
+
+**Debugging tips:** When a value is unexpectedly `null` or `0` inside a method that "can't" see it unset, check whether the method was called from a superclass constructor. `javac -Xlint:this-escape` (JDK 21+) flags constructors that let `this` escape to overridable methods.
+
+**Performance considerations:** Class initialization runs on first use, so heavy static setup shows up as latency on the first request that touches the class. Warm critical paths at startup, or make the work lazy and explicit.
 
 ---
 

@@ -146,114 +146,505 @@ Packages exist to avoid naming collisions (two classes named `List` from differe
 - [[#2.1 Classes and Objects]]
 - [[#2.2 Constructors]]
 - [[#2.3 The this and super Keywords]]
-- [[#2.4 Encapsulation]]
-- [[#2.5 Inheritance]]
-- [[#2.6 Polymorphism]]
-- [[#2.7 Abstraction & Abstract Classes]]
-- [[#2.8 Interfaces]]
-- [[#2.9 Access Modifiers]]
-- [[#2.10 Static vs Instance Members]]
-- [[#2.11 The Object Class (equals, hashCode, toString)]]
+- [[#2.4 Static vs Instance Members]]
+- [[#2.5 Encapsulation]]
+- [[#2.6 Inheritance]]
+- [[#2.7 Access Modifiers]]
+- [[#2.8 Composition, Aggregation and Association]]
+- [[#2.9 Method Overloading]]
+- [[#2.10 Method Overriding]]
+- [[#2.11 Overriding vs Hiding]]
+- [[#2.12 Polymorphism]]
+- [[#2.13 Upcasting and Downcasting]]
+- [[#2.14 Abstraction]]
+- [[#2.15 Abstract Classes]]
+- [[#2.16 Interfaces]]
+- [[#2.17 Abstract Class vs Interface]]
+- [[#2.18 The final Keyword]]
+- [[#2.19 The Object Class]]
+- [[#2.20 equals and hashCode]]
+- [[#2.21 Immutability]]
+- [[#2.22 Object Initialization Order]]
 
 ---
 
 ### 2.1 Classes and Objects
 
-A class is a blueprint describing what data (fields) and behavior (methods) something has. An object is a concrete instance created from that blueprint using `new`.
+A program that tracks dogs needs each dog's data and the code that works on it kept together. A class is a blueprint describing what data (fields) and behavior (methods) something has. An object is a concrete instance created from that blueprint using `new`.
 
 Classes exist because real-world modeling needs data and the logic that operates on it to travel together, instead of being scattered across unrelated functions and variables.
+
+A variable of a class type never holds the object itself — it holds a **reference** that leads to the object. `Dog rex;` creates a variable and no dog; only `new` creates an object. Two variables can refer to the same object, and a variable that refers to no object holds `null`.
 
 ```java
 class Dog {
     String name;
     void bark() { System.out.println(name + " says woof"); }
 }
-Dog rex = new Dog();
+Dog rex = new Dog();   // new creates the object; rex holds a reference to it
 rex.name = "Rex";
-rex.bark();
+rex.bark();            // Rex says woof
+
+Dog same = rex;        // copies the reference, not the dog — still one object
+same.name = "Max";
+rex.bark();            // Max says woof
 ```
 
 ---
 
 ### 2.2 Constructors
 
-A constructor is a special block of code that runs automatically when an object is created, used to set up its starting state.
+An object straight out of `new` has only default values — `0`, `false`, `null` — and most objects are meaningless that way. A constructor is a special block of code that runs automatically when an object is created with `new`, used to set up its starting state. It has the class's name and no return type.
 
-Constructors exist so an object can never exist in a broken, half-set-up state — every object is guaranteed to pass through its constructor before anyone can use it.
+Constructors exist so a class has one place to put every new object into a valid starting state: they run as part of normal object creation, which is why they are where a class checks its arguments and establishes its rules (its *invariants*). If you write no constructor at all, the compiler supplies an empty no-argument one, called the **default constructor**.
+
+```java
+class Dog {
+    String name;
+    Dog(String name) {                 // constructor: same name as the class, no return type
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("name required");
+        this.name = name;
+    }
+}
+Dog rex = new Dog("Rex");              // runs the constructor
+```
 
 ---
 
 ### 2.3 The this and super Keywords
 
-`this` refers to the current object; `super` refers to the parent class an object inherits from.
+Inside a class's own code you often need to name the object the code is running on — and, in a class that extends another (2.6), to reach the version of a member the parent class provides. `this` refers to the current object. `super` reaches the parent-class part of that same object: `super.method()` runs the parent's version of a method, and `super(...)` calls a parent constructor. There is still only one object — `super` is not a second one.
 
 They exist to resolve naming conflicts (like a constructor parameter sharing a name with a field) and to let a subclass explicitly reach up into its parent's constructor or methods.
 
----
-
-### 2.4 Encapsulation
-
-Encapsulation means bundling data together with the methods that operate on it, and hiding the internal details behind a controlled public interface.
-
-It exists to protect an object's internal state from being changed in invalid, unexpected ways by code outside the class.
-
----
-
-### 2.5 Inheritance
-
-Inheritance lets one class (the child/subclass) reuse and extend the fields and methods of another class (the parent/superclass).
-
-It exists to avoid duplicating shared logic across closely related classes — common behavior is written once in a parent and shared downward.
-
----
-
-### 2.6 Polymorphism
-
-Polymorphism means the same method call can produce different behavior depending on the actual object type at runtime.
-
-It exists so code can work generically with a whole family of related types, without needing to know or check each object's exact class.
+```java
+class Animal {
+    void describe() { System.out.println("An animal"); }
+}
+class Dog extends Animal {
+    String name;
+    Dog(String name) {
+        super();            // parent constructor runs first
+        this.name = name;   // this.name is the field; name is the parameter
+    }
+    @Override
+    void describe() {
+        super.describe();   // the parent's version, on this same object
+        System.out.println("and its name is " + name);
+    }
+}
+```
 
 ---
 
-### 2.7 Abstraction & Abstract Classes
+### 2.4 Static vs Instance Members
 
-Abstraction means exposing only what's necessary and hiding the complexity underneath. An abstract class is a class that can't be instantiated directly and can leave some methods unimplemented for subclasses to fill in.
+Some data describes one object and some describes the class as a whole — and a counter of all dogs stored inside each dog would give a different count per dog. An instance member belongs to each individual object; a static member belongs to the class itself and is shared by every instance.
 
-It exists to define a shared template while forcing every subclass to supply its own specific details.
+They exist because some data is naturally per-object (a dog's name) while other data is naturally shared across all objects (how many dogs have been created in total). Because a static method runs without any particular object, it has no `this` and cannot use instance fields directly.
 
----
+```java
+class Dog {
+    static int created = 0;  // one copy, shared by the class
+    String name;             // one copy per Dog object
 
-### 2.8 Interfaces
+    Dog(String name) { this.name = name; created++; }
 
-An interface is a contract that lists what methods a class must implement, without dictating how.
-
-It exists to let unrelated classes agree to behave the same way (implement the same contract), enabling flexible, decoupled designs.
-
----
-
-### 2.9 Access Modifiers
-
-Access modifiers (`public`, `protected`, `private`, and package-private/default) control which parts of a program are allowed to see or use a class, field, or method.
-
-They exist to enforce encapsulation at the language level, so accidental or unwanted access from unrelated code is a compile error, not a runtime surprise.
-
----
-
-### 2.10 Static vs Instance Members
-
-An instance member belongs to each individual object; a static member belongs to the class itself and is shared by every instance.
-
-They exist because some data is naturally per-object (a dog's name) while other data is naturally shared across all objects (how many dogs have been created in total).
+    static int count() {
+        return created;      // fine: static
+        // return name.length();  // compile error: which dog's name?
+    }
+}
+new Dog("Rex"); new Dog("Max");
+System.out.println(Dog.count()); // 2
+```
 
 ---
 
-### 2.11 The Object Class (equals, hashCode, toString)
+### 2.5 Encapsulation
 
-Every class in Java automatically inherits from `Object`, which provides default behavior for comparing objects (`equals`), hashing them (`hashCode`), and describing them as text (`toString`).
+If any code anywhere can write `account.balance = -500`, no rule about balances can ever be relied on. Encapsulation means bundling data together with the methods that operate on it, and hiding the internal details behind a controlled public interface.
 
-This exists so every object — no matter its type — has some baseline behavior for these universal operations, which a class can override to make more meaningful.
+It exists to protect an object's internal state from being changed in invalid, unexpected ways by code outside the class. The usual mechanism is `private` fields plus methods that express what callers may *do* — `withdraw(amount)`, not `setBalance(anything)` — so every change passes through code that checks the rules. Generating a getter and a setter for every field is not encapsulation: it lets callers change anything, just more verbosely.
 
-> 💡 **Tip:** `==` compares object references by default; `.equals()` is what you override to compare actual content.
+```java
+class BankAccount {
+    private BigDecimal balance = BigDecimal.ZERO;   // nobody outside can touch it directly
+
+    void withdraw(BigDecimal amount) {
+        if (amount.signum() <= 0) throw new IllegalArgumentException("amount must be positive");
+        if (amount.compareTo(balance) > 0) throw new IllegalStateException("insufficient funds");
+        balance = balance.subtract(amount);         // the only way the balance goes down
+    }
+}
+```
+
+---
+
+### 2.6 Inheritance
+
+Code that works with "any animal" needs dogs and cats to *be* animals — usable anywhere an `Animal` is expected. Inheritance lets one class (the child/subclass) declare that it **is a** kind of another class (the parent/superclass) with `extends`: the subclass gets the parent's accessible fields and methods, can add its own, and can override the parent's methods.
+
+It exists to model genuine IS-A relationships — a `Dog` *is an* `Animal` — so that a subclass object can be used wherever the parent type is expected (polymorphism, 2.12). Reusing the parent's code comes along with that, but reuse alone is not a reason to inherit: if "is a" isn't true, use composition (2.8). A Java class extends exactly one class; every class without `extends` extends `Object`.
+
+```java
+class Animal {
+    void eat() { System.out.println("Eating..."); }
+}
+class Dog extends Animal {            // a Dog IS-A Animal
+    void bark() { System.out.println("Woof"); }
+}
+Animal pet = new Dog();               // allowed: every Dog is an Animal
+pet.eat();                            // inherited from Animal
+```
+
+---
+
+### 2.7 Access Modifiers
+
+Encapsulation needs a way to say "only this class may touch this field". Access modifiers (`public`, `protected`, `private`, and package-private/default) control which parts of a program are allowed to see or use a class, field, method, or constructor.
+
+They exist to enforce encapsulation at the language level, so accidental or unwanted access from unrelated code is a compile error, not a runtime surprise. From narrowest to widest: `private` (this class only), package-private — no keyword — (this package), `protected` (this package *plus* subclasses elsewhere), `public` (everyone).
+
+```java
+package com.shop;
+
+public class Order {
+    private long totalCents;          // only code inside Order
+    String status;                    // package-private: any class in com.shop
+    protected void recalculate() {}   // com.shop, plus subclasses in other packages
+    public long total() { return totalCents; }  // anyone
+}
+```
+
+---
+
+### 2.8 Composition, Aggregation and Association
+
+A `Car` is not a kind of `Engine`, but it needs one. **Composition** means building a class out of other objects it holds in fields — a **HAS-A** relationship — instead of inheriting from them (**IS-A**, 2.6). The class delegates work to those parts by calling their methods.
+
+Design vocabulary names three strengths of HAS-A: **association** (one object knows or uses another — a `Driver` and a `Car`), **aggregation** (a whole groups parts that can exist without it — a `Team` and its `Player`s) and **composition** (the whole owns parts that live and die with it — an `Order` and its `OrderLine`s). Java has one mechanism for all three — a field holding a reference — so the difference lies in how the class treats the part, not in syntax. "Composition over inheritance" means: when you only want another class's behaviour, hold an instance of it rather than extend it.
+
+```java
+class Engine {
+    void start() { System.out.println("Engine started"); }
+}
+class Car {                            // Car HAS-A Engine
+    private final Engine engine;
+    Car(Engine engine) { this.engine = engine; }
+    void start() { engine.start(); }   // delegate the work to the part
+}
+```
+
+---
+
+### 2.9 Method Overloading
+
+`System.out.println` prints an `int`, a `String` or a `double` — one verb for different inputs. **Method overloading** means a class has several methods with the same name but different parameter lists (a different number, types or order of parameters). The compiler picks which one to call from the types of the arguments, at compile time.
+
+It exists so related operations can share one natural name instead of `printInt`, `printString`, `printDouble`. Only the parameter list tells overloads apart — a different return type alone is not allowed. Constructors are overloaded the same way (2.2).
+
+```java
+class Printer {
+    void print(int x)    { System.out.println("int: " + x); }
+    void print(double x) { System.out.println("double: " + x); }
+    void print(String x) { System.out.println("String: " + x); }
+}
+Printer p = new Printer();
+p.print(5);       // int: 5
+p.print(5.0);     // double: 5.0
+p.print("five");  // String: five
+```
+
+---
+
+### 2.10 Method Overriding
+
+Every `Animal` can make a sound, but a dog and a cat make different ones. **Method overriding** means a subclass provides its own implementation of an instance method it inherits, keeping the same name and parameter list. When the method is called on an object, the object's own class decides which version runs — even if the variable's type is the parent (2.12).
+
+It exists so a subclass can specialise inherited behaviour while callers keep using the parent type. Mark every override with `@Override`: the compiler then checks that the method really overrides something. `private`, `static` and `final` methods cannot be overridden.
+
+```java
+class Animal {
+    void sound() { System.out.println("..."); }
+}
+class Dog extends Animal {
+    @Override
+    void sound() { System.out.println("Woof"); }   // replaces Animal's version for Dogs
+}
+Animal a = new Dog();
+a.sound();   // Woof — the object is a Dog
+```
+
+---
+
+### 2.11 Overriding vs Hiding
+
+Overriding (2.10) works only for instance methods, because it needs an object to decide which version runs. When a subclass declares a **static method** or a **field** with the same name as one in its parent, it doesn't replace the parent's — it **hides** it. Both versions exist, and which one you get depends on the type written in the code (the declared type), fixed at compile time — not on the object.
+
+It matters because the two look alike in source but behave differently. With `Parent p = new Child();`, `p.who()` runs the child's instance method, while `p.kind()` (static) and `p.name` (a field) give the parent's.
+
+```java
+class Parent {
+    String name = "parent";
+    static String kind() { return "Parent.kind"; }
+    String who() { return "Parent.who"; }
+}
+class Child extends Parent {
+    String name = "child";                          // hides Parent.name
+    static String kind() { return "Child.kind"; }   // hides Parent.kind()
+    @Override String who() { return "Child.who"; }  // overrides Parent.who()
+}
+Parent p = new Child();
+System.out.println(p.who());    // Child.who   — overriding: the object decides
+System.out.println(p.kind());   // Parent.kind — hiding: the declared type decides
+System.out.println(p.name);     // parent      — hiding: the declared type decides
+```
+
+---
+
+### 2.12 Polymorphism
+
+Code that draws "a shape" should work for circles, squares and shapes invented next year, without asking which one it has. **Polymorphism** ("many forms") means one piece of code works with values of many types. Java has two kinds: **compile-time polymorphism** — method overloading (2.9), where the compiler picks among same-named methods by argument types — and **runtime polymorphism** — method overriding (2.10), where a call on a parent-typed reference runs the version belonging to the actual object, decided while the program runs (*dynamic dispatch*).
+
+It exists so code can work generically with a whole family of related types, without needing to know or check each object's exact class. The variable's declared type decides which methods you may *call*; the object's actual class decides which overriding implementation *runs*.
+
+```java
+class Shape  { double area() { return 0; } }
+class Circle extends Shape {
+    double r = 1;
+    @Override double area() { return Math.PI * r * r; }
+}
+class Square extends Shape {
+    double side = 2;
+    @Override double area() { return side * side; }
+}
+
+for (Shape s : List.of(new Circle(), new Square())) {
+    System.out.println(s.area());   // 3.14159..., then 4.0 — each object's own area()
+}
+```
+
+---
+
+### 2.13 Upcasting and Downcasting
+
+A variable of a parent type can hold any subclass object. **Upcasting** is treating a subclass object as its parent type — `Animal a = new Dog();` — and it is automatic and always safe, because every `Dog` is an `Animal`. **Downcasting** goes the other way — `Dog d = (Dog) a;` — and needs an explicit cast, because not every `Animal` is a `Dog`.
+
+A cast never changes the object; it changes only the type through which the compiler lets you use it. If the object isn't really of the target type, a downcast fails at runtime with `ClassCastException`, so check first with `instanceof`.
+
+```java
+Animal a = new Dog();        // upcast: automatic, always safe
+Dog d = (Dog) a;             // downcast: explicit; works because the object is a Dog
+
+Animal c = new Cat();
+// Dog wrong = (Dog) c;      // compiles, but throws ClassCastException at runtime
+
+if (c instanceof Dog dog) {  // test first (Java 16+ binds the variable too)
+    dog.fetch();             // not reached: c is a Cat
+}
+```
+
+---
+
+### 2.14 Abstraction
+
+Driving a car means using a wheel and two pedals, not timing the fuel injection. Abstraction means exposing only what's necessary and hiding the complexity underneath: a type offers the essential operations of a concept — *what* it does — and leaves out *how*.
+
+It exists so code can depend on what something does rather than how it does it, which keeps callers simple and lets the implementation change without touching them. Abstraction is a design principle, not a keyword. Java offers several mechanisms for it — interfaces (2.16), abstract classes (2.15), and even an ordinary class whose public methods are well chosen.
+
+```java
+interface Notifier {
+    void send(String to, String message);      // what: all a caller needs to know
+}
+class EmailNotifier implements Notifier {
+    @Override
+    public void send(String to, String message) {
+        // how: SMTP connection, templates, retries — invisible to callers
+    }
+}
+```
+
+---
+
+### 2.15 Abstract Classes
+
+Some classes share real code but one step has no sensible default — every shape can print its area, but there is no "area of a shape in general". An abstract class is a class that can't be instantiated directly and can leave some methods unimplemented (`abstract`, with no body) for subclasses to fill in. It can still have fields, constructors and ordinary methods.
+
+It exists to define a shared template while forcing every subclass to supply its own specific details. A concrete subclass must implement every abstract method, or be declared abstract itself.
+
+```java
+abstract class Shape {
+    abstract double area();                          // no body: each subclass decides
+    void printArea() { System.out.println("Area: " + area()); }   // shared code
+}
+class Square extends Shape {
+    private final double side;
+    Square(double side) { this.side = side; }
+    @Override double area() { return side * side; }
+}
+// new Shape();              // compile error: Shape is abstract
+new Square(3).printArea();   // Area: 9.0
+```
+
+---
+
+### 2.16 Interfaces
+
+A duck, a plane and a drone share nothing as classes, yet code that launches "anything that flies" should accept all three. An interface is a type that defines a contract — the methods a class promises to provide — which any class can sign with `implements`, whatever it extends. Most interface methods are abstract (no body, each class implements them), but since Java 8 an interface may also carry `default` and `static` methods with bodies, and since Java 9 `private` helper methods. What an interface can never hold is per-object state: its fields are always `public static final` constants.
+
+It exists to let unrelated classes agree to behave the same way (implement the same contract), enabling flexible, decoupled designs. A class extends one class but can implement any number of interfaces.
+
+```java
+interface Flyable {
+    void fly();                                              // abstract: each class decides how
+    default void takeOff() { System.out.println("Taking off"); fly(); }   // shared behaviour
+}
+class Duck implements Flyable {
+    @Override public void fly() { System.out.println("Flapping"); }
+}
+class Drone implements Flyable {
+    @Override public void fly() { System.out.println("Spinning rotors"); }
+}
+Flyable f = new Drone();
+f.takeOff();   // Taking off, Spinning rotors
+```
+
+---
+
+### 2.17 Abstract Class vs Interface
+
+Both define a type that other classes complete, and since Java 8 both can contain method bodies — so the choice needs a better rule than "one has code, one doesn't". An **abstract class** is a partial class: it can hold fields, constructors and code, and a class can extend only one. An **interface** is a pure type: it holds no per-object state, can still carry default methods, and a class can implement many.
+
+Choose an interface to describe a role that unrelated classes can share (`Comparable`, `Runnable`, `AutoCloseable`), and an abstract class when closely related classes share state and code. They combine well: an interface for the type, plus an abstract class that implements the common part of it.
+
+```java
+interface Shape { double area(); }                  // the type: any class can be a Shape
+
+abstract class Polygon implements Shape {           // shared state and code for one family
+    protected final int sides;
+    protected Polygon(int sides) { this.sides = sides; }
+    int sides() { return sides; }
+}
+class Square extends Polygon {
+    private final double side;
+    Square(double side) { super(4); this.side = side; }
+    @Override public double area() { return side * side; }
+}
+class Circle implements Shape {                     // not a polygon, still a Shape
+    private final double r;
+    Circle(double r) { this.r = r; }
+    @Override public double area() { return Math.PI * r * r; }
+}
+```
+
+---
+
+### 2.18 The final Keyword
+
+Some things must not change once set — an order's ID, the order of steps in a security check, the guarantees of `String`. `final` tells the compiler to forbid one particular kind of change, and what it forbids depends on what it marks:
+- a **final variable or field** can be assigned only once;
+- a **final method** can't be overridden by subclasses;
+- a **final class** can't be extended at all (`String` and `Integer` are final).
+
+A final *reference* is not an immutable *object*. `final List<String> names` can never be pointed at another list, but the list it points to can still change. Making the object itself unchangeable is immutability (2.21).
+
+```java
+final int max = 10;
+// max = 11;                         // compile error: cannot assign a value to final variable max
+
+final List<String> names = new ArrayList<>();
+names.add("Siva");                   // allowed: the list object changes
+// names = new ArrayList<>();        // compile error: the reference can't change
+
+class Account {
+    final void audit() { }           // subclasses can't override audit()
+}
+final class Money { }                // no class can extend Money
+```
+
+---
+
+### 2.19 The Object Class
+
+Any object might be printed, compared, stored in a hash table or asked what class it is — so Java needs those operations to exist on *every* object. Every class in Java automatically inherits from `Object`, which provides default behavior for comparing objects (`equals`), hashing them (`hashCode`), and describing them as text (`toString`), and also `getClass()` (the object's runtime class), the rarely-wanted `clone()`, and thread-coordination methods (`wait`/`notify`).
+
+This exists so every object — no matter its type — has some baseline behavior for these universal operations, which a class can override to make more meaningful. The defaults are based on identity: by default an object equals only itself, and its `toString()` is just its class name and a hash code.
+
+```java
+class Dog { }
+Dog d = new Dog();
+System.out.println(d);              // something like Dog@1b6d3586 — the default toString()
+System.out.println(d.getClass());   // class Dog
+System.out.println(d.equals(d));    // true — by default an object equals only itself
+```
+
+---
+
+### 2.20 equals and hashCode
+
+Two `Money` objects that both hold €5 are different objects, yet a program should treat them as the same value. `equals()` is the method a class overrides to define when two of its objects count as equal; `hashCode()` returns a number that hash-based collections (`HashMap`, `HashSet`) use to find an object quickly. The two must agree: objects that are equal must return the same hash code, or hash collections can't find them.
+
+`==` is different and can't be changed. For primitives it compares values; for objects it always compares references — whether two expressions refer to the very same object. So for strings and other values, use `equals()`.
+
+> 💡 **Tip:** `==` always compares object references; `.equals()` compares whatever the class defines — identity, unless the class overrides it to compare actual content.
+
+```java
+String a = new String("hi");
+String b = new String("hi");
+System.out.println(a == b);        // false — two different objects
+System.out.println(a.equals(b));   // true  — String overrides equals() to compare characters
+```
+
+---
+
+### 2.21 Immutability
+
+If an object can't change after it's created, nobody can corrupt it, every thread sees the same thing, and it can be shared freely. An **immutable object** is one whose state can't change once it has been constructed — `String`, `Integer`, `LocalDate` and `BigDecimal` are all immutable. "Changing" one actually produces a new object and leaves the original untouched.
+
+Java has no `immutable` keyword; a class is immutable by design. Its fields are `private final` and set once in the constructor; it has no setters or other methods that change state; the class is `final`, so no subclass can add mutable behaviour; and it copies any mutable objects it receives or hands out. A `final` field alone is not enough (2.18). A `record` gives you most of this automatically.
+
+```java
+public final class Person {
+    private final String name;
+    private final List<String> nicknames;
+
+    public Person(String name, List<String> nicknames) {
+        this.name = name;
+        this.nicknames = List.copyOf(nicknames);   // our own unmodifiable copy
+    }
+    public String name() { return name; }
+    public List<String> nicknames() { return nicknames; }     // safe: can't be modified
+    public Person withName(String newName) {                   // "change" = a new object
+        return new Person(newName, nicknames);
+    }
+}
+```
+
+---
+
+### 2.22 Object Initialization Order
+
+`new Child()` on a class that extends `Parent` runs several pieces of code — static blocks, field initializers, instance blocks, constructors — and their order explains many surprising bugs. Java does the work in two phases:
+1. **Class initialization** — once per class, just before its first use: its static field initializers and `static` blocks run, the parent class's before the child's.
+2. **Object initialization** — on every `new`: the parent's part of the object is completed first (its field initializers, instance blocks, then the rest of its constructor), then the child's.
+
+So a parent always finishes before its child starts, and static setup happens once while instance setup happens per object. The one surprise: if a parent constructor calls a method the child overrides, the child's version runs before the child's fields are set.
+
+```java
+class Parent {
+    static { System.out.println("1 Parent static block"); }
+    { System.out.println("3 Parent instance block"); }
+    Parent() { System.out.println("4 Parent constructor"); }
+}
+class Child extends Parent {
+    static { System.out.println("2 Child static block"); }
+    { System.out.println("5 Child instance block"); }
+    Child() { System.out.println("6 Child constructor"); }
+}
+new Child();   // prints 1, 2, 3, 4, 5, 6
+new Child();   // prints 3, 4, 5, 6 — each class is initialized only once
+```
 
 ---
 
