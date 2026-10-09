@@ -193,56 +193,67 @@ class StartupLogger {
 ```mermaid
 ---
 config:
+  themeVariables:
+    fontSize: 13px
   flowchart:
-    wrappingWidth: 300
+    wrappingWidth: 270
+    nodeSpacing: 16
+    rankSpacing: 20
+    padding: 8
 ---
-flowchart TD
-    A["`🟦 CREATE
-    **Spring creates the object**
-    Instantiate Bean`"]
-
-    B["`🟨 INJECT
-    **Spring gives it what it needs**
-    Populate Properties / Dependency Injection`"]
-
-    subgraph INIT["🟪 INITIALIZE — Make the bean ready"]
+flowchart LR
+    subgraph BEFORE[" "]
         direction TB
-        AW["`Aware callbacks
-        *BeanNameAware, BeanFactoryAware*`"]
-        C["`BeanPostProcessor
-        **postProcessBeforeInitialization()**`"]
-        D["`@PostConstruct
-        *custom setup*`"]
-        E["`afterPropertiesSet()
-        *InitializingBean*`"]
-        F["Custom init-method"]
-        G["`BeanPostProcessor
-        **postProcessAfterInitialization()**
-        *Proxy may be created here*`"]
+        A["`🟦 CREATE
+        **Spring creates the object**
+        Instantiate Bean`"]
+        B["`🟨 INJECT
+        **Spring gives it what it needs**
+        Populate Properties / Dependency Injection`"]
+        subgraph INIT["🟪 INITIALIZE — Make the bean ready"]
+            direction TB
+            AW["`Aware callbacks
+            *BeanNameAware, BeanFactoryAware*`"]
+            C["`BeanPostProcessor
+            **postProcessBeforeInitialization()**`"]
+            D["`@PostConstruct
+            *custom setup*`"]
+            E["`afterPropertiesSet()
+            *InitializingBean*`"]
+            F["Custom init-method"]
+            G["`BeanPostProcessor
+            **postProcessAfterInitialization()**
+            *Proxy may be created here*`"]
 
-        AW --> C --> D --> E --> F --> G
+            AW --> C --> D --> E --> F --> G
+        end
+        A --> B --> AW
     end
 
-    H["`🟩 READY
-    **Bean is fully initialized**
-    Container exposes the resulting bean`"]
-
-    I["`🔵 USE
-    **Application uses the bean**`"]
-
-    subgraph DESTROY["🟥 DESTROY — Shut the bean down"]
+    subgraph AFTER[" "]
         direction TB
-        J["`@PreDestroy
-        *custom cleanup*`"]
-        K["`destroy()
-        *DisposableBean*`"]
-        L["Custom destroy-method"]
+        H["`🟩 READY
+        **Bean is fully initialized**
+        Container exposes the resulting bean`"]
+        I["`🔵 USE
+        **Application uses the bean**`"]
+        subgraph DESTROY["🟥 DESTROY — Shut the bean down"]
+            direction TB
+            J["`@PreDestroy
+            *custom cleanup*`"]
+            K["`destroy()
+            *DisposableBean*`"]
+            L["Custom destroy-method"]
 
-        J --> K --> L
+            J --> K --> L
+        end
+        H --> I --> J
     end
 
-    A --> B --> INIT
-    INIT --> H --> I --> DESTROY
+    BEFORE --> AFTER
+
+    style BEFORE fill:none,stroke:none
+    style AFTER fill:none,stroke:none
 
     classDef create fill:#2563eb1f,stroke:#2563eb,stroke-width:2px
     classDef inject fill:#d977061f,stroke:#d97706,stroke-width:2px

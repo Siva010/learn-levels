@@ -4,6 +4,21 @@ import { useEffect, useId, useState } from "react";
 import { CopyButton } from "@/components/content/copy-button";
 import { useResolvedTheme } from "@/components/layout/theme";
 
+/** Below this fraction of its natural size a diagram's text becomes unreadable, so it scrolls instead. */
+const MIN_SCALE = 0.75;
+
+/**
+ * Mermaid sizes the SVG as `width="100%"` capped by an inline `max-width` of its natural width, so a
+ * wide diagram on a narrow screen shrinks without limit. Adding a `min-width` stops it at
+ * `MIN_SCALE`; past that the host scrolls horizontally.
+ */
+function withMinimumScale(svg: string): string {
+  return svg.replace(
+    /max-width:\s*([\d.]+)px;/,
+    (match, width: string) => `${match} min-width: ${Math.round(Number(width) * MIN_SCALE)}px;`,
+  );
+}
+
 /**
  * Renders a Mermaid diagram as SVG.
  *
@@ -36,7 +51,7 @@ export function MermaidDiagram({ code }: { code: string }) {
           flowchart: { htmlLabels: false },
         });
         const { svg: rendered } = await mermaid.render(`mermaid-${id}`, code);
-        if (active) setSvg(rendered);
+        if (active) setSvg(withMinimumScale(rendered));
       } catch {
         if (active) setFailed(true);
       }
